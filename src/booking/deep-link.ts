@@ -190,3 +190,11 @@ export function buildBookingLink(input: BookingLinkInput): BookingLink {
     reason: null,
   };
 }
+
+/** RED stub for Task 2; not implemented yet. */
+export function plainBookingLink(
+  locationId: number,
+  _formUrl: string | null
+): BookingLink {
+  return fallbackLink(locationId, 'no_form_url');
+}
