@@ -8,6 +8,7 @@ import {
   type ListToolsResult,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { CallRecord } from '../observability/call-log.js';
+import { scrubSecrets } from '../observability/redact.js';
 import type { DefinedTool, ToolSpec } from '../tools/factory.js';
 
 export interface CreateMcpServerOptions<D> {
@@ -24,7 +25,8 @@ export interface CreateMcpServerOptions<D> {
 // A fresh low-level Server per request: nothing is shared between requests
 // except the immutable tool registry (stateless, ADR-0001-D6).
 export function createMcpServer<D>(options: CreateMcpServerOptions<D>): Server {
-  const { name, version, specs, toolsByName, toolDeps, record } = options;
+  const { name, version, specs, toolsByName, toolDeps, secrets, record } =
+    options;
   const server = new Server({ name, version }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, (): ListToolsResult => ({
@@ -49,7 +51,7 @@ export function createMcpServer<D>(options: CreateMcpServerOptions<D>): Server {
       );
       record.outcome = invocation.outcome;
       record.error_type = invocation.errorType;
-      return { ...invocation.result };
+      return { ...scrubSecrets(invocation.result, secrets) };
     }
   );
 
