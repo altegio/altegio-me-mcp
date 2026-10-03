@@ -1,0 +1,17 @@
+node_modules
+dist
+coverage
+.git
+.github
+.husky
+.planning
+.claude
+.cursor
+.codex
+docs
+scripts
+*.md
+.env
+.env.*
+**/__tests__
+*.log
