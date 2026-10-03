@@ -1,4 +1,5 @@
-import { UpstreamError } from './errors.js';
+import { scrubSecrets } from '../observability/redact.js';
+import { UpstreamError, type UpstreamErrorKind } from './errors.js';
 
 // One HTTP exchange with the Altegio API: headers, URL building, timeout,
 // envelope parsing and status mapping. Matches Altegio.Pro MCP (D-10): the
@@ -51,6 +52,75 @@ export interface UpstreamReply {
   data: unknown;
 }
 
+/** BAPI-01: every non-2xx status maps to exactly one kind. */
+function kindOfStatus(status: number): UpstreamErrorKind {
+  if (status === 400) return 'bad_request';
+  if (status === 401 || status === 403) return 'unauthorized';
+  if (status === 404) return 'not_found';
+  if (status === 422) return 'rejected';
+  if (status === 429) return 'rate_limited';
+  if (status >= 500 && status <= 599) return 'unavailable';
+  return 'contract_drift';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isTimeout(error: unknown): boolean {
+  return isRecord(error) && error.name === 'TimeoutError';
+}
+
+/** envelope.data of a 2xx body; null for an empty body. */
+function parseEnvelopeData(
+  route: string,
+  status: number,
+  text: string
+): unknown {
+  if (text === '') return null;
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(text);
+  } catch (error) {
+    throw new UpstreamError('contract_drift', route, { status, cause: error });
+  }
+  if (!isRecord(envelope)) {
+    throw new UpstreamError('contract_drift', route, { status });
+  }
+  return envelope.data ?? null;
+}
+
+/**
+ * meta.message and the numeric meta.errors[].code of an error envelope. A
+ * body that is not such an envelope gives neither; the body itself is never
+ * kept.
+ */
+function readErrorMeta(text: string): {
+  message: string | null;
+  codes: number[];
+} {
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(text);
+  } catch {
+    return { message: null, codes: [] };
+  }
+  const meta = isRecord(envelope) ? envelope.meta : undefined;
+  if (!isRecord(meta)) return { message: null, codes: [] };
+  const errors = Array.isArray(meta.errors) ? (meta.errors as unknown[]) : [];
+  const codes = errors.flatMap((entry) =>
+    isRecord(entry) &&
+    typeof entry.code === 'number' &&
+    Number.isInteger(entry.code)
+      ? [entry.code]
+      : []
+  );
+  return {
+    message: typeof meta.message === 'string' ? meta.message : null,
+    codes,
+  };
+}
+
 export class BookingHttp {
   private readonly base: string;
   private readonly token: string;
@@ -84,25 +154,56 @@ export class BookingHttp {
     };
     if (hasBody) headers['Content-Type'] = 'application/json';
 
-    const response = await this.gate.run(() =>
-      this.fetchImpl(url, {
-        method: call.method,
-        headers,
-        body: hasBody ? JSON.stringify(call.body) : undefined,
-        signal: AbortSignal.timeout(this.timeoutMs),
-      })
-    );
-
-    const text = await response.text();
-    if (response.status >= 200 && response.status < 300) {
-      if (text === '') return { status: response.status, data: null };
-      const envelope = JSON.parse(text) as { data?: unknown };
-      return { status: response.status, data: envelope.data ?? null };
+    let status: number;
+    let text: string;
+    try {
+      ({ status, text } = await this.gate.run(async () => {
+        // The timeout starts when the gate admits the call, so time spent
+        // waiting in the gate does not count against it.
+        const response = await this.fetchImpl(url, {
+          method: call.method,
+          headers,
+          body: hasBody ? JSON.stringify(call.body) : undefined,
+          // A redirect would carry the partner token to another URL; it is
+          // reported as an unexpected status instead.
+          redirect: 'manual',
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
+        return { status: response.status, text: await response.text() };
+      }));
+    } catch (error) {
+      if (error instanceof UpstreamError) throw error;
+      throw new UpstreamError('unavailable', call.route, {
+        cause: isTimeout(error)
+          ? new Error(`Altegio API call timed out after ${this.timeoutMs} ms`, {
+              cause: error,
+            })
+          : error,
+      });
     }
-    throw new UpstreamError(
-      response.status === 404 ? 'not_found' : 'unavailable',
-      call.route,
-      { status: response.status }
-    );
+
+    if (status >= 200 && status < 300) {
+      return { status, data: parseEnvelopeData(call.route, status, text) };
+    }
+    throw this.statusError(call.route, status, text);
+  }
+
+  private statusError(
+    route: string,
+    status: number,
+    text: string
+  ): UpstreamError {
+    const meta = readErrorMeta(text);
+    const kind = kindOfStatus(status);
+    return new UpstreamError(kind, route, {
+      status,
+      codes: kind === 'rejected' ? meta.codes : [],
+      // Rate-limit headers are read by the throttle, not here.
+      retryAfterSeconds: null,
+      // Scrubbed before anything else touches it (WR-04): later sanitising
+      // or truncation could otherwise split the token past the scrubber.
+      upstreamMessage:
+        meta.message === null ? null : scrubSecrets(meta.message, [this.token]),
+    });
   }
 }
