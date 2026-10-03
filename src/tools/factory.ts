@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { textResult, toolErrorResult } from './result.js';
 
 // Tool factory. SDK-free on purpose: tools return plain objects, and only
 // src/mcp translates them to the MCP SDK (D-04, ADR-0001-D6).
@@ -68,28 +69,11 @@ export interface DefinedTool<D> {
   invoke(args: unknown, deps: D): Promise<ToolInvocation>;
 }
 
-const MAX_ISSUES_CHARS = 300;
-
 function withoutSchemaKey(
   json: Record<string, unknown>
 ): Record<string, unknown> {
   delete json.$schema;
   return json;
-}
-
-function formatIssues(error: z.ZodError): string {
-  const text = error.issues
-    .map((issue) => {
-      const path =
-        issue.path.length > 0 ? issue.path.map(String).join('.') : '(root)';
-      return `${path}: ${issue.message}`;
-    })
-    .join('; ');
-  return text.slice(0, MAX_ISSUES_CHARS);
-}
-
-function errorTypeOf(error: unknown): string {
-  return error instanceof Error ? error.name : typeof error;
 }
 
 export function defineTool<
@@ -109,34 +93,13 @@ export function defineTool<
     annotations: { title: def.title, ...def.annotations },
   };
 
-  const failure = (
-    outcome: ToolOutcome,
-    errorType: string | null,
-    text: string
-  ): ToolInvocation => ({
-    result: { content: [{ type: 'text', text }], isError: true },
-    outcome,
-    errorType,
-  });
-
-  const unexpected = (errorType: string): ToolInvocation =>
-    failure(
-      'tool_error',
-      errorType,
-      `${def.name} failed unexpectedly. Next: retry once; if it fails again, tell the user the service is temporarily unavailable.`
-    );
-
   return {
     name: def.name,
     spec,
     async invoke(args: unknown, deps: D): Promise<ToolInvocation> {
       const parsedInput = def.input.safeParse(args ?? {});
       if (!parsedInput.success) {
-        return failure(
-          'invalid_params',
-          null,
-          `Invalid parameters for ${def.name}: ${formatIssues(parsedInput.error)}. Next: fix the listed parameters and call ${def.name} again.`
-        );
+        return toolErrorResult(def.name, parsedInput.error, 'input');
       }
 
       let output: z.infer<O>;
@@ -146,21 +109,23 @@ export function defineTool<
           deps,
         });
       } catch (error) {
-        // Never put the error message or stack into the result.
-        return unexpected(errorTypeOf(error));
+        return toolErrorResult(def.name, error, 'handler');
       }
 
       const parsedOutput = def.output.safeParse(output);
       if (!parsedOutput.success) {
-        return unexpected('OutputSchemaMismatch');
+        return toolErrorResult(def.name, parsedOutput.error, 'output');
       }
 
       const data = parsedOutput.data;
+      let text: string;
+      try {
+        text = def.render(data);
+      } catch (error) {
+        return toolErrorResult(def.name, error, 'handler');
+      }
       return {
-        result: {
-          content: [{ type: 'text', text: def.render(data) }],
-          structuredContent: data,
-        },
+        result: textResult(text, data),
         outcome: 'ok',
         errorType: null,
       };

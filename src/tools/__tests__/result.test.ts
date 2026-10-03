@@ -93,6 +93,30 @@ describe('unknown failures return a fixed sentence', () => {
     expect(invocation.errorType).toBe('ZodError');
   });
 
+  it('keeps a throwing render function from leaking its message', async () => {
+    const tool = defineTool({
+      name: 'demo_render',
+      title: 'Fixture demo_render',
+      description: 'Fixture tool whose render function throws.',
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+      input,
+      output,
+      render: () => {
+        throw new Error('render broke at /srv/render.js password=hunter2');
+      },
+      handler: () => Promise.resolve({ count: 1 }),
+    });
+    const invocation = await tool.invoke({}, undefined);
+
+    expect(textOf(invocation)).toBe(fixedSentence('demo_render'));
+    expect(invocation.outcome).toBe('tool_error');
+    expectFailureShape(invocation);
+  });
+
   it('returns the fixed sentence for output drift, never an invalid-parameters message', async () => {
     const tool = fixture('demo_drift', () =>
       Promise.resolve({ count: 'many' } as unknown as Output)
