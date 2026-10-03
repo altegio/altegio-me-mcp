@@ -156,11 +156,15 @@ describe('upstream status mapping (BAPI-01)', () => {
     expect(error.codes).toEqual([433, 436]);
   });
 
-  it('maps 429 to rate_limited with no retry delay until the throttle reads the headers', async () => {
-    const { client } = clientFor(loadFixture('company', 'rate_limited'));
+  it('maps 429 to rate_limited with the X-Rate-Limit-Reset wait (BAPI-02)', async () => {
+    const { client, upstream } = clientFor(
+      loadFixture('company', 'rate_limited')
+    );
     const error = await upstreamError(client.company(LOCATION));
     expect(error.kind).toBe('rate_limited');
-    expect(error.retryAfterSeconds).toBeNull();
+    expect(error.retryAfterSeconds).toBe(7);
+    // 7 seconds is above the inline-retry limit, so nothing is retried.
+    expect(upstream.calls).toHaveLength(1);
   });
 
   it.each([500, 502, 503])(

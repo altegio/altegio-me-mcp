@@ -31,6 +31,8 @@ export interface BookingHttpOptions {
   fetch?: typeof fetch;
   gate?: GateLike;
   timeoutMs?: number;
+  /** Clock for rate-limit pauses; defaults to Date.now. */
+  now?: () => number;
 }
 
 export interface UpstreamCallSpec {
