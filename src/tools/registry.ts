@@ -1,4 +1,5 @@
 import type { BookingClient } from '../booking/client.js';
+import { bookCheck } from './book.js';
 import {
   businessGet,
   businessListDates,
@@ -15,11 +16,13 @@ export interface ToolDeps {
 
 // Every tool is read-only in v1 (ADR-0001-D2); the compliance suite checks it.
 // Listed in booking-flow order: the card, services, team members, dates with
-// free time, then the free slots of one date.
+// free time, the free slots of one date, then the check that hands off to the
+// booking widget.
 export const productionTools: readonly DefinedTool<ToolDeps>[] = Object.freeze([
   businessGet,
   businessListServices,
   businessListTeamMembers,
   businessListDates,
   businessListTimeSlots,
+  bookCheck,
 ]);

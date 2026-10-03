@@ -40,10 +40,17 @@ export interface CheckOptions {
 }
 
 /**
- * Read-only upstream POST routes (R7). Empty in Phase 1; Phase 2 adds the
- * book_check route with a recorded reason.
+ * Read-only upstream POST routes (R7), each with its recorded reason.
+ *
+ * '/book_check/{location_id}' (D-04): the route validates the appointments it
+ * is sent and nothing else. An empty 201 means bookable, a 422 lists why not,
+ * and it creates no record and no hold (backend code read in full in
+ * 02-RESEARCH, "book_check is validation only"; to be confirmed live by plan
+ * 02-09 before book_check ships).
  */
-export const READ_ONLY_POST_ROUTES: ReadonlySet<string> = new Set<string>();
+export const READ_ONLY_POST_ROUTES: ReadonlySet<string> = new Set<string>([
+  '/book_check/{location_id}',
+]);
 
 const MAX_NAME_CHARS = 64;
 const MAX_DESCRIPTION_CHARS = 1024;
