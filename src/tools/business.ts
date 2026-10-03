@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { BOOKING_ROUTES, type BusinessCard } from '../booking/client.js';
 import { SLOT_DATETIME_PATTERN } from '../booking/deep-link.js';
 import { defineTool, type ToolHints } from './factory.js';
+import { listOutputSchema } from './pagination.js';
 import type { ToolDeps } from './registry.js';
 import { toToolError } from './upstream-errors.js';
 import {
@@ -220,4 +221,40 @@ export const businessGet = defineTool<
       next_free_slot: nextSlot,
     };
   },
+});
+
+// Contract stubs until GREEN: not registered, every call fails.
+const stubInput = z.strictObject({ location_id: z.number() }).loose();
+const stubOutput = listOutputSchema(z.strictObject({ id: z.number() }));
+
+export const businessListServices = defineTool<
+  typeof stubInput,
+  typeof stubOutput,
+  ToolDeps
+>({
+  name: 'business_list_services',
+  title: 'List bookable services',
+  description: 'Not implemented yet.',
+  annotations: UPSTREAM_READ_HINTS,
+  kind: 'list',
+  input: stubInput,
+  output: stubOutput,
+  render: () => '',
+  handler: () => Promise.reject(new Error('not implemented')),
+});
+
+export const businessListTeamMembers = defineTool<
+  typeof stubInput,
+  typeof stubOutput,
+  ToolDeps
+>({
+  name: 'business_list_team_members',
+  title: 'List bookable team members',
+  description: 'Not implemented yet.',
+  annotations: UPSTREAM_READ_HINTS,
+  kind: 'list',
+  input: stubInput,
+  output: stubOutput,
+  render: () => '',
+  handler: () => Promise.reject(new Error('not implemented')),
 });
