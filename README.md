@@ -1,7 +1,10 @@
 # Altegio.me MCP Server
 
-Status: planning. There is no code yet. Requirements and the roadmap are being produced with
-[GSD](https://github.com/open-gsd/gsd-core) from the research and decisions in [`docs/`](docs/).
+Status: the stateless MCP server foundation is built and tested, with the tool compliance suite,
+the CI gate and the container image. No booking tools are registered yet, so `tools/list`
+returns an empty list. The next work is the booking tools for a known business: business card,
+services, team members, free slots, slot check and a pre-filled booking widget link. Decisions
+and research are in [`docs/`](docs/).
 
 A remote [MCP](https://modelcontextprotocol.io) server that lets clients of businesses using
 Altegio (salons, barbershops, studios and similar) find a business, browse its services, team
@@ -30,24 +33,56 @@ client's bookings. Interactive UI (MCP Apps) for hosts that render it.
 outreach to Perplexity, Mistral, xAI and Google. See
 [`docs/research/ai-platforms-distribution.md`](docs/research/ai-platforms-distribution.md).
 
-## Architecture (planned)
+## Architecture
+
+Request path of the server as built:
 
 ```
 AI host (Claude, ChatGPT, ...)
-        │  MCP over Streamable HTTP, stateless
-        ▼
-altegio-me-mcp on Cloud Run  ──►  Altegio public booking API (api.alteg.io/api/v1, partner token)
-        │
-        ├──►  Catalog index of bookable businesses (refreshed by a scheduled job)
-        └──►  Phase 2: OAuth 2.1 authorization server, phone + SMS sign-in
+        |  POST /mcp, JSON-RPC over Streamable HTTP, no session
+        v
+Express app (src/app.ts)
+        |  call log -> Origin guard -> JSON body parser (100 kb limit)
+        v
+New SDK Server + Streamable HTTP transport for this one request (src/mcp)
+        |
+        v
+Tool registry and factory (src/tools) -> scrubbed, fenced result or in-band error
 ```
 
-- TypeScript, `@modelcontextprotocol/sdk`, Express. Patterns reused from Altegio.Pro MCP: tool
-  factory with zod schemas, annotations on every tool, untrusted-text fencing, pagination,
-  actionable errors, CI layout.
-- Runs on its own Cloud Run service in its own GCP project, on a domain that matches the
-  brand (for example `mcp.altegio.me`, to be confirmed). It does not sit behind the
+`GET /health` answers `{"status":"ok","version":...}` for Cloud Run. `GET` and `DELETE` on `/mcp`
+answer 405, because the server is stateless: it never sends an `mcp-session-id`, and every
+`POST /mcp` is served by a fresh server and transport that are closed when the response ends.
+
+| Module | Role |
+|---|---|
+| `src/config` | Environment validation with zod; fixed error text that never echoes a value |
+| `src/mcp` | The only code that imports the MCP SDK: server creation, stateless request handler, server instructions |
+| `src/tools` | Tool factory with zod schemas and annotations, registry, pagination shape, in-band errors, untrusted-text fencing |
+| `src/observability` | pino logger, one structured call log line per `POST /mcp`, secret scrubbing |
+| `src/compliance` | Directory-compliance rules R1-R13 and deliberately bad fixtures; test-only, not in the build |
+| `src/util` | Package name and version read from `package.json` |
+
+**SDK isolation rule.** Only `src/mcp` imports `@modelcontextprotocol/sdk`; ESLint rejects the
+import anywhere else outside tests. Tools stay SDK-free, so a later move of the SDK touches
+`src/mcp` only.
+
+**Protocol support.** Protocol version 2025-11-25 is served with `@modelcontextprotocol/sdk`
+1.x, the same as Altegio.Pro MCP. Requests for protocol version 2026-07-28 get HTTP 400 from
+SDK 1.x. The move to SDK v2 is revisited together with the platform canary before launch and
+touches `src/mcp` only.
+
+Other notes:
+
+- TypeScript, Express, zod, pino. Patterns reused from Altegio.Pro MCP: tool factory with zod
+  schemas, annotations on every tool, untrusted-text fencing, pagination, actionable errors,
+  CI layout.
+- Target hosting: its own Cloud Run service in its own GCP project, on a domain that matches
+  the brand (for example `mcp.altegio.me`, to be confirmed). It does not sit behind the
   `mcp.alteg.io` proxy, which only admits Altegio account holders.
+- Later phases add the Altegio public booking API client
+  (`api.alteg.io/api/v1`, partner token), a catalog index of bookable businesses refreshed by a
+  scheduled job, and an OAuth 2.1 authorization server with phone + SMS sign-in.
 - Decisions and their reasons: [`docs/decisions/0001-scope-and-architecture.md`](docs/decisions/0001-scope-and-architecture.md).
 - What other teams must answer before or during the build: [`docs/open-questions.md`](docs/open-questions.md).
 
@@ -60,27 +95,109 @@ altegio-me-mcp on Cloud Run  ──►  Altegio public booking API (api.alteg.io
 | How Altegio.Pro MCP is built, what to reuse | [`docs/research/altegio-pro-mcp-reference.md`](docs/research/altegio-pro-mcp-reference.md) |
 | The `mcp.alteg.io` platform and why we don't use it | [`docs/research/mcp-platform-reference.md`](docs/research/mcp-platform-reference.md) |
 
-## Environment variables (planned)
+## Environment variables
 
-| Variable | Purpose |
-|---|---|
-| `PORT` | HTTP port (Cloud Run sets it) |
-| `ALTEGIO_API_BASE` | Default `https://api.alteg.io/api/v1` |
-| `ALTEGIO_PARTNER_TOKEN` | Partner token of the Altegio.me MCP developer account (Secret Manager) |
-| `PUBLIC_BASE_URL` | Public URL of the server, used in links and OAuth metadata |
-| `LOG_LEVEL` | `info` by default |
+The server validates these at startup and exits with a list of the offending names (never their
+values) when one is missing or invalid.
 
-The final list lands with the first code. Secrets live in GCP Secret Manager, never in git.
-See [`.env.example`](.env.example).
+| Variable | Purpose | Default | Required |
+|---|---|---|---|
+| `PORT` | HTTP port (Cloud Run sets it) | `8080` | no |
+| `ALTEGIO_API_BASE` | Base URL of the Altegio public API | `https://api.alteg.io/api/v1` | no |
+| `ALTEGIO_API_TOKEN` | Partner API token of the Altegio.me MCP developer account | none | yes, non-empty |
+| `PUBLIC_BASE_URL` | Public URL of the server; its origin is the allowed browser `Origin` | none | yes, http(s) URL |
+| `LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent` | `info` | no |
+| `NODE_ENV` | `development`, `test` or `production` (the Docker image sets `production`) | `development` | no |
 
-## Local run and deploy
+`ALTEGIO_API_TOKEN` has the same name and the same rule (any non-empty string) as in Altegio.Pro
+MCP. [`.env.example`](.env.example) carries the placeholder `your_partner_token_here`, so a copied
+`.env` starts the server. A real token is needed once the server calls the Altegio API; a wrong
+one then shows up as HTTP 401 from that API. Real secrets live in GCP Secret Manager, never in
+git.
 
-Local run instructions arrive with the first phase. Deploys go only through git: a Cloud Build
-trigger on merge to `main` deploys to Cloud Run. No manual `gcloud run deploy`.
+## Local run
 
-## Cost estimate (rough, refined per phase)
+Requires Node 22 (the version is pinned in `.nvmrc`; with nvm run `nvm use`).
 
-Assumptions: Cloud Run in `europe-west1`, 1 vCPU / 512 MiB, one minimum instance (OAuth
+```bash
+cp .env.example .env
+npm ci
+npm run dev
+```
+
+In another terminal:
+
+```bash
+curl -s localhost:8080/health
+npx -y @modelcontextprotocol/inspector@2.9.0 --cli http://localhost:8080/mcp --transport http --method tools/list
+```
+
+`GET /health` returns the status and version. `tools/list` returns an empty list until the
+booking tools land. Raw HTTP clients must send `Accept: application/json, text/event-stream` on
+`POST /mcp`, as the Streamable HTTP transport requires.
+
+## Checks
+
+```bash
+npm run check
+```
+
+runs lint, format check, typecheck, the Jest tests and the build, in that order. It is the same
+set the CI job runs. Tests use Jest with ts-jest, as in Altegio.Pro MCP, and live in
+`__tests__/` directories next to the code. Run them with `npm test` or `npx jest <path>`.
+
+The compliance suite (`src/compliance`) runs every registered tool through rules R1-R13 and fails
+the build when a tool:
+
+- lacks a title or any of the three behaviour hints;
+- mixes reads and writes;
+- has a name longer than 64 characters or outside the naming pattern;
+- has a description that addresses the model with instructions;
+- asks for personal data in its inputs;
+- uses a write or sign-in upstream route (the registry is read-only in this phase).
+
+## Docker
+
+```bash
+docker build -t altegio-me-mcp .
+docker run --rm -p 8080:8080 \
+  -e PORT=8080 \
+  -e ALTEGIO_API_TOKEN=your_partner_token_here \
+  -e PUBLIC_BASE_URL=http://localhost:8080 \
+  altegio-me-mcp
+```
+
+The image is `node:22-alpine`, built in two stages, installs production dependencies only and
+runs as the non-root `node` user. `scripts/smoke.sh IMAGE` starts the image with a canary token,
+checks `/health`, the stateless `/mcp` endpoint, the logs (no token, no tool arguments), the
+container user and a clean SIGTERM stop. It runs locally (Docker through Colima on macOS) and in
+CI.
+
+## CI and branch rules
+
+Workflow `CI` (`.github/workflows/ci.yml`) runs on pull requests to `main` and on pushes to
+`main`. It has a single job named `test` on Node 22, with these steps in order: checkout,
+install, conventional commits (pull requests only), lint, format check, typecheck, unit tests,
+build, Docker build, container smoke test, dependency audit (`npm audit --audit-level=high`).
+
+Ruleset `default-branch-ci-gate` protects `main`: changes only through pull requests, required
+status check `test`, no force-push, no deletion. Organization admins keep a bypass for
+emergencies; nobody else has one. The ruleset body is in
+[`.github/rulesets/main-ci-gate.json`](.github/rulesets/main-ci-gate.json).
+
+Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`,
+`ci:`, `build:`). A husky `commit-msg` hook checks them locally and CI checks every commit and
+the pull request title.
+
+## Deploy
+
+Deploys go only through git: a Cloud Build trigger on merge to `main` deploys to the service's
+own Cloud Run project and domain. No manual `gcloud run deploy`. The trigger, the service and
+the domain are not set up yet; until then the server runs locally and in CI only.
+
+## Cost estimate
+
+Rough, refined per phase. Assumptions: Cloud Run in `europe-west1`, 1 vCPU / 512 MiB, one minimum instance (OAuth
 endpoints must answer within 10 s for Claude, and cold starts hurt chat latency). The server
 calls no LLM: the model runs on the AI host's side.
 
@@ -99,11 +216,12 @@ Who pays for SMS (Altegio or the business) is an open question; see
 
 ## Repository conventions
 
-- Conventional commits (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`).
-- Once code lands: CI workflow with a `test` job, and a ruleset on `main` (pull requests only,
-  required check `test`, no force-push, bypass for organization admins).
-- GSD planning output (`.planning/`) stays out of git unless the team agrees otherwise.
+- Conventional commits, enforced locally and in CI (see CI and branch rules).
+- Direct pushes to `main` are rejected; every change goes through a pull request with a green
+  `test` check.
+- GSD working files stay out of git unless the team agrees otherwise (the directory is listed
+  in `.gitignore`).
 
 ## Owner
 
-Mike Kondakov ([@mkondakov](https://github.com/mkondakov)). Questions: Slack `#dev-ai-coding`.
+Mike Kondakov ([@kondamih](https://github.com/kondamih)). Questions: Slack `#dev-ai-coding`.
