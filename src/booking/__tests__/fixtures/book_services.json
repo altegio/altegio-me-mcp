@@ -1,0 +1,276 @@
+{
+  "default": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": {
+        "services": [
+          {
+            "id": 10303530,
+            "title": "Women's haircut",
+            "category_id": 7,
+            "price_min": 0,
+            "price_max": 0,
+            "discount": 0,
+            "comment": "<p>Price depends on hair length.</p>",
+            "weight": 10,
+            "active": 1,
+            "sex": 0,
+            "image": "",
+            "prepaid": "forbidden",
+            "seance_length": null,
+            "abonement_restriction": 0,
+            "prepaid_settings": {
+              "status": "forbidden",
+              "prepaid_full": [],
+              "prepaid_min": []
+            },
+            "is_composite": false,
+            "is_chain": false,
+            "images": [],
+            "composite_details": []
+          },
+          {
+            "id": 10303531,
+            "title": "Manicure",
+            "category_id": 8,
+            "price_min": 1500,
+            "price_max": 1500,
+            "discount": 0,
+            "comment": "",
+            "weight": 9,
+            "active": 1,
+            "sex": 0,
+            "image": "",
+            "prepaid": "forbidden",
+            "seance_length": null,
+            "images": []
+          },
+          {
+            "id": 10303532,
+            "title": "Hair colouring",
+            "category_id": 7,
+            "price_min": 2000,
+            "price_max": 4500,
+            "discount": 0,
+            "comment": "",
+            "weight": 8,
+            "active": 1,
+            "sex": 0,
+            "image": "",
+            "prepaid": "required",
+            "seance_length": null,
+            "prepaid_settings": {
+              "status": "required",
+              "prepaid_full": {
+                "amount": 4500,
+                "currency": "EUR"
+              },
+              "prepaid_min": {
+                "amount": 1000,
+                "percent": 0,
+                "currency": "EUR"
+              }
+            },
+            "images": []
+          },
+          {
+            "id": 10303533,
+            "title": "Массаж спины 💆",
+            "category_id": 9,
+            "price_min": 3000,
+            "price_max": 3500,
+            "discount": 0,
+            "comment": "",
+            "weight": 7,
+            "active": 1,
+            "sex": 0,
+            "image": "",
+            "prepaid": "allowed",
+            "seance_length": null,
+            "images": []
+          },
+          {
+            "id": 10303534,
+            "title": "Consultation",
+            "category_id": 7,
+            "price_min": 500,
+            "price_max": 500,
+            "discount": 0,
+            "comment": "",
+            "weight": 6,
+            "active": 1,
+            "sex": 0,
+            "image": "",
+            "prepaid": "forbidden",
+            "seance_length": null,
+            "images": []
+          },
+          {
+            "id": 10303535,
+            "title": "Consultation",
+            "category_id": 8,
+            "price_min": 700,
+            "price_max": 700,
+            "discount": 0,
+            "comment": "",
+            "weight": 5,
+            "active": 1,
+            "sex": 0,
+            "image": "",
+            "prepaid": "forbidden",
+            "seance_length": null,
+            "images": []
+          },
+          {
+            "id": 10303536,
+            "title": "Brow tint",
+            "category_id": 9,
+            "price_min": 12.5,
+            "price_max": 12.5,
+            "discount": 0,
+            "comment": "",
+            "weight": 4,
+            "active": 1,
+            "sex": 0,
+            "image": "",
+            "prepaid": "forbidden",
+            "seance_length": null,
+            "images": []
+          }
+        ],
+        "category": [
+          {
+            "id": 7,
+            "title": "Hair",
+            "sex": 0,
+            "api_id": "",
+            "weight": 3
+          },
+          {
+            "id": 8,
+            "title": "Nails",
+            "sex": 0,
+            "api_id": "",
+            "weight": 2
+          },
+          {
+            "id": 9,
+            "title": "Massage & spa",
+            "sex": 0,
+            "api_id": "",
+            "weight": 1
+          }
+        ],
+        "events": []
+      },
+      "meta": []
+    }
+  },
+  "by_member": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": {
+        "services": [
+          {
+            "id": 10303530,
+            "title": "Women's haircut",
+            "category_id": 7,
+            "price_min": "1500",
+            "price_max": "2500",
+            "active": 1,
+            "prepaid": "required",
+            "seance_length": 3600
+          },
+          {
+            "id": 10303532,
+            "title": "Hair colouring",
+            "category_id": 7,
+            "price_min": 2000,
+            "price_max": 4500,
+            "active": 1,
+            "prepaid": "allowed",
+            "seance_length": 3630
+          },
+          {
+            "id": 10303531,
+            "title": "Manicure",
+            "category_id": 8,
+            "price_min": 1500,
+            "price_max": 1500,
+            "active": 1,
+            "prepaid": "forbidden",
+            "seance_length": "2700"
+          },
+          {
+            "id": 10303537,
+            "title": "Gift consultation",
+            "category_id": 7,
+            "price_min": 0,
+            "price_max": 0,
+            "active": 1,
+            "prepaid": "partial",
+            "seance_length": 1800
+          },
+          {
+            "id": 10303538,
+            "title": "Retired service",
+            "category_id": 7,
+            "price_min": 100,
+            "price_max": 100,
+            "active": 0,
+            "prepaid": "forbidden",
+            "seance_length": 1800
+          }
+        ],
+        "category": [
+          {
+            "id": 7,
+            "title": "Hair"
+          },
+          {
+            "id": 8,
+            "title": "Nails"
+          }
+        ],
+        "events": []
+      },
+      "meta": []
+    }
+  },
+  "empty": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": {
+        "services": [],
+        "category": [],
+        "events": []
+      },
+      "meta": []
+    }
+  },
+  "past_datetime": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The datetime must be a date after now."
+      }
+    }
+  }
+}

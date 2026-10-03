@@ -65,6 +65,50 @@ export interface BusinessCard {
   bookingFormUrl: string | null;
 }
 
+export interface ServiceCategory {
+  id: number;
+  title: string;
+}
+
+/** Online prepayment status of a service link (02-RESEARCH, PrepaidService slugs). */
+export type PrepaidSlug = 'forbidden' | 'allowed' | 'required';
+
+export interface BookableService {
+  id: number;
+  title: string;
+  categoryId: number | null;
+  priceMin: number;
+  priceMax: number;
+  durationSeconds: number | null;
+  prepaid: PrepaidSlug | null;
+}
+
+export interface ServiceCatalog {
+  services: BookableService[];
+  categories: ServiceCategory[];
+}
+
+export interface TeamMember {
+  id: number;
+  name: string;
+  specialization: string | null;
+  positionTitle: string | null;
+  bookable: boolean;
+  rating: number | null;
+  nextFreeDate: string | null;
+}
+
+export interface ServicesFilter {
+  teamMemberId?: number;
+  datetime?: string;
+  serviceIds?: readonly number[];
+}
+
+export interface TeamMembersFilter {
+  serviceIds?: readonly number[];
+  datetime?: string;
+}
+
 function assertLocationId(locationId: number): void {
   if (!Number.isSafeInteger(locationId) || locationId <= 0) {
     throw new TypeError('location id must be a positive safe integer');
@@ -154,5 +198,21 @@ export class BookingClient {
       });
     }
     return toCard(parsed.data);
+  }
+
+  /** Services bookable online (DISC-02). Contract stub until GREEN. */
+  services(
+    _locationId: number,
+    _filter: ServicesFilter = {}
+  ): Promise<ServiceCatalog> {
+    return Promise.reject(new Error('not implemented'));
+  }
+
+  /** Team members of the business (DISC-03). Contract stub until GREEN. */
+  teamMembers(
+    _locationId: number,
+    _filter: TeamMembersFilter = {}
+  ): Promise<TeamMember[]> {
+    return Promise.reject(new Error('not implemented'));
   }
 }

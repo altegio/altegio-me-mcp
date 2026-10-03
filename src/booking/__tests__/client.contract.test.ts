@@ -365,3 +365,386 @@ describe('concurrency (edge BAPI-01)', () => {
     expect((reason as UpstreamError).status).toBeNull();
   });
 });
+
+// GET /book_services and GET /book_staff (DISC-02, DISC-03, BAPI-03). The
+// fixtures follow the backend facts in 02-RESEARCH (real keys seance_length
+// and sex, PHP empty arrays, numeric strings); plan 02-09 replaces them with
+// live recordings.
+
+const SERVICES_PATH = `/book_services/${LOCATION}`;
+const STAFF_PATH = `/book_staff/${LOCATION}`;
+const SLOT = '2026-10-05T14:00:00+03:00';
+
+function clientWith(routes: readonly { path: string; reply: FakeReply }[]): {
+  client: BookingClient;
+  upstream: ReturnType<typeof fakeFetch>;
+} {
+  const upstream = fakeFetch(
+    routes.map((route) => ({ method: 'GET' as const, ...route }))
+  );
+  const client = new BookingClient({
+    base: BASE,
+    token: TOKEN,
+    fetch: upstream.fetch,
+  });
+  return { client, upstream };
+}
+
+function servicesClient(scenario: string) {
+  return clientWith([
+    { path: SERVICES_PATH, reply: loadFixture('book_services', scenario) },
+  ]);
+}
+
+function staffClient(scenario: string) {
+  return clientWith([
+    { path: STAFF_PATH, reply: loadFixture('book_staff', scenario) },
+  ]);
+}
+
+describe('services request (book_services)', () => {
+  it('sends one GET /book_services/{location_id} without a query when no filter is given', async () => {
+    const { client, upstream } = servicesClient('default');
+    await client.services(LOCATION);
+    expect(upstream.unmatched).toEqual([]);
+    expect(upstream.calls).toHaveLength(1);
+    const call = upstream.calls[0];
+    expect(call?.method).toBe('GET');
+    expect(call?.url.toString()).toBe(`${BASE}${SERVICES_PATH}`);
+    expect(call?.headers.get('accept')).toBe(ALTEGIO_ACCEPT);
+    expect(call?.body).toBeNull();
+  });
+
+  it('parses the default fixture into the catalog, in upstream order', async () => {
+    const { client } = servicesClient('default');
+    expect(await client.services(LOCATION)).toEqual({
+      services: [
+        {
+          id: 10303530,
+          title: "Women's haircut",
+          categoryId: 7,
+          priceMin: 0,
+          priceMax: 0,
+          durationSeconds: null,
+          prepaid: 'forbidden',
+        },
+        {
+          id: 10303531,
+          title: 'Manicure',
+          categoryId: 8,
+          priceMin: 1500,
+          priceMax: 1500,
+          durationSeconds: null,
+          prepaid: 'forbidden',
+        },
+        {
+          id: 10303532,
+          title: 'Hair colouring',
+          categoryId: 7,
+          priceMin: 2000,
+          priceMax: 4500,
+          durationSeconds: null,
+          prepaid: 'required',
+        },
+        {
+          id: 10303533,
+          title: 'Массаж спины 💆',
+          categoryId: 9,
+          priceMin: 3000,
+          priceMax: 3500,
+          durationSeconds: null,
+          prepaid: 'allowed',
+        },
+        {
+          id: 10303534,
+          title: 'Consultation',
+          categoryId: 7,
+          priceMin: 500,
+          priceMax: 500,
+          durationSeconds: null,
+          prepaid: 'forbidden',
+        },
+        {
+          id: 10303535,
+          title: 'Consultation',
+          categoryId: 8,
+          priceMin: 700,
+          priceMax: 700,
+          durationSeconds: null,
+          prepaid: 'forbidden',
+        },
+        {
+          id: 10303536,
+          title: 'Brow tint',
+          categoryId: 9,
+          priceMin: 12.5,
+          priceMax: 12.5,
+          durationSeconds: null,
+          prepaid: 'forbidden',
+        },
+      ],
+      categories: [
+        { id: 7, title: 'Hair' },
+        { id: 8, title: 'Nails' },
+        { id: 9, title: 'Massage & spa' },
+      ],
+    });
+  });
+
+  it('sends staff_id, datetime, then one service_ids[] per id in the order given (edge BAPI-03 ordering)', async () => {
+    const { client, upstream } = servicesClient('by_member');
+    await client.services(LOCATION, {
+      teamMemberId: 2098145,
+      datetime: SLOT,
+      serviceIds: [3, 1, 2],
+    });
+    const url = upstream.calls[0]?.url;
+    expect(url?.pathname).toBe(`/api/v1${SERVICES_PATH}`);
+    expect([...(url?.searchParams.keys() ?? [])]).toEqual([
+      'staff_id',
+      'datetime',
+      'service_ids[]',
+      'service_ids[]',
+      'service_ids[]',
+    ]);
+    expect(url?.searchParams.get('staff_id')).toBe('2098145');
+    expect(url?.searchParams.getAll('service_ids[]')).toEqual(['3', '1', '2']);
+  });
+
+  it("percent-encodes the '+' of the datetime offset so it arrives intact", async () => {
+    const { client, upstream } = servicesClient('by_member');
+    await client.services(LOCATION, { datetime: SLOT });
+    const url = upstream.calls[0]?.url;
+    expect(url?.search).toBe('?datetime=2026-10-05T14%3A00%3A00%2B03%3A00');
+    expect(url?.searchParams.get('datetime')).toBe(SLOT);
+  });
+
+  it('keeps durations in seconds, maps prepaid slugs, converts numeric strings and drops inactive services (by_member)', async () => {
+    const { client } = servicesClient('by_member');
+    const catalog = await client.services(LOCATION, { teamMemberId: 2098145 });
+    expect(catalog.services).toEqual([
+      {
+        id: 10303530,
+        title: "Women's haircut",
+        categoryId: 7,
+        priceMin: 1500,
+        priceMax: 2500,
+        durationSeconds: 3600,
+        prepaid: 'required',
+      },
+      {
+        id: 10303532,
+        title: 'Hair colouring',
+        categoryId: 7,
+        priceMin: 2000,
+        priceMax: 4500,
+        durationSeconds: 3630,
+        prepaid: 'allowed',
+      },
+      {
+        id: 10303531,
+        title: 'Manicure',
+        categoryId: 8,
+        priceMin: 1500,
+        priceMax: 1500,
+        durationSeconds: 2700,
+        prepaid: 'forbidden',
+      },
+      {
+        id: 10303537,
+        title: 'Gift consultation',
+        categoryId: 7,
+        priceMin: 0,
+        priceMax: 0,
+        durationSeconds: 1800,
+        prepaid: null,
+      },
+    ]);
+    expect(catalog.services.map((service) => service.id)).not.toContain(
+      10303538
+    );
+  });
+
+  it('parses the empty scenario (services [], category [], events [])', async () => {
+    const { client } = servicesClient('empty');
+    expect(await client.services(LOCATION)).toEqual({
+      services: [],
+      categories: [],
+    });
+  });
+
+  it('maps the 422 for a past datetime to rejected', async () => {
+    const { client } = servicesClient('past_datetime');
+    const error = await upstreamError(
+      client.services(LOCATION, { datetime: '2020-01-01T10:00:00+03:00' })
+    );
+    expect(error.kind).toBe('rejected');
+    expect(error.status).toBe(422);
+    expect(error.route).toBe(BOOKING_ROUTES.services.route);
+  });
+
+  it('maps data that is not a services object to contract_drift', async () => {
+    const { client } = clientWith([
+      {
+        path: SERVICES_PATH,
+        reply: { status: 200, body: { success: true, data: null, meta: [] } },
+      },
+    ]);
+    const error = await upstreamError(client.services(LOCATION));
+    expect(error.kind).toBe('contract_drift');
+    expect(error.route).toBe(BOOKING_ROUTES.services.route);
+  });
+
+  it.each<[string, number, Parameters<BookingClient['services']>[1]]>([
+    ['location id 0', 0, undefined],
+    ['location id 1.5', 1.5, undefined],
+    ['team member id 0', LOCATION, { teamMemberId: 0 }],
+    ['team member id 2.5', LOCATION, { teamMemberId: 2.5 }],
+    ['service id 1.5', LOCATION, { serviceIds: [1, 1.5] }],
+    ['service id -1', LOCATION, { serviceIds: [-1] }],
+    ['an unsafe service id', LOCATION, { serviceIds: [2 ** 53] }],
+    [
+      'a datetime that is not a slot datetime',
+      LOCATION,
+      { datetime: 'tomorrow 14:00' },
+    ],
+  ])(
+    'rejects %s with a TypeError before any request',
+    async (_case, location, filter) => {
+      const { client, upstream } = servicesClient('default');
+      await expect(client.services(location, filter)).rejects.toThrow(
+        TypeError
+      );
+      expect(upstream.calls).toHaveLength(0);
+    }
+  );
+});
+
+describe('team members request (book_staff)', () => {
+  it('sends one GET /book_staff/{location_id} without a query when no filter is given', async () => {
+    const { client, upstream } = staffClient('default');
+    await client.teamMembers(LOCATION);
+    expect(upstream.unmatched).toEqual([]);
+    expect(upstream.calls).toHaveLength(1);
+    expect(upstream.calls[0]?.url.toString()).toBe(`${BASE}${STAFF_PATH}`);
+  });
+
+  it('parses the default fixture, in upstream order, keeping bookable false on the domain object', async () => {
+    const { client } = staffClient('default');
+    expect(await client.teamMembers(LOCATION)).toEqual([
+      {
+        id: 2098145,
+        name: 'Anna Smith',
+        specialization: 'Senior stylist',
+        positionTitle: 'Stylist',
+        bookable: true,
+        rating: 4.8,
+        nextFreeDate: '2026-10-05',
+      },
+      {
+        id: 2098146,
+        name: 'Maria Lopez',
+        specialization: 'Nail artist',
+        positionTitle: null,
+        bookable: true,
+        rating: 5,
+        nextFreeDate: '2026-10-06',
+      },
+      {
+        id: 2098147,
+        name: 'Olga Ivanova',
+        specialization: 'Massage therapist',
+        positionTitle: 'Therapist',
+        bookable: false,
+        rating: 4.9,
+        nextFreeDate: null,
+      },
+      {
+        id: 2098148,
+        name: 'Anna Smith',
+        specialization: 'Colourist',
+        positionTitle: 'Colourist',
+        bookable: true,
+        rating: 4.5,
+        nextFreeDate: null,
+      },
+      {
+        // show_rating 0: the business hides the rating in its widget.
+        id: 2098149,
+        name: 'Ivan Petrov',
+        specialization: null,
+        positionTitle: 'Stylist',
+        bookable: true,
+        rating: null,
+        nextFreeDate: 'next week',
+      },
+    ]);
+  });
+
+  it('sends datetime, then one service_ids[] per id in the order given (edge BAPI-03 ordering)', async () => {
+    const { client, upstream } = staffClient('default');
+    await client.teamMembers(LOCATION, {
+      serviceIds: [10303530, 10303531],
+      datetime: SLOT,
+    });
+    const url = upstream.calls[0]?.url;
+    expect([...(url?.searchParams.keys() ?? [])]).toEqual([
+      'datetime',
+      'service_ids[]',
+      'service_ids[]',
+    ]);
+    expect(url?.searchParams.getAll('service_ids[]')).toEqual([
+      '10303530',
+      '10303531',
+    ]);
+    expect(url?.searchParams.get('datetime')).toBe(SLOT);
+    expect(url?.search).toContain('%2B03%3A00');
+  });
+
+  it('parses the empty scenario to no team members', async () => {
+    const { client } = staffClient('empty');
+    expect(await client.teamMembers(LOCATION)).toEqual([]);
+  });
+
+  it('maps the 422 for a past datetime to rejected', async () => {
+    const { client } = staffClient('past_datetime');
+    const error = await upstreamError(
+      client.teamMembers(LOCATION, { datetime: '2020-01-01T10:00:00+03:00' })
+    );
+    expect(error.kind).toBe('rejected');
+    expect(error.status).toBe(422);
+    expect(error.route).toBe(BOOKING_ROUTES.teamMembers.route);
+  });
+
+  it('maps data that is not an array to contract_drift', async () => {
+    const { client } = clientWith([
+      {
+        path: STAFF_PATH,
+        reply: { status: 200, body: { success: true, data: {}, meta: [] } },
+      },
+    ]);
+    const error = await upstreamError(client.teamMembers(LOCATION));
+    expect(error.kind).toBe('contract_drift');
+  });
+
+  it.each<[string, number, Parameters<BookingClient['teamMembers']>[1]]>([
+    ['location id 1.5', 1.5, undefined],
+    ['location id -3', -3, undefined],
+    ['service id 0', LOCATION, { serviceIds: [0] }],
+    ['service id 2.5', LOCATION, { serviceIds: [2.5] }],
+    [
+      'a datetime that is not a slot datetime',
+      LOCATION,
+      { datetime: '2026-10-05 14:00' },
+    ],
+  ])(
+    'rejects %s with a TypeError before any request',
+    async (_case, location, filter) => {
+      const { client, upstream } = staffClient('default');
+      await expect(client.teamMembers(location, filter)).rejects.toThrow(
+        TypeError
+      );
+      expect(upstream.calls).toHaveLength(0);
+    }
+  );
+});
