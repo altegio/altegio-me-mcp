@@ -1,10 +1,13 @@
+import type { BookingClient } from '../booking/client.js';
+import { businessGet } from './business.js';
 import type { DefinedTool } from './factory.js';
 
-// Phase 2 adds the booking client here.
-export type ToolDeps = Record<string, never>;
+/** What every production tool receives: one booking client built from config. */
+export interface ToolDeps {
+  booking: BookingClient;
+}
 
-// D-03: Phase 1 registers no production tool (no demo or server_info tool);
-// the compliance fixtures exercise the factory instead.
-export const productionTools: readonly DefinedTool<ToolDeps>[] = Object.freeze(
-  []
-);
+// Every tool is read-only in v1 (ADR-0001-D2); the compliance suite checks it.
+export const productionTools: readonly DefinedTool<ToolDeps>[] = Object.freeze([
+  businessGet,
+]);

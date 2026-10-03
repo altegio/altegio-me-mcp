@@ -1,6 +1,7 @@
 import type { Server } from 'node:http';
 import type { Logger } from 'pino';
 import { createApp } from './app.js';
+import { BookingClient } from './booking/client.js';
 import {
   ConfigError,
   formatConfigError,
@@ -70,7 +71,13 @@ function main(): void {
     name: PACKAGE_NAME,
     version: PACKAGE_VERSION,
     tools: productionTools,
-    toolDeps: {},
+    // No upstream call at startup: /health stays free of Altegio API calls.
+    toolDeps: {
+      booking: new BookingClient({
+        base: config.ALTEGIO_API_BASE,
+        token: config.ALTEGIO_API_TOKEN,
+      }),
+    },
     logger,
     secrets,
     allowedOrigins: [new URL(config.PUBLIC_BASE_URL).origin],

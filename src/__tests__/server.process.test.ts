@@ -235,8 +235,12 @@ describe('node dist/server.js', () => {
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
       });
       expect(list.status).toBe(200);
-      const body = (await list.json()) as { result?: { tools?: unknown[] } };
-      expect(body.result?.tools).toEqual([]);
+      const body = (await list.json()) as {
+        result?: { tools?: { name: string }[] };
+      };
+      expect((body.result?.tools ?? []).map((tool) => tool.name)).toContain(
+        'business_get'
+      );
 
       server.child.kill('SIGTERM');
       await within(server.exited, SHUTDOWN_WINDOW_MS);

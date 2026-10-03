@@ -96,8 +96,13 @@ describe('compliant tools', () => {
     expect(checkRegistry(registry, { production: true })).toEqual([]);
   });
 
-  it('keeps the production registry empty in phase 1', () => {
-    expect(productionTools).toEqual([]);
+  it('registers read-only production tools with unique names', () => {
+    expect(productionTools.length).toBeGreaterThan(0);
+    for (const tool of productionTools) {
+      expect(tool.spec.annotations.readOnlyHint).toBe(true);
+    }
+    const names = productionTools.map((tool) => tool.name);
+    expect(new Set(names).size).toBe(names.length);
   });
 
   it('declares no read-only POST route yet', () => {
