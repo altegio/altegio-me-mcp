@@ -159,6 +159,25 @@ describe('R8 descriptions', () => {
     expect(textViolations(`a${ZERO_WIDTH_SPACE}b`).length).toBeGreaterThan(0);
   });
 
+  it('reports a Unicode Tag character from textViolations (CR-01)', () => {
+    expect(
+      textViolations(`Lists items${String.fromCodePoint(0xe0041)}`)
+    ).toContain('contains invisible or bidirectional control characters');
+  });
+
+  it.each([
+    ['Unicode Tag', 0xe0041],
+    ['variation selector', 0xfe0f],
+    ['variation selector supplement', 0xe0100],
+    ['combining grapheme joiner', 0x034f],
+    ['Hangul filler', 0x3164],
+  ])('fails R8 for a description carrying a %s character', (_label, cp) => {
+    const spec = specWith({
+      description: `Lists demo items, one page at a time.${String.fromCodePoint(cp)}`,
+    });
+    expect(rules(checkTool(spec, SINGLE))).toContain('R8');
+  });
+
   it('is case-insensitive and sees through invisible characters', () => {
     expect(
       textViolations(`YOU${ZERO_WIDTH_SPACE} MUST call it`).length
