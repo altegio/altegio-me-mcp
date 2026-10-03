@@ -33,6 +33,10 @@ const MAX_PAYLOAD_DEPTH = 24;
 const TOO_DEEP = '[nested value omitted]';
 const REMOVED = '[markup removed]';
 const ELLIPSIS = '…';
+// The inline patterns have no length limit, so a value that opens many tags
+// and closes none costs time quadratic in its length. Only this many UTF-16
+// units of one value are cleaned; every caller's cap is far below it.
+const CLEAN_INPUT_MAX_UNITS = 20_000;
 
 /**
  * Invisible code points, as inclusive ranges: soft hyphen, combining grapheme
@@ -142,7 +146,8 @@ export function sanitizeUntrusted(
     text = String(value);
   else return null;
 
-  text = clean(text);
+  const cut = text.length > CLEAN_INPUT_MAX_UNITS;
+  text = clean(cut ? headUnits(text, CLEAN_INPUT_MAX_UNITS) : text);
   if (text.length === 0) return null;
 
   const maxChars = opts.maxChars ?? UNTRUSTED_FIELD_MAX_CHARS;
@@ -150,7 +155,14 @@ export function sanitizeUntrusted(
   if (points.length > maxChars) {
     return `${points.slice(0, maxChars).join('')}${ELLIPSIS}`;
   }
-  return text;
+  return cut ? `${text}${ELLIPSIS}` : text;
+}
+
+/** The first `units` UTF-16 units, without leaving half a surrogate pair. */
+function headUnits(text: string, units: number): string {
+  const last = text.charCodeAt(units - 1);
+  const end = last >= 0xd800 && last <= 0xdbff ? units - 1 : units;
+  return text.slice(0, end);
 }
 
 function sanitizeDeepAt(value: unknown, depth: number): unknown {
