@@ -1,8 +1,9 @@
 import { z } from 'zod';
-import { BOOKING_ROUTES } from '../booking/client.js';
+import { BOOKING_ROUTES, type BusinessCard } from '../booking/client.js';
 import { SLOT_DATETIME_PATTERN } from '../booking/deep-link.js';
 import { defineTool, type ToolHints } from './factory.js';
 import type { ToolDeps } from './registry.js';
+import { toToolError } from './upstream-errors.js';
 import {
   UNTRUSTED_NOTE,
   sanitizeUntrusted,
@@ -137,7 +138,13 @@ export const businessGet = defineTool<
   output: businessCardSchema,
   render: renderCard,
   handler: async ({ input, deps }) => {
-    const card = await deps.booking.company(input.location_id);
+    let card: BusinessCard;
+    try {
+      card = await deps.booking.company(input.location_id);
+    } catch (error) {
+      // Every upstream failure becomes an in-band error that names the next action (BAPI-01).
+      throw toToolError(error);
+    }
     const forms = card.bookingForms.flatMap((form) => {
       const url = sanitizeUntrusted(form.url);
       return url === null
