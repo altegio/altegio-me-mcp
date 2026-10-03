@@ -93,7 +93,8 @@ export async function closeAllApps(): Promise<void> {
 export function postMcp(
   baseUrl: string,
   body: unknown,
-  headers: Record<string, string> = {}
+  headers: Record<string, string> = {},
+  signal?: AbortSignal
 ): Promise<Response> {
   return fetch(`${baseUrl}/mcp`, {
     method: 'POST',
@@ -103,6 +104,7 @@ export function postMcp(
       ...headers,
     },
     body: typeof body === 'string' ? body : JSON.stringify(body),
+    signal,
   });
 }
 
