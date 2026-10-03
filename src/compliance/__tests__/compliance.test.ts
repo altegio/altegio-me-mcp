@@ -8,7 +8,12 @@ import { createMcpServer } from '../../mcp/create-server.js';
 import { SERVER_INSTRUCTIONS } from '../../mcp/instructions.js';
 import type { ToolMeta, ToolSpec } from '../../tools/factory.js';
 import { productionTools } from '../../tools/registry.js';
-import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from '../../tools/untrusted.js';
+import {
+  INVISIBLE_RANGES,
+  UNTRUSTED_CLOSE,
+  UNTRUSTED_OPEN,
+  sanitizeUntrusted,
+} from '../../tools/untrusted.js';
 import { badFixtures, compliantListTool } from '../fixtures.js';
 import {
   READ_ONLY_POST_ROUTES,
@@ -176,6 +181,18 @@ describe('R8 descriptions', () => {
       description: `Lists demo items, one page at a time.${String.fromCodePoint(cp)}`,
     });
     expect(rules(checkTool(spec, SINGLE))).toContain('R8');
+  });
+
+  it('flags exactly what the sanitiser removes: both ends of every shared range', () => {
+    for (const [from, to] of INVISIBLE_RANGES) {
+      for (const codePoint of [from, to]) {
+        const char = String.fromCodePoint(codePoint);
+        expect(sanitizeUntrusted(`a${char}b`)).toBe('ab');
+        expect(textViolations(`Lists items${char}`)).toContain(
+          'contains invisible or bidirectional control characters'
+        );
+      }
+    }
   });
 
   it('is case-insensitive and sees through invisible characters', () => {

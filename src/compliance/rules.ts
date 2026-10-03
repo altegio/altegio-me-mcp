@@ -2,7 +2,11 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
 import type { ToolMeta, ToolSpec } from '../tools/factory.js';
-import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from '../tools/untrusted.js';
+import {
+  INVISIBLE_RANGES,
+  UNTRUSTED_CLOSE,
+  UNTRUSTED_OPEN,
+} from '../tools/untrusted.js';
 
 // Directory-compliance rules R1-R13 (ADR-0001-D7, ADR-0001-D2; SEC-01, SEC-02).
 // Pure functions over tool specs, so the same rules run against the production
@@ -82,28 +86,19 @@ const PII_NAME_PATTERN =
 const PII_TEXT_PATTERN =
   /\b(phone number|sms|verification code|one-time (code|password)|otp|e-?mail address|full name|date of birth|passport|national id)\b/i;
 
-// Invisible and bidirectional characters, from code points so this file holds
-// none of them. Same ranges as src/tools/untrusted.ts.
+// Invisible and bidirectional characters. The ranges are imported from
+// src/tools/untrusted.ts (INVISIBLE_RANGES), so the sanitiser and this gate
+// cannot drift. Written with \u{...} escapes and the u flag (the Tag block is
+// astral), so this file holds none of the characters.
 function invisibleClass(flags: string): RegExp {
-  const ranges: readonly (readonly [number, number])[] = [
-    [0x00ad, 0x00ad],
-    [0x200b, 0x200f],
-    [0x202a, 0x202e],
-    [0x2060, 0x2064],
-    [0x2066, 0x206f],
-    [0xfeff, 0xfeff],
-  ];
-  const body = ranges
-    .map(([from, to]) =>
-      from === to
-        ? String.fromCodePoint(from)
-        : `${String.fromCodePoint(from)}-${String.fromCodePoint(to)}`
-    )
-    .join('');
+  const hex = (codePoint: number): string => `\\u{${codePoint.toString(16)}}`;
+  const body = INVISIBLE_RANGES.map(([from, to]) =>
+    from === to ? hex(from) : `${hex(from)}-${hex(to)}`
+  ).join('');
   return new RegExp(`[${body}]`, flags);
 }
-const HAS_INVISIBLE = invisibleClass('');
-const ALL_INVISIBLE = invisibleClass('g');
+const HAS_INVISIBLE = invisibleClass('u');
+const ALL_INVISIBLE = invisibleClass('gu');
 
 // Routes v1 never calls (ADR-0001-D2). Built from parts so that neither this
 // file nor a grep for the routes finds them here.
