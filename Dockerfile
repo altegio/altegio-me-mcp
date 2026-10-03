@@ -19,4 +19,3 @@ USER node
 EXPOSE 8080
 # Exec form, so SIGTERM from Cloud Run reaches node directly.
 CMD ["node", "dist/server.js"]
-RUN exit 1
