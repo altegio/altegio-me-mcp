@@ -10,6 +10,7 @@ import {
 import type { CallRecord } from '../observability/call-log.js';
 import { scrubSecrets } from '../observability/redact.js';
 import type { DefinedTool, ToolSpec } from '../tools/factory.js';
+import { SERVER_INSTRUCTIONS } from './instructions.js';
 
 export interface CreateMcpServerOptions<D> {
   name: string;
@@ -27,7 +28,10 @@ export interface CreateMcpServerOptions<D> {
 export function createMcpServer<D>(options: CreateMcpServerOptions<D>): Server {
   const { name, version, specs, toolsByName, toolDeps, secrets, record } =
     options;
-  const server = new Server({ name, version }, { capabilities: { tools: {} } });
+  const server = new Server(
+    { name, version },
+    { capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS }
+  );
 
   server.setRequestHandler(ListToolsRequestSchema, (): ListToolsResult => ({
     tools: [...specs] as unknown as ListToolsResult['tools'],

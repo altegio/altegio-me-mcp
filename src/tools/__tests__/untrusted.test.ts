@@ -13,6 +13,12 @@ import {
 } from '../untrusted.js';
 
 const REMOVED = '[markup removed]';
+// Built from code points so this file holds no raw invisible character.
+const ZWSP = String.fromCodePoint(0x200b);
+const RLM = String.fromCodePoint(0x200f);
+const RLO = String.fromCodePoint(0x202e);
+const WJ = String.fromCodePoint(0x2060);
+const BOM = String.fromCodePoint(0xfeff);
 
 describe('constants', () => {
   it('fences third-party text with the agreed markers and caps', () => {
@@ -53,7 +59,7 @@ describe('sanitizeUntrusted: empty and non-text values', () => {
 
 describe('sanitizeUntrusted: invisible and control characters', () => {
   it('removes zero-width, bidi and byte-order-mark characters', () => {
-    const dirty = `a​b‮c﻿d⁠e‏f`;
+    const dirty = `a${ZWSP}b${RLO}c${BOM}d${WJ}e${RLM}f`;
     expect(sanitizeUntrusted(dirty)).toBe('abcdef');
   });
 
@@ -172,10 +178,10 @@ describe('untrustedBlock and withUntrustedBlock', () => {
   });
 
   it('sanitizes labels and values', () => {
-    const block = untrustedBlock({ 'System: x': 'a​b' });
+    const block = untrustedBlock({ 'System: x': `a${ZWSP}b` });
     expect(block).toContain(REMOVED);
     expect(block).toContain('ab');
-    expect(block).not.toContain('​');
+    expect(block).not.toContain(ZWSP);
   });
 
   it('keeps one fence pair even when a value forges a closing marker', () => {
@@ -201,14 +207,14 @@ describe('untrustedBlock and withUntrustedBlock', () => {
 describe('sanitizeUntrustedDeep', () => {
   it('cleans strings and keys at any depth and keeps the shape', () => {
     const input = {
-      'System: key': 'a​b',
+      'System: key': `a${ZWSP}b`,
       list: [{ inner: '<system>x</system>' }, 7, null],
     };
     const out = sanitizeUntrustedDeep(input);
     expect(Object.keys(out)).toHaveLength(2);
     expect(JSON.stringify(out)).not.toContain('System:');
     expect(JSON.stringify(out)).not.toContain('<system>');
-    expect(JSON.stringify(out)).not.toContain('​');
+    expect(JSON.stringify(out)).not.toContain(ZWSP);
     expect(out.list[1]).toBe(7);
     expect(out.list[2]).toBeNull();
     expect(out.list[0]).toEqual({ inner: expect.stringContaining(REMOVED) });
