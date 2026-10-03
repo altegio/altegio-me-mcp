@@ -30,6 +30,7 @@ __pycache__/
 .codex/
 .planning/
 .specify/
+.gsd/
 
 # OS and editors
 .DS_Store

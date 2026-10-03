@@ -92,10 +92,12 @@ taken from backend code is marked "(code)".
   `{slug}.altegio.me` and `{slug}.rsrv.ws`; `o{id}.alteg.io` is the online sales form for
   memberships and certificates. Get the form URL from `GET /company/{id}?showBookforms=1`.
 - **Paths:** `/company/{loc}/personal/select-services`, `/select-master`, `/select-time`,
-  `/company/{loc}/create-record` (confirm step).
-- **Pre-selection:** `?o=m{staffId}s{serviceId}[,…]d{YYDDMMHHmm}`; group events use
+  `/company/{loc}/create-record/record` (contact step).
+- **Pre-selection:** `?o=m{staffId}s{serviceId}[s{serviceId}…]d{YYDDMMHHmm}`; any professional is
+  `m-1`; the comma form for several services is deprecated; group events use
   `aid{eventId}c{seats}` and `act{YYYY-MM-DD}` (`libs/utils/.../map-url-to-record.ts` in
-  `client.booking`). Format taken from code; verify in a browser before relying on it.
+  `client.booking`). Verified against code and the deployed bundle on 2026-10-03, see
+  [widget-deep-link.md](widget-deep-link.md); the browser check is still due in Phase 2.
 - **Payment hand-off:** `charge.url` from `book_record`.
 
 ## Regions
