@@ -25,6 +25,37 @@ describe('scrubSecrets', () => {
     expect(scrubSecrets(`raw ${secret}`, [secret])).toBe('raw [redacted]');
   });
 
+  it('redacts the JSON-escaped form of a secret containing a quote', () => {
+    const secret = 'tok"en-1234';
+    expect(JSON.stringify(secret).slice(1, -1)).toBe('tok\\"en-1234');
+    expect(scrubSecrets('x "tok\\"en-1234" y', [secret])).toBe(
+      'x "[redacted]" y'
+    );
+    expect(scrubSecrets(`raw ${secret}`, [secret])).toBe('raw [redacted]');
+  });
+
+  it('redacts the JSON-escaped form of a secret containing a backslash', () => {
+    const secret = 'abc\\def-12345';
+    const escaped = JSON.stringify(secret).slice(1, -1);
+    expect(escaped).not.toBe(secret);
+    expect(scrubSecrets(`{"token":"${escaped}"}`, [secret])).toBe(
+      '{"token":"[redacted]"}'
+    );
+  });
+
+  it('redacts the base64 form of a secret, with and without padding', () => {
+    const secret = 'canary-secret-token-01';
+    const padded = Buffer.from(secret, 'utf8').toString('base64');
+    const unpadded = padded.replace(/=+$/, '');
+    expect(padded.endsWith('=')).toBe(true);
+    expect(scrubSecrets(`Authorization: Basic ${padded}`, [secret])).toBe(
+      'Authorization: Basic [redacted]'
+    );
+    expect(scrubSecrets(`token=${unpadded}&next=1`, [secret])).toBe(
+      'token=[redacted]&next=1'
+    );
+  });
+
   it('scrubs nested arrays, object values and object keys without mutating the input', () => {
     const input = {
       [`key-${SECRET}`]: 'value',
