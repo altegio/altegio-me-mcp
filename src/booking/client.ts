@@ -18,8 +18,8 @@ import {
 } from './schemas.js';
 
 // Typed client of the public Altegio booking API (D-01). The route table is
-// the whole surface: six read routes, and never the write route or the
-// sign-in route. Every path is built from integers and from dates checked as
+// the whole surface: five read routes and the validation route (book_check),
+// and never the write route or the sign-in route. Every path is built from integers and from dates checked as
 // YYYY-MM-DD calendar dates, so no free-form model-supplied string reaches a
 // URL path.
 
@@ -489,14 +489,45 @@ export class BookingClient {
     }));
   }
 
-  /** Stub: replaced in the GREEN step. */
-  check(locationId: number, selection: CheckSelection): Promise<void> {
-    void selection;
-    return Promise.reject(
-      new UpstreamError('contract_drift', BOOKING_ROUTES.check.route, {
-        status: locationId,
-      })
-    );
+  /**
+   * Checks one appointment through the validation route (BOOK-01): POST
+   * /book_check with exactly one appointment carrying all four keys the
+   * controller requires. Resolves only on 201, which means bookable; any
+   * other 2xx is contract_drift, and every error kind comes from BookingHttp
+   * unchanged (rejected with the 422 codes, not_found, rate_limited after the
+   * one inline retry, unavailable). The datetime is sent exactly as given.
+   */
+  async check(locationId: number, selection: CheckSelection): Promise<void> {
+    assertLocationId(locationId);
+    const serviceIds = checkedServiceIds(selection.serviceIds);
+    if (serviceIds.length === 0) {
+      throw new TypeError('at least one service id is required');
+    }
+    assertTeamMemberOrAny(selection.teamMemberId);
+    if (!SLOT_DATETIME_PATTERN.test(selection.datetime)) {
+      throw new TypeError('datetime must be an ISO 8601 slot datetime');
+    }
+    const { route, method } = BOOKING_ROUTES.check;
+    const reply = await this.http.send({
+      method,
+      route,
+      path: `/book_check/${locationId}`,
+      body: {
+        appointments: [
+          {
+            id: 1,
+            services: [...serviceIds],
+            staff_id: selection.teamMemberId,
+            datetime: selection.datetime,
+          },
+        ],
+      },
+    });
+    if (reply.status !== 201) {
+      throw new UpstreamError('contract_drift', route, {
+        status: reply.status,
+      });
+    }
   }
 
   /** One call, its data parsed by `schema`; a parse failure is contract_drift. */
