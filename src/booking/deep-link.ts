@@ -155,46 +155,103 @@ function allowedFormOrigin(formUrl: string): string | null {
   return allowed ? url.origin : null;
 }
 
-function fallbackLink(
+function requireId(value: number, name: string, min: 0 | 1): void {
+  // Ids reach the URL as decimal digits only; anything else is a caller bug
+  // (tool input is validated upstream), never a link.
+  if (!Number.isSafeInteger(value) || value < min) {
+    throw new RangeError(
+      `${name} must be an integer of at least ${min}, got ${String(value)}`
+    );
+  }
+}
+
+/**
+ * A plain booking link with no pre-selection: `{form origin}/company/{location}`
+ * for an allow-listed form URL (reason null), else
+ * `https://app.alteg.io/book/{location}` with 'no_form_url' or
+ * 'host_not_allowed'. Used for every fallback of buildBookingLink and by
+ * book_check when the slot could not be verified.
+ */
+export function plainBookingLink(
   locationId: number,
-  reason: LinkFallbackReason
+  formUrl: string | null
 ): BookingLink {
+  requireId(locationId, 'locationId', 1);
+  if (formUrl === null || formUrl.trim() === '') {
+    return {
+      kind: 'booking_form',
+      url: `${FALLBACK_BOOKING_ORIGIN}/book/${locationId}`,
+      reason: 'no_form_url',
+    };
+  }
+  const origin = allowedFormOrigin(formUrl);
+  if (origin === null) {
+    return {
+      kind: 'booking_form',
+      url: `${FALLBACK_BOOKING_ORIGIN}/book/${locationId}`,
+      reason: 'host_not_allowed',
+    };
+  }
   return {
     kind: 'booking_form',
-    url: `${FALLBACK_BOOKING_ORIGIN}/book/${locationId}`,
-    reason,
+    url: `${origin}/company/${locationId}`,
+    reason: null,
   };
 }
 
-/** Builds the pre-selected widget link of D-05, or a plain booking-form link with a reason (D-06). */
-export function buildBookingLink(input: BookingLinkInput): BookingLink {
-  const { locationId, formUrl, teamMemberId, serviceIds, slotDatetime } = input;
-  if (formUrl === null) return fallbackLink(locationId, 'no_form_url');
-  const origin = allowedFormOrigin(formUrl);
-  if (origin === null) return fallbackLink(locationId, 'host_not_allowed');
-  const slot = parseSlotDatetime(slotDatetime);
-  if (slot === null) {
-    return {
-      kind: 'booking_form',
-      url: `${origin}/company/${locationId}`,
-      reason: 'bad_datetime',
-    };
+/** The offset and team-member guards (steps 4 to 7 of D-06) for a parsed slot, or null. */
+function offsetOrTeamMemberBlocker(
+  input: BookingLinkInput,
+  slot: SlotParts
+): LinkFallbackReason | null {
+  // The widget renders a 5.5 hour zone as +05:50 (02-RESEARCH Pitfall 4).
+  if (slot.offsetMinutes % 60 !== 0) return 'fractional_offset';
+  const businessOffset = input.businessUtcOffsetHours;
+  if (businessOffset === null || !Number.isFinite(businessOffset)) {
+    return 'offset_unknown';
   }
+  // A daylight-saving change or a stale card offset: the widget would add a
+  // different offset than the slot's and drop the time.
+  if (slot.offsetMinutes !== Math.round(businessOffset * 60)) {
+    return 'offset_mismatch';
+  }
+  if (input.teamMemberId === 0 && !input.anyTeamMemberAllowed) {
+    return 'any_team_member_disabled';
+  }
+  return null;
+}
+
+/**
+ * Builds the pre-selected widget link of D-05. When pre-selection cannot be
+ * built exactly it returns a plain booking-form link with the first failing
+ * reason (D-06, BOOK-05), never a link the widget would silently reset.
+ */
+export function buildBookingLink(input: BookingLinkInput): BookingLink {
+  const { locationId, teamMemberId, serviceIds } = input;
+  requireId(locationId, 'locationId', 1);
+  requireId(teamMemberId, 'teamMemberId', 0);
+  for (const id of serviceIds) requireId(id, 'serviceIds[]', 1);
+
+  const plain = plainBookingLink(locationId, input.formUrl);
+  if (plain.reason !== null) return plain;
+
+  if (serviceIds.length === 0) return { ...plain, reason: 'no_services' };
+  const slot = parseSlotDatetime(input.slotDatetime);
+  // The d token has minute precision, and the widget keeps a time only when
+  // it equals a free slot's datetime exactly.
+  if (slot === null || slot.second !== '00') {
+    return { ...plain, reason: 'bad_datetime' };
+  }
+  const blocker = offsetOrTeamMemberBlocker(input, slot);
+  if (blocker !== null) return { ...plain, reason: blocker };
+
   // d + YY + DD + MM + HH + mm: day before month, business wall clock.
   const time = `d${slot.year.slice(2)}${slot.day}${slot.month}${slot.hour}${slot.minute}`;
   const staff = `m${teamMemberId === 0 ? '-1' : String(teamMemberId)}`;
   const services = serviceIds.map((id) => `s${id}`).join('');
   return {
     kind: 'preselected',
-    url: `${origin}/company/${locationId}?o=${staff}${services}${time}`,
+    url: `${plain.url}?o=${staff}${services}${time}`,
     reason: null,
   };
-}
-
-/** RED stub for Task 2; not implemented yet. */
-export function plainBookingLink(
-  locationId: number,
-  _formUrl: string | null
-): BookingLink {
-  return fallbackLink(locationId, 'no_form_url');
 }
