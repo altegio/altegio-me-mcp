@@ -1,6 +1,11 @@
 // Exact-value secret scrubber. It runs on every tool result before the result
 // leaves the process, so a secret that a tool echoes (for example inside an
 // upstream error text) never reaches the client (SEC-03, threat T-1-09).
+//
+// Each secret is matched in the forms it is commonly echoed in: raw,
+// URL-encoded (encodeURIComponent), JSON-escaped (the body of
+// JSON.stringify, for a secret with a quote or backslash) and base64, padded
+// and unpadded (an HTTP Basic header or a token blob).
 
 export const MIN_SECRET_LENGTH = 8;
 export const REDACTED = '[redacted]';
@@ -12,6 +17,10 @@ function buildNeedles(secrets: readonly string[]): string[] {
     if (secret.length < MIN_SECRET_LENGTH) continue;
     needles.add(secret);
     needles.add(encodeURIComponent(secret));
+    needles.add(JSON.stringify(secret).slice(1, -1));
+    const base64 = Buffer.from(secret, 'utf8').toString('base64');
+    needles.add(base64);
+    needles.add(base64.replace(/=+$/, ''));
   }
   // Longest first, so a needle that contains another is replaced as a whole.
   return [...needles].sort((a, b) => b.length - a.length);

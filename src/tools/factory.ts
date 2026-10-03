@@ -42,6 +42,13 @@ export interface ToolInvocation {
 /** Rendered text per call is capped here (research Pitfall 16, A11). */
 export const TEXT_BUDGET_CHARS = 40_000;
 
+/**
+ * structuredContent per call is capped here, measured as the length of
+ * JSON.stringify(data). Phase 2 tools also cap every business-authored field
+ * through sanitizeUntrusted, so this budget is a backstop, not the main bound.
+ */
+export const STRUCTURED_BUDGET_CHARS = 100_000;
+
 const TRUNCATION_NOTE = `\n\n[Output truncated at ${TEXT_BUDGET_CHARS} characters. Next: request the next page or a smaller page_size, or narrow the request.]`;
 
 /** One upstream (Altegio API) call a tool may make; checked by compliance rule R7. */
@@ -159,6 +166,24 @@ export function defineTool<
       }
 
       const data = parsedOutput.data;
+      // An oversized payload is never returned, not even cut: a cut JSON
+      // object is not valid against the output schema.
+      if (JSON.stringify(data).length > STRUCTURED_BUDGET_CHARS) {
+        return {
+          result: {
+            content: [
+              {
+                type: 'text',
+                text: `${def.name} produced more data than one result can carry. Next: request a smaller page_size or narrow the request.`,
+              },
+            ],
+            isError: true,
+          },
+          outcome: 'tool_error',
+          errorType: 'OutputTooLarge',
+        };
+      }
+
       let text: string;
       try {
         text = def.render(data);

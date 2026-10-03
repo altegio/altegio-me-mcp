@@ -1,6 +1,10 @@
 import { describe, expect, it } from '@jest/globals';
 import { z } from 'zod';
-import { defineTool, TEXT_BUDGET_CHARS } from '../factory.js';
+import {
+  defineTool,
+  STRUCTURED_BUDGET_CHARS,
+  TEXT_BUDGET_CHARS,
+} from '../factory.js';
 
 const readHints = {
   readOnlyHint: true,
@@ -135,6 +139,10 @@ const STRUCTURED_BUDGET = 100_000;
 const TEXT_ENVELOPE_CHARS = JSON.stringify({ text: '' }).length;
 
 describe('structuredContent budget', () => {
+  it('uses a budget of 100000 characters', () => {
+    expect(STRUCTURED_BUDGET_CHARS).toBe(STRUCTURED_BUDGET);
+  });
+
   it('returns an output of exactly the budget with its structuredContent', async () => {
     const text = 'c'.repeat(STRUCTURED_BUDGET - TEXT_ENVELOPE_CHARS);
     expect(JSON.stringify({ text })).toHaveLength(STRUCTURED_BUDGET);
