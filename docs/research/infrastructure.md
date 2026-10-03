@@ -66,6 +66,13 @@ We do step 2. Steps 1 and 3 need the Search Console owner and Cloudflare write a
 
 ## I3. Partner token
 
+Decision (owner, 2026-10-03): use the partner token of the existing developer account 2630
+"Altegio AI" (it holds Altegio.Pro MCP, Knowledge MCP and Integrations Hub MCP). No new developer
+account, app or marketplace listing. Accepted trade-offs: per-partner rate limits and anti-fraud
+state are shared with Altegio.Pro MCP, and the token cannot be revoked independently. Locally the
+token lives in `.env` (never committed), in production in Secret Manager (Phase 3). The proposal
+below is superseded; it stays for the record.
+
 What exists:
 
 - Altegio.Pro MCP reads `ALTEGIO_API_TOKEN` (developer account settings → account details). In

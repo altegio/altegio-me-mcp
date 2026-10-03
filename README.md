@@ -103,17 +103,21 @@ values) when one is missing or invalid.
 | Variable | Purpose | Default | Required |
 |---|---|---|---|
 | `PORT` | HTTP port (Cloud Run sets it) | `8080` | no |
-| `ALTEGIO_API_BASE` | Base URL of the Altegio public API | `https://api.alteg.io/api/v1` | no |
-| `ALTEGIO_API_TOKEN` | Partner API token of the Altegio.me MCP developer account | none | yes, non-empty |
+| `ALTEGIO_API_BASE` | Base URL of the Altegio public API; must be https when NODE_ENV is production | `https://api.alteg.io/api/v1` | no |
+| `ALTEGIO_API_TOKEN` | Partner API token of developer account 2630 "Altegio AI" (shared with Altegio.Pro MCP) | none | yes, non-empty |
 | `PUBLIC_BASE_URL` | Public URL of the server; its origin is the allowed browser `Origin` | none | yes, http(s) URL |
 | `LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent` | `info` | no |
-| `NODE_ENV` | `development`, `test` or `production` (the Docker image sets `production`) | `development` | no |
+| `NODE_ENV` | `development`, `test` or `production`; `.env.example` sets `development` for local runs and the Docker image sets `production` | `production` | no |
 
 `ALTEGIO_API_TOKEN` has the same name and the same rule (any non-empty string) as in Altegio.Pro
 MCP. [`.env.example`](.env.example) carries the placeholder `your_partner_token_here`, so a copied
 `.env` starts the server. A real token is needed once the server calls the Altegio API; a wrong
-one then shows up as HTTP 401 from that API. Real secrets live in GCP Secret Manager, never in
-git.
+one then shows up as HTTP 401 from that API. A token shorter than 8 characters cannot be redacted
+from output, so the server then logs one `config_warning` line at startup that names the setting,
+never its value. Real secrets live in GCP Secret Manager, never in git.
+
+When `NODE_ENV` is not set the server runs as `production`: loopback browser origins are refused
+and an `http://` `ALTEGIO_API_BASE` stops startup, so the partner token never travels in cleartext.
 
 ## Local run
 

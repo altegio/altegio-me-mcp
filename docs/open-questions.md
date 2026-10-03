@@ -34,7 +34,7 @@ B4 answer (own research, 2026-10-03): the pre-selection format is safe to use in
 
 L1 answer (owner, 2026-10-03): listing every business that has online booking enabled, without explicit opt-in, is acceptable. An opt-out is provided; businesses are not notified.
 
-L3 answer (owner, 2026-10-03): medical and health businesses are excluded at launch, classified by their Altegio business category. The category list will live in config (Phase 4).
+L3 answer (owner, 2026-10-03): medical and health businesses are excluded at launch, classified by their Altegio business category. The category list will live in config (Phase 4). Known-business tools (Phase 2): `business_get`, `business_list_services`, `business_list_team_members`, `business_list_dates`, `business_list_time_slots` and `book_check` accept any location id and do not filter by business type; Phase 4 (CAT-05) applies the same excluded-type list to these by-id tools, not only to search, before launch.
 
 ## Design and marketing
 
@@ -53,11 +53,11 @@ D1-D4 are decided by the owner, Mike Kondakov, before Phase 5, not by a design o
 |---|---|---|---|
 | I1 | GCP project and billing account for the service | First deploy | not asked: answered from Altegio.Pro MCP setup 2026-10-03 |
 | I2 | Domain: `mcp.altegio.me` or another; DNS owner | First deploy | not asked: answered from Altegio.Pro MCP setup 2026-10-03 |
-| I3 | Developer account and partner token for the Altegio.me MCP | Local run against the real API | not asked: answered from Altegio.Pro MCP setup 2026-10-03 |
+| I3 | Developer account and partner token for the Altegio.me MCP | Local run against the real API | not asked: owner decision 2026-10-03 (account 2630) |
 | I4 | Organization admin on standby to apply the main-branch ruleset if GitHub refuses the OrganizationAdmin bypass actor to a repo admin | Phase 1 CI gate (CI-02) | not asked: ask only if applying the ruleset fails (plan 01-08) |
 
 I1 answer (from the Altegio.Pro MCP and mcp.alteg.io platform setup, 2026-10-03): a new GCP project `altegio-me-mcp` in europe-west1. Creating the project, linking billing and connecting the GitHub organization to Cloud Build need organization or infrastructure rights. Details in [research/infrastructure.md](research/infrastructure.md).
 
 I2 answer (from the Altegio.Pro MCP and mcp.alteg.io platform setup, 2026-10-03): `mcp.altegio.me` as a Cloud Run domain mapping with a non-proxied Cloudflare CNAME to `ghs.googlehosted.com`. It needs a Search Console owner of `altegio.me` and Cloudflare write access to that zone; the `altegio.me` registration expires 2026-11-22. Details in [research/infrastructure.md](research/infrastructure.md).
 
-I3 answer (from the Altegio.Pro MCP and mcp.alteg.io platform setup, 2026-10-03): a dedicated developer account for the Altegio.me MCP with its own partner token in Secret Manager, not the Altegio.Pro MCP token. Details in [research/infrastructure.md](research/infrastructure.md).
+I3 answer (owner decision, 2026-10-03): use the partner token of the existing developer account 2630 "Altegio AI", the account that holds Altegio.Pro MCP, Knowledge MCP and Integrations Hub MCP. No new developer account, app or marketplace listing. Accepted trade-offs: per-partner rate limits and anti-fraud state are shared with Altegio.Pro MCP, and the token cannot be revoked independently. Locally the token lives in `.env` (never committed); in production it lives in Secret Manager (Phase 3). This supersedes the dedicated-account proposal in [research/infrastructure.md](research/infrastructure.md) section I3.
