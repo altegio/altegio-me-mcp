@@ -117,6 +117,28 @@ function startServer(env: Record<string, string>): RunningServer {
   };
 }
 
+async function waitForStdout(
+  server: RunningServer,
+  needle: string,
+  ms: number
+): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!server.stdout().includes(needle)) {
+    if (Date.now() > deadline || server.child.exitCode !== null) {
+      throw new Error(`stdout never contained ${needle}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+function stdoutRecords(server: RunningServer): Record<string, unknown>[] {
+  return server
+    .stdout()
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
 async function validEnv(): Promise<Record<string, string>> {
   return {
     ...envExampleValues(),
@@ -284,6 +306,59 @@ describe('node dist/server.js', () => {
       expect(server.stderr()).toContain(
         '  - ALTEGIO_API_TOKEN: Partner API token is required'
       );
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'warns once at startup when the token is shorter than the scrubber minimum, without printing it',
+    async () => {
+      const shortToken = 'q7x';
+      const env = { ...(await validEnv()), ALTEGIO_API_TOKEN: shortToken };
+      const server = startServer(env);
+      await waitForStdout(server, '"event":"server_started"', 10_000);
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+
+      const warnings = stdoutRecords(server).filter(
+        (record) => record.event === 'config_warning'
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.setting).toBe('ALTEGIO_API_TOKEN');
+      expect(server.stdout()).not.toContain(shortToken);
+      expect(server.stderr()).not.toContain(shortToken);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'writes no config_warning for a token at or above the scrubber minimum',
+    async () => {
+      const server = startServer(await validEnv());
+      await waitForStdout(server, '"event":"server_started"', 10_000);
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(server.stdout()).not.toContain('config_warning');
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'exits 1 with a readable message for an http ALTEGIO_API_BASE in production',
+    async () => {
+      const env = {
+        ...(await validEnv()),
+        NODE_ENV: 'production',
+        ALTEGIO_API_BASE: 'http://api.example.com/api/v1',
+      };
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain(
+        '  - ALTEGIO_API_BASE: must be an https URL (http is accepted only when NODE_ENV is development or test)'
+      );
+      expect(server.stderr()).not.toContain('api.example.com');
+      expect(server.stderr()).not.toContain(CANARY);
     },
     TEST_TIMEOUT_MS
   );
