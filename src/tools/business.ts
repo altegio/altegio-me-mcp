@@ -5,13 +5,19 @@ import {
   type PrepaidSlug,
   type ServiceCatalog,
   type TeamMember,
+  type TimeSlot,
 } from '../booking/client.js';
-import { SLOT_DATETIME_PATTERN } from '../booking/deep-link.js';
+import {
+  SLOT_DATETIME_PATTERN,
+  formatUtcOffset,
+  parseSlotDatetime,
+} from '../booking/deep-link.js';
 import { defineTool, type ToolHints } from './factory.js';
 import {
   listOutputSchema,
   pageInputShape,
   paginateArray,
+  paginationSchema,
   type Pagination,
 } from './pagination.js';
 import type { ToolDeps } from './registry.js';
@@ -600,44 +606,378 @@ export const businessListTeamMembers = defineTool<
   },
 });
 
-// Contract-only stubs (RED): unregistered, replaced in the GREEN commit.
-const availabilityStubInput = z.strictObject({
-  location_id: locationIdInput,
-  ...pageInputShape(),
+// Availability steps (DISC-04, DISC-05): the dates with free time, then the
+// free slots of one date, for one team member or any team member (0). The
+// slot datetime is passed through exactly as the API wrote it, because
+// book_check verifies it and the widget applies a preselected time only when
+// it equals a free slot exactly. Display times come from the datetime digits,
+// never from the upstream G:i `time` and never through a Date conversion.
+// Neither tool returns business-authored text, so the render needs no fence.
+
+/** Widest date range business_list_dates asks for, in days (02-RESEARCH Pitfall 6). */
+export const MAX_DATE_RANGE_DAYS = 62;
+
+/** Day number of a YYYY-MM-DD date that exists in the calendar, else null. */
+function calendarDayNumber(value: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  const [, year, month, day] = match ?? [];
+  if (year === undefined || month === undefined || day === undefined) {
+    return null;
+  }
+  const ms = Date.UTC(Number(year), Number(month) - 1, Number(day));
+  const date = new Date(ms);
+  if (
+    date.getUTCFullYear() !== Number(year) ||
+    date.getUTCMonth() !== Number(month) - 1 ||
+    date.getUTCDate() !== Number(day)
+  ) {
+    return null;
+  }
+  return ms / 86_400_000;
+}
+
+function calendarDate(description: string) {
+  return z
+    .string()
+    .regex(DATE_PATTERN)
+    .refine((value) => calendarDayNumber(value) !== null, {
+      message: 'must be a date that exists in the calendar',
+    })
+    .describe(description);
+}
+
+const teamMemberOrAnyInput = z
+  .number()
+  .int()
+  .min(0)
+  .default(0)
+  .describe('Team member id. 0 means any team member.');
+
+function uniqueServiceIds(min: number, description: string) {
+  return z
+    .array(z.number().int().positive())
+    .min(min)
+    .max(MAX_SERVICE_IDS)
+    .refine((ids) => new Set(ids).size === ids.length, {
+      message: 'service ids must be unique',
+    })
+    .describe(description);
+}
+
+function teamMemberText(teamMemberId: number): string {
+  return teamMemberId === 0 ? 'any team member' : `team member ${teamMemberId}`;
+}
+
+// business_list_dates (DISC-04)
+
+const dateItemSchema = z.strictObject({
+  date: z.string().describe('A date with free time, YYYY-MM-DD.'),
 });
 
-const availabilityStubOutput = listOutputSchema(z.strictObject({}));
+const datesOutput = listOutputSchema(dateItemSchema).extend({
+  date_from: z
+    .string()
+    .nullable()
+    .describe(
+      "First searched date, YYYY-MM-DD, or null for the business's booking window."
+    ),
+  date_to: z
+    .string()
+    .nullable()
+    .describe(
+      "Last searched date (inclusive), YYYY-MM-DD, or null for the business's booking window."
+    ),
+  team_member_id: z
+    .number()
+    .int()
+    .describe('Team member searched for; 0 means any team member.'),
+});
+
+type DatesOutput = z.infer<typeof datesOutput>;
+
+const datesInput = z
+  .strictObject({
+    location_id: locationIdInput,
+    service_ids: uniqueServiceIds(
+      0,
+      `Services to book, up to ${MAX_SERVICE_IDS} unique service ids.`
+    ).default([]),
+    team_member_id: teamMemberOrAnyInput,
+    date_from: calendarDate(
+      `First date to search, YYYY-MM-DD. Give date_from and date_to together, at most ${MAX_DATE_RANGE_DAYS} days apart.`
+    ).optional(),
+    date_to: calendarDate(
+      `Last date to search (inclusive), YYYY-MM-DD, not before date_from.`
+    ).optional(),
+    ...pageInputShape(),
+  })
+  .superRefine((input, ctx) => {
+    const hasFrom = input.date_from !== undefined;
+    const hasTo = input.date_to !== undefined;
+    if (hasFrom !== hasTo) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [hasFrom ? 'date_to' : 'date_from'],
+        message: 'date_from and date_to go together: give both or neither',
+      });
+      return;
+    }
+    if (input.date_from === undefined || input.date_to === undefined) return;
+    const from = calendarDayNumber(input.date_from);
+    const to = calendarDayNumber(input.date_to);
+    // Field checks report a date that does not exist.
+    if (from === null || to === null) return;
+    if (to < from) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['date_to'],
+        message: 'date_to must not be before date_from',
+      });
+    } else if (to - from > MAX_DATE_RANGE_DAYS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['date_to'],
+        message: `date_to must be at most ${MAX_DATE_RANGE_DAYS} days after date_from`,
+      });
+    }
+  });
+
+function searchedRange(out: DatesOutput): string {
+  return out.date_from === null || out.date_to === null
+    ? "in the business's booking window"
+    : `from ${out.date_from} to ${out.date_to}`;
+}
+
+function renderDates(out: DatesOutput): string {
+  const { items, pagination } = out;
+  const who = teamMemberText(out.team_member_id);
+  if (pagination.total === 0) {
+    return `No date has free time ${searchedRange(out)} for this selection of services and ${who}.`;
+  }
+  const lines = [
+    pageLine(`Dates with free time for ${who}`, pagination),
+    ...items.map((item) => `- ${item.date}`),
+    `Searched ${searchedRange(out)}.`,
+  ];
+  const more = moreLine(pagination);
+  if (more !== null) lines.push(more);
+  return lines.join('\n');
+}
 
 export const businessListDates = defineTool<
-  typeof availabilityStubInput,
-  typeof availabilityStubOutput,
+  typeof datesInput,
+  typeof datesOutput,
   ToolDeps
 >({
   name: 'business_list_dates',
   title: 'List dates with free time',
-  description: 'Not implemented yet.',
+  description:
+    "Lists the dates on which a business has free time for the chosen services, for one team member or any team member, within a date range of up to 62 days. Without a range the business's own booking window is used.",
   annotations: UPSTREAM_READ_HINTS,
   kind: 'list',
   upstream: [BOOKING_ROUTES.dates],
-  input: availabilityStubInput,
-  output: availabilityStubOutput,
-  render: () => '',
-  handler: () => Promise.reject(new Error('not implemented')),
+  input: datesInput,
+  output: datesOutput,
+  render: renderDates,
+  handler: async ({ input, deps }) => {
+    let dates: string[];
+    try {
+      dates = await deps.booking.dates(input.location_id, {
+        serviceIds: input.service_ids,
+        teamMemberId: input.team_member_id,
+        dateFrom: input.date_from,
+        dateTo: input.date_to,
+      });
+    } catch (error) {
+      throw toToolError(error, {
+        not_found: {
+          message:
+            'No business, team member or service was found for these ids.',
+          nextAction:
+            'check the location id, the team member id and the service ids; business_list_services and business_list_team_members return them.',
+        },
+        rejected: {
+          message: 'The booking service rejected the chosen dates.',
+          nextAction: `choose dates from today on, at most ${MAX_DATE_RANGE_DAYS} days apart.`,
+        },
+      });
+    }
+    // Ascending and without duplicates; YYYY-MM-DD sorts as text.
+    const unique = [...new Set(dates)].sort();
+    return {
+      ...paginateArray(
+        unique.map((date) => ({ date })),
+        input
+      ),
+      date_from: input.date_from ?? null,
+      date_to: input.date_to ?? null,
+      team_member_id: input.team_member_id,
+    };
+  },
 });
 
+// business_list_time_slots (DISC-05)
+
+const slotItemSchema = z.strictObject({
+  time: z.string().describe("Start time, HH:MM, in the business's local time."),
+  datetime: z
+    .string()
+    .describe(
+      'Start as an ISO 8601 datetime with UTC offset, exactly as the booking service returned it; book_check takes this value unchanged.'
+    ),
+  duration_minutes: z
+    .number()
+    .int()
+    .nullable()
+    .describe('Duration in whole minutes, or null when not given.'),
+  utc_offset: z
+    .string()
+    .describe("UTC offset of this slot's local time, for example +03:00."),
+});
+
+type SlotItem = z.infer<typeof slotItemSchema>;
+
+const timeSlotsOutput = z.strictObject({
+  items: z.array(slotItemSchema),
+  pagination: paginationSchema,
+  date: z.string().describe('The searched date, YYYY-MM-DD.'),
+  team_member_id: z
+    .number()
+    .int()
+    .describe('Team member searched for; 0 means any team member.'),
+});
+
+type TimeSlotsOutput = z.infer<typeof timeSlotsOutput>;
+
+const timeSlotsInput = z.strictObject({
+  location_id: locationIdInput,
+  service_ids: uniqueServiceIds(
+    1,
+    `Services to book, 1 to ${MAX_SERVICE_IDS} unique service ids.`
+  ),
+  team_member_id: teamMemberOrAnyInput,
+  date: calendarDate('Date to list, YYYY-MM-DD.'),
+  ...pageInputShape(),
+});
+
+/** A slot with the instant it denotes, for sorting only. */
+interface DatedSlot {
+  item: SlotItem;
+  instantMs: number;
+}
+
+function toDatedSlot(slot: TimeSlot): DatedSlot | null {
+  const parts = parseSlotDatetime(slot.datetime);
+  if (parts === null) return null;
+  // Local digits minus the offset: the instant, without a Date parse.
+  const localMs = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second)
+  );
+  return {
+    item: {
+      time: `${parts.hour}:${parts.minute}`,
+      datetime: slot.datetime,
+      duration_minutes:
+        slot.durationSeconds === null
+          ? null
+          : Math.round(slot.durationSeconds / 60),
+      utc_offset: formatUtcOffset(parts.offsetMinutes),
+    },
+    instantMs: localMs - parts.offsetMinutes * 60_000,
+  };
+}
+
+/** Merged by identical datetime string, sorted by instant; ties keep upstream order. */
+function toSlotItems(slots: readonly TimeSlot[]): SlotItem[] {
+  const seen = new Set<string>();
+  const dated: DatedSlot[] = [];
+  for (const slot of slots) {
+    if (seen.has(slot.datetime)) continue;
+    seen.add(slot.datetime);
+    const entry = toDatedSlot(slot);
+    if (entry !== null) dated.push(entry);
+  }
+  // Array.prototype.sort is stable, so equal instants keep upstream order.
+  dated.sort((a, b) => a.instantMs - b.instantMs);
+  return dated.map((entry) => entry.item);
+}
+
+function offsetsLine(items: readonly SlotItem[]): string {
+  const offsets = [...new Set(items.map((item) => item.utc_offset))];
+  return offsets.length === 1
+    ? `Times are the business's local times (UTC${offsets[0] ?? ''}).`
+    : `Times are the business's local times; the UTC offset differs between slots (${offsets.map((offset) => `UTC${offset}`).join(', ')}).`;
+}
+
+function renderTimeSlots(out: TimeSlotsOutput): string {
+  const { items, pagination } = out;
+  if (pagination.total === 0) {
+    return `No free time on ${out.date} for this selection of services and team member.`;
+  }
+  const lines = [
+    pageLine(
+      `Free time slots on ${out.date} for ${teamMemberText(out.team_member_id)}`,
+      pagination
+    ),
+    ...items.map(
+      (item) =>
+        `- ${item.time}, ${durationText(item.duration_minutes)}: ${item.datetime}`
+    ),
+  ];
+  if (items.length > 0) lines.push(offsetsLine(items));
+  const more = moreLine(pagination);
+  if (more !== null) lines.push(more);
+  return lines.join('\n');
+}
+
 export const businessListTimeSlots = defineTool<
-  typeof availabilityStubInput,
-  typeof availabilityStubOutput,
+  typeof timeSlotsInput,
+  typeof timeSlotsOutput,
   ToolDeps
 >({
   name: 'business_list_time_slots',
   title: 'List free time slots',
-  description: 'Not implemented yet.',
+  description:
+    "Lists the free time slots of a business on one date for the chosen services and one team member or any team member. Each slot carries the exact datetime that book_check takes, in the business's local time with its UTC offset.",
   annotations: UPSTREAM_READ_HINTS,
   kind: 'list',
   upstream: [BOOKING_ROUTES.timeSlots],
-  input: availabilityStubInput,
-  output: availabilityStubOutput,
-  render: () => '',
-  handler: () => Promise.reject(new Error('not implemented')),
+  input: timeSlotsInput,
+  output: timeSlotsOutput,
+  render: renderTimeSlots,
+  handler: async ({ input, deps }) => {
+    let slots: TimeSlot[];
+    try {
+      slots = await deps.booking.timeSlots(
+        input.location_id,
+        input.team_member_id,
+        input.date,
+        input.service_ids
+      );
+    } catch (error) {
+      throw toToolError(error, {
+        not_found: {
+          message:
+            'No business, team member or service was found for these ids.',
+          nextAction:
+            'check the location id, the team member id and the service ids; business_list_services and business_list_team_members return them.',
+        },
+        rejected: {
+          message: 'The booking service rejected the chosen date.',
+          nextAction:
+            'choose a date from today on, for example one returned by business_list_dates.',
+        },
+      });
+    }
+    return {
+      ...paginateArray(toSlotItems(slots), input),
+      date: input.date,
+      team_member_id: input.team_member_id,
+    };
+  },
 });
