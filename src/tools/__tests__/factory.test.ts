@@ -35,7 +35,7 @@ const textOutput = z.strictObject({ text: z.string() });
 
 function textTool(
   produce: () => string
-): ReturnType<typeof defineTool<z.ZodObject<{}>, typeof textOutput>> {
+): ReturnType<typeof defineTool<z.ZodObject, typeof textOutput>> {
   return defineTool({
     name: 'demo_text',
     title: 'Text demo',
