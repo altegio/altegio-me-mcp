@@ -43,7 +43,7 @@ const UPSTREAM_READ_HINTS = {
   idempotentHint: true,
 } as const satisfies ToolHints;
 
-function untrustedText(label: string) {
+export function untrustedText(label: string) {
   return z.string().nullable().describe(`${label} ${UNTRUSTED_NOTE}`);
 }
 
@@ -105,7 +105,7 @@ const businessCardSchema = z.strictObject({
 type BusinessCardOutput = z.infer<typeof businessCardSchema>;
 
 /** Cap on the business name, in code points; other text fields use the default. */
-const NAME_MAX_CHARS = 200;
+export const NAME_MAX_CHARS = 200;
 
 /**
  * A booking-form address we may hand to a client: an https URL that parses
@@ -252,7 +252,7 @@ export const businessGet = defineTool<
 // ids, numbers and fixed words.
 
 /** Cap on business labels in list items (titles, names, categories), in code points. */
-const LABEL_MAX_CHARS = 200;
+export const LABEL_MAX_CHARS = 200;
 
 const DATETIME_FILTER_DESCRIPTION =
   'Only those free at this time, in the format business_list_time_slots returns, for example 2026-10-05T14:00:00+03:00.';
@@ -263,7 +263,7 @@ const datetimeFilter = z
   .optional()
   .describe(DATETIME_FILTER_DESCRIPTION);
 
-const locationIdInput = z
+export const locationIdInput = z
   .number()
   .int()
   .positive()
@@ -306,7 +306,7 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
  * terms: those also depend on the business and the team member, and the
  * widget shows them (02-RESEARCH Pitfall 8).
  */
-const PREPAYMENT: Readonly<
+export const PREPAYMENT: Readonly<
   Record<PrepaidSlug, 'not_offered' | 'optional' | 'required'>
 > = {
   forbidden: 'not_offered',
@@ -314,7 +314,7 @@ const PREPAYMENT: Readonly<
   required: 'required',
 };
 
-const PREPAYMENT_TEXT = {
+export const PREPAYMENT_TEXT = {
   not_offered: 'no online prepayment',
   optional: 'prepayment optional',
   required: 'prepayment required',
@@ -368,7 +368,7 @@ const servicesInput = z.strictObject({
   ...pageInputShape(),
 });
 
-function priceText(price: ServiceItem['price']): string {
+export function priceText(price: ServiceItem['price']): string {
   if (price === null) return 'price on request';
   return price.min === price.max
     ? `price ${price.min}`
@@ -503,7 +503,7 @@ type TeamMemberItem = z.infer<typeof teamMemberItemSchema>;
 
 const teamMembersOutput = listOutputSchema(teamMemberItemSchema);
 
-const MAX_SERVICE_IDS = 10;
+export const MAX_SERVICE_IDS = 10;
 
 const teamMembersInput = z.strictObject({
   location_id: locationIdInput,
@@ -646,14 +646,14 @@ function calendarDate(description: string) {
     .describe(description);
 }
 
-const teamMemberOrAnyInput = z
+export const teamMemberOrAnyInput = z
   .number()
   .int()
   .min(0)
   .default(0)
   .describe('Team member id. 0 means any team member.');
 
-function uniqueServiceIds(min: number, description: string) {
+export function uniqueServiceIds(min: number, description: string) {
   return z
     .array(z.number().int().positive())
     .min(min)
@@ -664,7 +664,7 @@ function uniqueServiceIds(min: number, description: string) {
     .describe(description);
 }
 
-function teamMemberText(teamMemberId: number): string {
+export function teamMemberText(teamMemberId: number): string {
   return teamMemberId === 0 ? 'any team member' : `team member ${teamMemberId}`;
 }
 

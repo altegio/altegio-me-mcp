@@ -4,6 +4,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { BOOKING_ROUTES } from '../../booking/client.js';
 import { createMcpServer } from '../../mcp/create-server.js';
 import { SERVER_INSTRUCTIONS } from '../../mcp/instructions.js';
 import type { ToolMeta, ToolSpec } from '../../tools/factory.js';
@@ -105,8 +106,34 @@ describe('compliant tools', () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it('declares no read-only POST route yet', () => {
-    expect(READ_ONLY_POST_ROUTES.size).toBe(0);
+  it('declares exactly the book_check validation route as a read-only POST route (D-04)', () => {
+    expect([...READ_ONLY_POST_ROUTES]).toEqual(['/book_check/{location_id}']);
+    expect(READ_ONLY_POST_ROUTES.has(BOOKING_ROUTES.check.route)).toBe(true);
+  });
+
+  it('registers exactly the six Phase 2 tools, in booking-flow order', () => {
+    expect(productionTools.map((tool) => tool.name)).toEqual([
+      'business_get',
+      'business_list_services',
+      'business_list_team_members',
+      'business_list_dates',
+      'business_list_time_slots',
+      'book_check',
+    ]);
+  });
+
+  it('declares only BOOKING_ROUTES entries as upstream calls', () => {
+    const routes = Object.values(BOOKING_ROUTES);
+    for (const tool of productionTools) {
+      expect(tool.meta.upstream.length).toBeGreaterThan(0);
+      for (const call of tool.meta.upstream) {
+        expect(routes).toContainEqual(call);
+      }
+    }
+  });
+
+  it('reports nothing for the production registry alone', () => {
+    expect(checkRegistry(productionTools, { production: true })).toEqual([]);
   });
 });
 
