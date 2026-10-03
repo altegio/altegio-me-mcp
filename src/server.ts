@@ -8,7 +8,7 @@ import {
   type Config,
 } from './config/schema.js';
 import { createLogger } from './observability/logger.js';
-import { scrubSecrets } from './observability/redact.js';
+import { MIN_SECRET_LENGTH, scrubSecrets } from './observability/redact.js';
 import { productionTools } from './tools/registry.js';
 import { PACKAGE_NAME, PACKAGE_VERSION } from './util/package-metadata.js';
 
@@ -42,6 +42,15 @@ function main(): void {
   const config = loadConfigOrExit();
   const logger = createLogger({ level: config.LOG_LEVEL });
   const secrets = [config.ALTEGIO_API_TOKEN];
+
+  // The token rule stays as in Altegio.Pro MCP (any non-empty string), so a
+  // token too short to scrub is reported here by name, never by value (WR-04).
+  if (config.ALTEGIO_API_TOKEN.length < MIN_SECRET_LENGTH) {
+    logger.warn(
+      { event: 'config_warning', setting: 'ALTEGIO_API_TOKEN' },
+      'partner token is shorter than the secret scrubber minimum, so it cannot be redacted from output'
+    );
+  }
 
   const reportFatal = (error: unknown): void => {
     logger.fatal(
