@@ -13,6 +13,9 @@ import {
 } from '../untrusted.js';
 
 const REMOVED = '[markup removed]';
+// The sanitiser cleans at most this many UTF-16 units of one value (a bound on
+// the work its unbounded inline patterns can do).
+const CLEAN_INPUT_MAX_UNITS = 20_000;
 // Built from code points so this file holds no raw invisible character.
 const ZWSP = String.fromCodePoint(0x200b);
 const RLM = String.fromCodePoint(0x200f);
@@ -235,6 +238,30 @@ describe('sanitizeUntrusted: length cap in code points', () => {
   it('counts code points, not UTF-16 units', () => {
     const text = '💇'.repeat(500);
     expect(sanitizeUntrusted(text)).toBe(text);
+  });
+
+  it('bounds the work on a hostile value that opens many tags and closes none', () => {
+    const hostile = '<system '.repeat(125_000);
+    const started = performance.now();
+    const out = sanitizeUntrusted(hostile) ?? '';
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(out.endsWith('…')).toBe(true);
+    expect(Array.from(out)).toHaveLength(UNTRUSTED_FIELD_MAX_CHARS + 1);
+  });
+
+  it('marks a value cut at the input bound even when the cleaned text is short', () => {
+    const out = sanitizeUntrusted(
+      `${' '.repeat(CLEAN_INPUT_MAX_UNITS - 2)}ab${'c'.repeat(50)}`
+    );
+    expect(out).toBe('ab…');
+  });
+
+  it('never splits a surrogate pair at the input bound', () => {
+    const emoji = '💇';
+    const out = sanitizeUntrusted(
+      `${' '.repeat(CLEAN_INPUT_MAX_UNITS - 9)}ab${emoji.repeat(10)}`
+    );
+    expect(out).toBe(`ab${emoji.repeat(3)}…`);
   });
 
   it('honors a custom cap', () => {
