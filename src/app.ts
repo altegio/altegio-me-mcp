@@ -2,6 +2,7 @@ import express, {
   type Express,
   type NextFunction,
   type Request,
+  type RequestHandler,
   type Response,
 } from 'express';
 import type { Logger } from 'pino';
@@ -40,6 +41,29 @@ function errorTypeOf(err: unknown): string | null {
   return null;
 }
 
+const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set([
+  'localhost',
+  '127.0.0.1',
+  '[::1]',
+]);
+
+// DNS-rebinding guard (research A7). A request without Origin comes from a
+// host calling server to server and is served; a browser request carries one.
+function isOriginAllowed(
+  origin: string,
+  allowedOrigins: readonly string[],
+  allowLoopbackOrigins: boolean
+): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (allowedOrigins.includes(parsed.origin)) return true;
+  return allowLoopbackOrigins && LOOPBACK_HOSTNAMES.has(parsed.hostname);
+}
+
 export function createApp<D>(deps: AppDeps<D>): Express {
   const app = express();
   app.disable('x-powered-by');
@@ -60,9 +84,23 @@ export function createApp<D>(deps: AppDeps<D>): Express {
     res.json({ status: 'ok', version: deps.version });
   });
 
+  // Mounted after the call log so a rejected request is still logged once.
+  const originGuard: RequestHandler = (req, res, next) => {
+    const origin = req.headers.origin;
+    if (
+      origin === undefined ||
+      isOriginAllowed(origin, deps.allowedOrigins, deps.allowLoopbackOrigins)
+    ) {
+      next();
+      return;
+    }
+    res.status(403).json(rpcError(-32000, 'Forbidden origin'));
+  };
+
   app.post(
     '/mcp',
     createCallLogMiddleware(deps.logger, toolNames),
+    originGuard,
     express.json({ limit: MCP_BODY_LIMIT }),
     mcpHandler
   );
