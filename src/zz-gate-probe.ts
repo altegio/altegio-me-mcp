@@ -1,1 +1,1 @@
-export const probeValue: any = 1;
+export const probeValue: number = 'not a number';
