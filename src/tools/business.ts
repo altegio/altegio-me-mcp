@@ -82,6 +82,29 @@ const businessCardSchema = z.strictObject({
 
 type BusinessCardOutput = z.infer<typeof businessCardSchema>;
 
+/** Cap on the business name, in code points; other text fields use the default. */
+const NAME_MAX_CHARS = 200;
+
+/**
+ * A booking-form address we may hand to a client: an https URL that parses
+ * and needed no cleaning. Anything else is dropped (T-02-38).
+ */
+function httpsUrl(value: string | null): string | null {
+  if (value === null) return null;
+  const text = sanitizeUntrusted(value);
+  if (text === null || text !== value) return null;
+  try {
+    return new URL(text).protocol === 'https:' ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderPhoneConfirmation(required: boolean | null): string {
+  if (required === null) return 'unknown';
+  return required ? 'required' : 'not required';
+}
+
 function renderOffset(hours: number | null): string {
   if (hours === null) return 'unknown';
   return `${hours >= 0 ? '+' : ''}${hours} hours`;
@@ -92,7 +115,8 @@ function renderCard(out: BusinessCardOutput): string {
   const defaultForm = booking.booking_forms.find((form) => form.is_default);
   const summary = [
     `Business card for location ${out.location_id}.`,
-    `Online booking: ${booking.enabled ? 'enabled' : 'not enabled'}.`,
+    `Online booking: ${booking.enabled ? 'enabled' : 'not available'}.`,
+    `Phone confirmation: ${renderPhoneConfirmation(booking.phone_confirmation)}.`,
     `UTC offset: ${renderOffset(out.time_zone.utc_offset_hours)}.`,
     `Next free slot: ${out.next_free_slot ?? 'not available from the booking service'}.`,
     `Booking forms: ${booking.booking_forms.length}${defaultForm === undefined ? '' : `, default form ${defaultForm.id}`}.`,
@@ -146,7 +170,7 @@ export const businessGet = defineTool<
       throw toToolError(error);
     }
     const forms = card.bookingForms.flatMap((form) => {
-      const url = sanitizeUntrusted(form.url);
+      const url = httpsUrl(form.url);
       return url === null
         ? []
         : [
@@ -158,7 +182,13 @@ export const businessGet = defineTool<
             },
           ];
     });
-    const formUrl = sanitizeUntrusted(card.bookingFormUrl);
+    // The client's precedence (default form, default_bookform_url, first
+    // form), restricted to https addresses.
+    const formUrl =
+      forms.find((form) => form.is_default)?.url ??
+      httpsUrl(card.bookingFormUrl) ??
+      forms[0]?.url ??
+      null;
     const nextSlot =
       card.nextFreeSlot !== null &&
       SLOT_DATETIME_PATTERN.test(card.nextFreeSlot)
@@ -166,7 +196,7 @@ export const businessGet = defineTool<
         : null;
     return {
       location_id: card.locationId,
-      name: sanitizeUntrusted(card.name),
+      name: sanitizeUntrusted(card.name, { maxChars: NAME_MAX_CHARS }),
       category: sanitizeUntrusted(card.category),
       address: sanitizeUntrusted(card.address),
       city: sanitizeUntrusted(card.city),

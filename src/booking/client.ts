@@ -79,15 +79,6 @@ function truthy(value: boolean | number | null | undefined): boolean {
   return value === true || (typeof value === 'number' && value !== 0);
 }
 
-function offsetHours(value: number | string | null | undefined): number | null {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-  if (typeof value === 'string' && value.trim() !== '') {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-}
-
 function toCard(data: CompanyData): BusinessCard {
   const bookingForms: BookingForm[] = [];
   for (const form of data.bookforms ?? []) {
@@ -116,7 +107,7 @@ function toCard(data: CompanyData): BusinessCard {
     phone: nonEmpty(data.phone),
     website: nonEmpty(data.site),
     timeZoneName: nonEmpty(data.timezone_name),
-    utcOffsetHours: offsetHours(data.timezone),
+    utcOffsetHours: data.timezone ?? null,
     currency: nonEmpty(data.currency_short_title),
     widgetActive: truthy(data.active),
     phoneConfirmation:
