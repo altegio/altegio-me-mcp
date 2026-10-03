@@ -29,7 +29,7 @@ function rules(violations: readonly Violation[]): RuleId[] {
 // A compliant spec with one field replaced; the list-tool meta is swapped for
 // a single-result meta so the R11 pagination check does not interfere.
 function specWith(overrides: Record<string, unknown>): ToolSpec {
-  return { ...compliantListTool.spec, ...overrides } as unknown as ToolSpec;
+  return { ...compliantListTool.spec, ...overrides };
 }
 
 function inputWith(properties: Record<string, unknown>): ToolSpec {
