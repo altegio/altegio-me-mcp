@@ -1,7 +1,9 @@
 {
   "default": {
     "status": 200,
-    "headers": { "content-type": "application/json" },
+    "headers": {
+      "content-type": "application/json"
+    },
     "body": {
       "success": true,
       "data": {
@@ -28,7 +30,9 @@
         "show_any_master": true,
         "business_type_id": 1,
         "business_group_id": 1,
-        "payment_policy": { "type": "forbidden" },
+        "payment_policy": {
+          "type": "forbidden"
+        },
         "active_staff_count": 3,
         "next_slot": "",
         "bookforms": [
@@ -43,5 +47,187 @@
       },
       "meta": []
     }
+  },
+  "unauthorized": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "No authorization data specified"
+      }
+    }
+  },
+  "forbidden": {
+    "status": 403,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "Access denied"
+      }
+    }
+  },
+  "bad_request": {
+    "status": 400,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "Invalid parameters"
+      }
+    }
+  },
+  "not_found": {
+    "status": 404,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "Company not found"
+      }
+    }
+  },
+  "rejected": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The selected time is not available",
+        "errors": [
+          {
+            "code": 433,
+            "message": "Time not available"
+          },
+          {
+            "code": 436,
+            "message": "No team members available"
+          },
+          {
+            "code": "x",
+            "message": "not a number"
+          }
+        ]
+      }
+    }
+  },
+  "rate_limited": {
+    "status": 429,
+    "headers": {
+      "content-type": "application/json",
+      "x-rate-limit-policy": "200;w=60",
+      "x-rate-limit-reset": "7"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "Too many requests"
+      }
+    }
+  },
+  "server_error": {
+    "status": 500,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "Internal error"
+      }
+    }
+  },
+  "token_echo": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "Invalid partner token partner-token-0123456789abcdef supplied"
+      }
+    }
+  },
+  "html": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/html"
+    },
+    "body": "<!DOCTYPE html><html><body>Maintenance</body></html>"
+  },
+  "no_id": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": {
+        "title": "Demo Beauty Studio",
+        "public_title": "Demo Beauty Studio",
+        "short_descr": "Beauty salon",
+        "address": "12 Example Street",
+        "city": "Limassol",
+        "country": "Cyprus",
+        "timezone": 3,
+        "timezone_name": "Asia/Nicosia",
+        "phone": "",
+        "phones": [],
+        "email": "",
+        "site": "https://demo-beauty.example",
+        "social": [],
+        "coordinate_lat": 34.6786,
+        "coordinate_lon": 33.0413,
+        "description": "<p>Welcome to our studio.</p>",
+        "active": 1,
+        "phone_confirmation": true,
+        "currency_short_title": "EUR",
+        "show_any_master": true,
+        "business_type_id": 1,
+        "business_group_id": 1,
+        "payment_policy": {
+          "type": "forbidden"
+        },
+        "active_staff_count": 3,
+        "next_slot": "",
+        "bookforms": [
+          {
+            "id": 1463903,
+            "title": "Online booking",
+            "is_default": 1,
+            "url": "https://n1463903.alteg.io/"
+          }
+        ],
+        "default_bookform_url": "https://n1463903.alteg.io/"
+      },
+      "meta": []
+    }
+  },
+  "empty": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": ""
   }
 }
