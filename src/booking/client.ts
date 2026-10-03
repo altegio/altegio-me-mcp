@@ -8,8 +8,10 @@ import {
 } from './http.js';
 import {
   companyDataSchema,
+  datesDataSchema,
   servicesDataSchema,
   teamMembersDataSchema,
+  timeSlotsDataSchema,
   type CompanyData,
   type ServicesData,
   type TeamMembersData,
@@ -17,8 +19,9 @@ import {
 
 // Typed client of the public Altegio booking API (D-01). The route table is
 // the whole surface: six read routes, and never the write route or the
-// sign-in route. Every path is built from integers only, so no model-supplied
-// string reaches a URL path.
+// sign-in route. Every path is built from integers and from dates checked as
+// YYYY-MM-DD calendar dates, so no free-form model-supplied string reaches a
+// URL path.
 
 /** The only upstream routes v1 calls (D-01). Tools declare these in `upstream`. */
 export const BOOKING_ROUTES = Object.freeze({
@@ -159,6 +162,44 @@ function checkedServiceIds(
   const ids = serviceIds ?? [];
   for (const id of ids) assertPositiveId(id, 'service id');
   return ids;
+}
+
+/** 0 means any team member; anything else must be a positive safe integer. */
+function assertTeamMemberOrAny(value: number): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError('team member id must be a safe integer of at least 0');
+  }
+}
+
+const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * A YYYY-MM-DD date that exists in the calendar. It may become a URL path
+ * segment, so nothing else passes (T-02-25).
+ */
+function checkedDate(value: string, label: string): string {
+  const match = DATE_PATTERN.exec(value);
+  const [, year, month, day] = match ?? [];
+  if (year !== undefined && month !== undefined && day !== undefined) {
+    const date = new Date(
+      Date.UTC(Number(year), Number(month) - 1, Number(day))
+    );
+    if (
+      date.getUTCFullYear() === Number(year) &&
+      date.getUTCMonth() === Number(month) - 1 &&
+      date.getUTCDate() === Number(day)
+    ) {
+      return value;
+    }
+  }
+  throw new TypeError(`${label} must be a calendar date in YYYY-MM-DD form`);
+}
+
+function optionalDate(
+  value: string | undefined,
+  label: string
+): string | undefined {
+  return value === undefined ? undefined : checkedDate(value, label);
 }
 
 /** A datetime filter must be a slot datetime as book_times returns it. */
@@ -369,17 +410,73 @@ export class BookingClient {
     return data.map(toTeamMember);
   }
 
-  dates(_locationId: number, _filter: DatesFilter = {}): Promise<string[]> {
-    return Promise.reject(new Error('not implemented'));
+  /**
+   * Dates with free time (DISC-04), as booking_dates lists them; sorting and
+   * de-duplication are the tool's job. Without dates the business's own
+   * booking window applies; date_to is inclusive. Team member 0 or none means
+   * any team member, so no staff_id is sent.
+   */
+  async dates(locationId: number, filter: DatesFilter = {}): Promise<string[]> {
+    assertLocationId(locationId);
+    if (filter.teamMemberId !== undefined) {
+      assertTeamMemberOrAny(filter.teamMemberId);
+    }
+    const dateFrom = optionalDate(filter.dateFrom, 'date_from');
+    const dateTo = optionalDate(filter.dateTo, 'date_to');
+    const serviceIds = checkedServiceIds(filter.serviceIds);
+    const staffId =
+      filter.teamMemberId !== undefined && filter.teamMemberId > 0
+        ? filter.teamMemberId
+        : undefined;
+    const { route, method } = BOOKING_ROUTES.dates;
+    const data = await this.read(
+      {
+        method,
+        route,
+        path: `/book_dates/${locationId}`,
+        // Key order on the wire: staff_id, date_from, date_to, then service_ids[].
+        query: { staff_id: staffId, date_from: dateFrom, date_to: dateTo },
+        serviceIds,
+      },
+      datesDataSchema
+    );
+    return data.booking_dates;
   }
 
-  timeSlots(
-    _locationId: number,
-    _teamMemberId: number,
-    _date: string,
-    _serviceIds: readonly number[]
+  /**
+   * Free slots on one date (DISC-05), in upstream order. Team member 0 means
+   * any team member and is sent as the path segment 0. Each slot keeps the
+   * datetime string exactly as the API wrote it.
+   */
+  async timeSlots(
+    locationId: number,
+    teamMemberId: number,
+    date: string,
+    serviceIds: readonly number[]
   ): Promise<TimeSlot[]> {
-    return Promise.reject(new Error('not implemented'));
+    assertLocationId(locationId);
+    assertTeamMemberOrAny(teamMemberId);
+    const day = checkedDate(date, 'date');
+    const ids = checkedServiceIds(serviceIds);
+    if (ids.length === 0) {
+      throw new TypeError('at least one service id is required');
+    }
+    const { route, method } = BOOKING_ROUTES.timeSlots;
+    const data = await this.read(
+      {
+        method,
+        route,
+        path: `/book_times/${locationId}/${teamMemberId}/${day}`,
+        serviceIds: ids,
+      },
+      timeSlotsDataSchema
+    );
+    return data.map((slot) => ({
+      time: slot.time,
+      datetime: slot.datetime,
+      durationSeconds: positiveOrNull(slot.seance_length),
+      totalSeconds: positiveOrNull(slot.sum_length),
+    }));
   }
 
   /** One call, its data parsed by `schema`; a parse failure is contract_drift. */

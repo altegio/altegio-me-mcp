@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseSlotDatetime } from './deep-link.js';
 
 // Response schemas of the Altegio booking routes, one per route, with the
 // real backend keys. Loose on purpose: unknown keys pass the parse, and the
@@ -137,3 +138,42 @@ const bookStaffSchema = z.looseObject({
 export const teamMembersDataSchema = z.array(bookStaffSchema);
 
 export type TeamMembersData = z.infer<typeof teamMembersDataSchema>;
+
+/** A calendar date as the booking routes write it, Y-m-d. */
+const bookingDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+/**
+ * `data` of GET /book_dates/{location_id}. Only `booking_dates` is read. The
+ * month-keyed `booking_days` and the working days stay untyped, because PHP
+ * sends an empty map as [] and the client never uses them.
+ */
+export const datesDataSchema = z.looseObject({
+  booking_dates: z.array(bookingDate),
+  booking_days: z.unknown().optional(),
+  working_dates: z.unknown().optional(),
+  working_days: z.unknown().optional(),
+});
+
+export type DatesData = z.infer<typeof datesDataSchema>;
+
+const bookTimeSchema = z.looseObject({
+  /** G:i, for example 9:30; kept, never used for display. */
+  time: z.string(),
+  /**
+   * ISO 8601 with offset (PHP `c`), for example 2026-10-05T09:30:00+03:00.
+   * It must split into in-range parts, because tools display its digits and
+   * book_check and the deep link take it unchanged.
+   */
+  datetime: z.string().refine((value) => parseSlotDatetime(value) !== null, {
+    message: 'datetime must be an ISO 8601 slot datetime',
+  }),
+  /** Seconds. */
+  seance_length: numeric.nullish(),
+  /** Seconds, including any extra time after the service. */
+  sum_length: numeric.nullish(),
+});
+
+/** `data` of GET /book_times/{location_id}/{team_member_id}/{date}: an array of free slots. */
+export const timeSlotsDataSchema = z.array(bookTimeSchema);
+
+export type TimeSlotsData = z.infer<typeof timeSlotsDataSchema>;
