@@ -1035,3 +1035,209 @@ describe('time slots request (book_times)', () => {
     }
   );
 });
+
+const CHECK_PATH = `/book_check/${LOCATION}`;
+
+function checkClient(reply: FakeReply): {
+  client: BookingClient;
+  upstream: ReturnType<typeof fakeFetch>;
+} {
+  const upstream = fakeFetch([{ method: 'POST', path: CHECK_PATH, reply }]);
+  const client = new BookingClient({
+    base: BASE,
+    token: TOKEN,
+    fetch: upstream.fetch,
+  });
+  return { client, upstream };
+}
+
+describe('check request (book_check, the validation route)', () => {
+  it('sends one POST with exactly one appointment carrying all four keys', async () => {
+    const { client, upstream } = checkClient(
+      loadFixture('book_check', 'created_empty')
+    );
+    await client.check(LOCATION, {
+      serviceIds: [10303530, 10303531],
+      teamMemberId: 0,
+      datetime: SLOT,
+    });
+    expect(upstream.unmatched).toEqual([]);
+    expect(upstream.calls).toHaveLength(1);
+    const call = upstream.calls[0];
+    expect(call?.method).toBe('POST');
+    expect(call?.url.toString()).toBe(`${BASE}${CHECK_PATH}`);
+    expect(call?.url.search).toBe('');
+    expect(call?.headers.get('content-type')).toBe('application/json');
+    expect(call?.headers.get('accept')).toBe(ALTEGIO_ACCEPT);
+    expect(call?.headers.get('authorization')).toBe(`Bearer ${TOKEN}`);
+    expect(call?.body).toBe(
+      '{"appointments":[{"id":1,"services":[10303530,10303531],"staff_id":0,"datetime":"2026-10-05T14:00:00+03:00"}]}'
+    );
+  });
+
+  it('sends a named team member as staff_id and the services in the given order', async () => {
+    const { client, upstream } = checkClient(
+      loadFixture('book_check', 'created_empty')
+    );
+    await client.check(LOCATION, {
+      serviceIds: [10303531, 10303530],
+      teamMemberId: 2098145,
+      datetime: SLOT,
+    });
+    expect(JSON.parse(upstream.calls[0]?.body ?? 'null')).toEqual({
+      appointments: [
+        {
+          id: 1,
+          services: [10303531, 10303530],
+          staff_id: 2098145,
+          datetime: SLOT,
+        },
+      ],
+    });
+  });
+
+  it("sends the datetime '2026-10-05T14:00:00+0300' byte-identical (edge BOOK-01 encoding)", async () => {
+    const { client, upstream } = checkClient(
+      loadFixture('book_check', 'created_empty')
+    );
+    await client.check(LOCATION, {
+      serviceIds: [10303530],
+      teamMemberId: 0,
+      datetime: '2026-10-05T14:00:00+0300',
+    });
+    expect(upstream.calls[0]?.body).toContain(
+      '"datetime":"2026-10-05T14:00:00+0300"'
+    );
+  });
+
+  it('resolves on a 201 with an empty body (edge BOOK-01 empty)', async () => {
+    const { client } = checkClient(loadFixture('book_check', 'created_empty'));
+    await expect(
+      client.check(LOCATION, {
+        serviceIds: [10303530],
+        teamMemberId: 0,
+        datetime: SLOT,
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it('resolves on a 201 with a JSON envelope', async () => {
+    const { client } = checkClient(loadFixture('book_check', 'created_json'));
+    await expect(
+      client.check(LOCATION, {
+        serviceIds: [10303530],
+        teamMemberId: 0,
+        datetime: SLOT,
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it('rejects a 200 as contract_drift: only 201 means bookable', async () => {
+    const { client } = checkClient(loadFixture('book_check', 'ok_200'));
+    const error = await upstreamError(
+      client.check(LOCATION, {
+        serviceIds: [10303530],
+        teamMemberId: 0,
+        datetime: SLOT,
+      })
+    );
+    expect(error.kind).toBe('contract_drift');
+    expect(error.status).toBe(200);
+    expect(error.route).toBe(BOOKING_ROUTES.check.route);
+  });
+
+  it.each<[string, number[]]>([
+    ['taken_433', [433]],
+    ['no_member_436', [436]],
+    ['not_enough_time_437', [437]],
+    ['service_438', [438]],
+    ['taken_and_service_433_438', [433, 438]],
+  ])(
+    'rejects the 422 %s as rejected with its codes',
+    async (scenario, codes) => {
+      const { client } = checkClient(loadFixture('book_check', scenario));
+      const error = await upstreamError(
+        client.check(LOCATION, {
+          serviceIds: [10303530],
+          teamMemberId: 0,
+          datetime: SLOT,
+        })
+      );
+      expect(error.kind).toBe('rejected');
+      expect(error.status).toBe(422);
+      expect(error.codes).toEqual(codes);
+      expect(error.route).toBe(BOOKING_ROUTES.check.route);
+    }
+  );
+
+  it('rejects a 404 as not_found', async () => {
+    const { client } = checkClient(loadFixture('book_check', 'not_found_404'));
+    const error = await upstreamError(
+      client.check(LOCATION, {
+        serviceIds: [10303530],
+        teamMemberId: 0,
+        datetime: SLOT,
+      })
+    );
+    expect(error.kind).toBe('not_found');
+  });
+
+  it('rejects a 503 as unavailable', async () => {
+    const { client } = checkClient(
+      loadFixture('book_check', 'unavailable_503')
+    );
+    const error = await upstreamError(
+      client.check(LOCATION, {
+        serviceIds: [10303530],
+        teamMemberId: 0,
+        datetime: SLOT,
+      })
+    );
+    expect(error.kind).toBe('unavailable');
+  });
+
+  it('resolves after one retry when a 429 with a short wait comes first', async () => {
+    const replies: FixtureResponse[] = [
+      {
+        status: 429,
+        headers: { 'x-rate-limit-reset': '1' },
+        body: { success: false, data: null, meta: { message: 'Too many' } },
+      },
+      loadFixture('book_check', 'created_empty'),
+    ];
+    const { client, upstream } = checkClient(
+      () => replies.shift() ?? { status: 599, body: '' }
+    );
+    await expect(
+      client.check(LOCATION, {
+        serviceIds: [10303530],
+        teamMemberId: 0,
+        datetime: SLOT,
+      })
+    ).resolves.toBeUndefined();
+    expect(upstream.calls).toHaveLength(2);
+    expect(upstream.calls[1]?.body).toBe(upstream.calls[0]?.body);
+  });
+
+  it.each<[string, number, number[], number, string]>([
+    ['an empty service list', LOCATION, [], 0, SLOT],
+    ['service id 1.5', LOCATION, [1.5], 0, SLOT],
+    ['service id 0', LOCATION, [0], 0, SLOT],
+    ['a negative team member id', LOCATION, [1], -1, SLOT],
+    ['team member id 1.5', LOCATION, [1], 1.5, SLOT],
+    ['location id 0', 0, [1], 0, SLOT],
+    ["the datetime '2026-10-05 14:00'", LOCATION, [1], 0, '2026-10-05 14:00'],
+    ['an empty datetime', LOCATION, [1], 0, ''],
+  ])(
+    'rejects %s with a TypeError before any request',
+    async (_case, location, serviceIds, teamMemberId, datetime) => {
+      const { client, upstream } = checkClient(
+        loadFixture('book_check', 'created_empty')
+      );
+      await expect(
+        client.check(location, { serviceIds, teamMemberId, datetime })
+      ).rejects.toThrow(TypeError);
+      expect(upstream.calls).toHaveLength(0);
+    }
+  );
+});

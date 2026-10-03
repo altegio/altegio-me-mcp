@@ -135,6 +135,16 @@ export interface DatesFilter {
   dateTo?: string;
 }
 
+/** One appointment to check through the validation route. */
+export interface CheckSelection {
+  /** In the client's order; at least one. */
+  serviceIds: readonly number[];
+  /** 0 = any team member. */
+  teamMemberId: number;
+  /** A slot datetime exactly as book_times returned it. */
+  datetime: string;
+}
+
 /** One free slot as book_times returns it. */
 export interface TimeSlot {
   /** Upstream `time` (G:i, for example 9:30); never used for display. */
@@ -477,6 +487,16 @@ export class BookingClient {
       durationSeconds: positiveOrNull(slot.seance_length),
       totalSeconds: positiveOrNull(slot.sum_length),
     }));
+  }
+
+  /** Stub: replaced in the GREEN step. */
+  check(locationId: number, selection: CheckSelection): Promise<void> {
+    void selection;
+    return Promise.reject(
+      new UpstreamError('contract_drift', BOOKING_ROUTES.check.route, {
+        status: locationId,
+      })
+    );
   }
 
   /** One call, its data parsed by `schema`; a parse failure is contract_drift. */
