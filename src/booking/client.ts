@@ -122,6 +122,26 @@ export interface TeamMembersFilter {
   datetime?: string;
 }
 
+export interface DatesFilter {
+  serviceIds?: readonly number[];
+  /** 0 or absent = any team member. */
+  teamMemberId?: number;
+  /** YYYY-MM-DD; with dateTo it overrides the business's booking window. */
+  dateFrom?: string;
+  /** YYYY-MM-DD, inclusive. */
+  dateTo?: string;
+}
+
+/** One free slot as book_times returns it. */
+export interface TimeSlot {
+  /** Upstream `time` (G:i, for example 9:30); never used for display. */
+  time: string;
+  /** The slot datetime exactly as the API wrote it. */
+  datetime: string;
+  durationSeconds: number | null;
+  totalSeconds: number | null;
+}
+
 function assertPositiveId(value: number, label: string): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new TypeError(`${label} must be a positive safe integer`);
@@ -347,6 +367,19 @@ export class BookingClient {
       teamMembersDataSchema
     );
     return data.map(toTeamMember);
+  }
+
+  dates(_locationId: number, _filter: DatesFilter = {}): Promise<string[]> {
+    return Promise.reject(new Error('not implemented'));
+  }
+
+  timeSlots(
+    _locationId: number,
+    _teamMemberId: number,
+    _date: string,
+    _serviceIds: readonly number[]
+  ): Promise<TimeSlot[]> {
+    return Promise.reject(new Error('not implemented'));
   }
 
   /** One call, its data parsed by `schema`; a parse failure is contract_drift. */

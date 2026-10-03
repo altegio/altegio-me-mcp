@@ -748,3 +748,290 @@ describe('team members request (book_staff)', () => {
     }
   );
 });
+
+// GET /book_dates and GET /book_times (DISC-04, DISC-05, BAPI-03). The
+// fixtures follow the backend facts in 02-RESEARCH (booking_days keyed by
+// month or a PHP [], time as G:i, datetime as ISO 8601 with a colon offset);
+// plan 02-09 replaces them with live recordings.
+
+const DATES_PATH = `/book_dates/${LOCATION}`;
+const DATE = '2026-10-05';
+const ANY_MEMBER_TIMES_PATH = `/book_times/${LOCATION}/0/${DATE}`;
+const NAMED_MEMBER_TIMES_PATH = `/book_times/${LOCATION}/2098145/${DATE}`;
+
+function datesClient(scenario: string) {
+  return clientWith([
+    { path: DATES_PATH, reply: loadFixture('book_dates', scenario) },
+  ]);
+}
+
+function timesClient(scenario: string, path = ANY_MEMBER_TIMES_PATH) {
+  return clientWith([{ path, reply: loadFixture('book_times', scenario) }]);
+}
+
+describe('dates request (book_dates)', () => {
+  it('sends one GET /book_dates/{location_id} without a query when no filter is given', async () => {
+    const { client, upstream } = datesClient('default');
+    await client.dates(LOCATION);
+    expect(upstream.unmatched).toEqual([]);
+    expect(upstream.calls).toHaveLength(1);
+    const call = upstream.calls[0];
+    expect(call?.method).toBe('GET');
+    expect(call?.url.toString()).toBe(`${BASE}${DATES_PATH}`);
+    expect(call?.headers.get('accept')).toBe(ALTEGIO_ACCEPT);
+    expect(call?.body).toBeNull();
+  });
+
+  it('sends staff_id, date_from, date_to, then one service_ids[] per id (edge BAPI-03 ordering)', async () => {
+    const { client, upstream } = datesClient('default');
+    await client.dates(LOCATION, {
+      serviceIds: [10303530, 10303531],
+      teamMemberId: 2098145,
+      dateFrom: '2026-10-05',
+      dateTo: '2026-10-19',
+    });
+    const url = upstream.calls[0]?.url;
+    expect(url?.pathname).toBe(`/api/v1${DATES_PATH}`);
+    expect([...(url?.searchParams.keys() ?? [])]).toEqual([
+      'staff_id',
+      'date_from',
+      'date_to',
+      'service_ids[]',
+      'service_ids[]',
+    ]);
+    expect(url?.searchParams.get('staff_id')).toBe('2098145');
+    expect(url?.searchParams.get('date_from')).toBe('2026-10-05');
+    expect(url?.searchParams.get('date_to')).toBe('2026-10-19');
+    expect(url?.searchParams.getAll('service_ids[]')).toEqual([
+      '10303530',
+      '10303531',
+    ]);
+  });
+
+  it('sends no staff_id for any team member (team member id 0)', async () => {
+    const { client, upstream } = datesClient('default');
+    await client.dates(LOCATION, { teamMemberId: 0, serviceIds: [10303530] });
+    const url = upstream.calls[0]?.url;
+    expect(url?.searchParams.has('staff_id')).toBe(false);
+    expect([...(url?.searchParams.keys() ?? [])]).toEqual(['service_ids[]']);
+  });
+
+  it('returns booking_dates as given, never the month-keyed booking_days', async () => {
+    const { client } = datesClient('default');
+    expect(await client.dates(LOCATION)).toEqual([
+      '2026-10-19',
+      '2026-10-05',
+      '2026-10-06',
+      '2026-10-05',
+    ]);
+  });
+
+  it('parses the empty scenario, where booking_days arrives as a PHP []', async () => {
+    const { client } = datesClient('empty');
+    expect(await client.dates(LOCATION)).toEqual([]);
+  });
+
+  it('maps the 422 for a past date to rejected', async () => {
+    const { client } = datesClient('past_date');
+    const error = await upstreamError(
+      client.dates(LOCATION, { dateFrom: '2020-01-01', dateTo: '2020-01-02' })
+    );
+    expect(error.kind).toBe('rejected');
+    expect(error.status).toBe(422);
+    expect(error.route).toBe(BOOKING_ROUTES.dates.route);
+  });
+
+  it('maps a booking date that is not YYYY-MM-DD to contract_drift', async () => {
+    const { client } = clientWith([
+      {
+        path: DATES_PATH,
+        reply: {
+          status: 200,
+          body: {
+            success: true,
+            data: { booking_dates: ['5.10.2026'], booking_days: [] },
+            meta: [],
+          },
+        },
+      },
+    ]);
+    const error = await upstreamError(client.dates(LOCATION));
+    expect(error.kind).toBe('contract_drift');
+    expect(error.route).toBe(BOOKING_ROUTES.dates.route);
+  });
+
+  it.each<[string, number, Parameters<BookingClient['dates']>[1]]>([
+    ['location id 0', 0, undefined],
+    ['team member id -1', LOCATION, { teamMemberId: -1 }],
+    ['team member id 1.5', LOCATION, { teamMemberId: 1.5 }],
+    ['service id 0', LOCATION, { serviceIds: [0] }],
+    ['date_from 2026-1-5', LOCATION, { dateFrom: '2026-1-5' }],
+    ['date_to 2026-02-30', LOCATION, { dateTo: '2026-02-30' }],
+    ['date_from with a path suffix', LOCATION, { dateFrom: '2026-10-05/..' }],
+  ])(
+    'rejects %s with a TypeError before any request',
+    async (_case, location, filter) => {
+      const { client, upstream } = datesClient('default');
+      await expect(client.dates(location, filter)).rejects.toThrow(TypeError);
+      expect(upstream.calls).toHaveLength(0);
+    }
+  );
+});
+
+describe('time slots request (book_times)', () => {
+  it('sends GET /book_times/{location_id}/0/{date} for any team member, with service_ids[]', async () => {
+    const { client, upstream } = timesClient('any_member');
+    await client.timeSlots(LOCATION, 0, DATE, [10303530]);
+    expect(upstream.unmatched).toEqual([]);
+    expect(upstream.calls).toHaveLength(1);
+    const call = upstream.calls[0];
+    expect(call?.method).toBe('GET');
+    expect(call?.url.toString()).toBe(
+      `${BASE}${ANY_MEMBER_TIMES_PATH}?service_ids%5B%5D=10303530`
+    );
+    expect(call?.url.pathname).toBe(`/api/v1/book_times/722227/0/2026-10-05`);
+    expect(call?.url.searchParams.getAll('service_ids[]')).toEqual([
+      '10303530',
+    ]);
+    expect(call?.body).toBeNull();
+  });
+
+  it('puts a named team member in the path', async () => {
+    const { client, upstream } = timesClient(
+      'named_member',
+      NAMED_MEMBER_TIMES_PATH
+    );
+    await client.timeSlots(LOCATION, 2098145, DATE, [10303530, 10303531]);
+    expect(upstream.unmatched).toEqual([]);
+    expect(upstream.calls[0]?.url.pathname).toBe(
+      `/api/v1${NAMED_MEMBER_TIMES_PATH}`
+    );
+    expect(upstream.calls[0]?.url.searchParams.getAll('service_ids[]')).toEqual(
+      ['10303530', '10303531']
+    );
+  });
+
+  it('keeps time and datetime exactly as the API wrote them, in upstream order', async () => {
+    const { client } = timesClient('any_member');
+    expect(await client.timeSlots(LOCATION, 0, DATE, [10303530])).toEqual([
+      {
+        time: '14:00',
+        datetime: '2026-10-05T14:00:00+03:00',
+        durationSeconds: 2700,
+        totalSeconds: 2700,
+      },
+      {
+        time: '9:30',
+        datetime: '2026-10-05T09:30:00+03:00',
+        durationSeconds: 3600,
+        totalSeconds: 3600,
+      },
+      {
+        time: '10:01',
+        datetime: '2026-10-05T10:01:00+03:00',
+        durationSeconds: 3600,
+        totalSeconds: 3630,
+      },
+      {
+        time: '10:00',
+        datetime: '2026-10-05T10:00:00+03:00',
+        durationSeconds: 3600,
+        totalSeconds: 3600,
+      },
+      {
+        time: '9:30',
+        datetime: '2026-10-05T09:30:00+03:00',
+        durationSeconds: 3600,
+        totalSeconds: 3600,
+      },
+    ]);
+  });
+
+  it('maps a null seance_length and sum_length to null', async () => {
+    const { client } = timesClient('named_member', NAMED_MEMBER_TIMES_PATH);
+    const slots = await client.timeSlots(LOCATION, 2098145, DATE, [10303530]);
+    expect(slots[1]).toEqual({
+      time: '16:30',
+      datetime: '2026-10-05T16:30:00+03:00',
+      durationSeconds: null,
+      totalSeconds: null,
+    });
+  });
+
+  it('parses the empty scenario to no slots', async () => {
+    const { client } = timesClient('empty');
+    expect(await client.timeSlots(LOCATION, 0, DATE, [10303530])).toEqual([]);
+  });
+
+  it("maps a slot datetime that is not ISO 8601 to contract_drift (drift: '2026-10-05 09:30')", async () => {
+    const { client } = timesClient('drift');
+    const error = await upstreamError(
+      client.timeSlots(LOCATION, 0, DATE, [10303530])
+    );
+    expect(error.kind).toBe('contract_drift');
+    expect(error.route).toBe(BOOKING_ROUTES.timeSlots.route);
+  });
+
+  it('maps a slot datetime with an hour out of range to contract_drift', async () => {
+    const { client } = clientWith([
+      {
+        path: ANY_MEMBER_TIMES_PATH,
+        reply: {
+          status: 200,
+          body: {
+            success: true,
+            data: [
+              {
+                time: '25:00',
+                seance_length: 3600,
+                sum_length: 3600,
+                datetime: '2026-10-05T25:00:00+03:00',
+              },
+            ],
+            meta: [],
+          },
+        },
+      },
+    ]);
+    const error = await upstreamError(
+      client.timeSlots(LOCATION, 0, DATE, [10303530])
+    );
+    expect(error.kind).toBe('contract_drift');
+  });
+
+  it('maps the 422 for a past date to rejected', async () => {
+    const { client } = clientWith([
+      {
+        path: `/book_times/${LOCATION}/0/2020-01-01`,
+        reply: loadFixture('book_times', 'past_date'),
+      },
+    ]);
+    const error = await upstreamError(
+      client.timeSlots(LOCATION, 0, '2020-01-01', [10303530])
+    );
+    expect(error.kind).toBe('rejected');
+    expect(error.status).toBe(422);
+    expect(error.route).toBe(BOOKING_ROUTES.timeSlots.route);
+  });
+
+  it.each<[string, number, number, string, number[]]>([
+    ['the date 2026-1-5', LOCATION, 0, '2026-1-5', [1]],
+    ['the date 2026-02-30', LOCATION, 0, '2026-02-30', [1]],
+    ['the date 2026-13-01', LOCATION, 0, '2026-13-01', [1]],
+    ['a date with a path suffix', LOCATION, 0, '2026-10-05/../x', [1]],
+    ['a negative team member id', LOCATION, -1, DATE, [1]],
+    ['team member id 1.5', LOCATION, 1.5, DATE, [1]],
+    ['location id 0', 0, 0, DATE, [1]],
+    ['an empty service list', LOCATION, 0, DATE, []],
+    ['service id 0', LOCATION, 0, DATE, [0]],
+  ])(
+    'rejects %s with a TypeError before any request',
+    async (_case, location, member, date, serviceIds) => {
+      const { client, upstream } = timesClient('any_member');
+      await expect(
+        client.timeSlots(location, member, date, serviceIds)
+      ).rejects.toThrow(TypeError);
+      expect(upstream.calls).toHaveLength(0);
+    }
+  );
+});

@@ -1,0 +1,110 @@
+{
+  "any_member": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [
+        {
+          "time": "14:00",
+          "seance_length": 2700,
+          "sum_length": 2700,
+          "datetime": "2026-10-05T14:00:00+03:00"
+        },
+        {
+          "time": "9:30",
+          "seance_length": 3600,
+          "sum_length": 3600,
+          "datetime": "2026-10-05T09:30:00+03:00"
+        },
+        {
+          "time": "10:01",
+          "seance_length": "3600",
+          "sum_length": "3630",
+          "datetime": "2026-10-05T10:01:00+03:00"
+        },
+        {
+          "time": "10:00",
+          "seance_length": 3600,
+          "sum_length": 3600,
+          "datetime": "2026-10-05T10:00:00+03:00"
+        },
+        {
+          "time": "9:30",
+          "seance_length": 3600,
+          "sum_length": 3600,
+          "datetime": "2026-10-05T09:30:00+03:00"
+        }
+      ],
+      "meta": []
+    }
+  },
+  "named_member": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [
+        {
+          "time": "11:00",
+          "seance_length": 3600,
+          "sum_length": 3600,
+          "datetime": "2026-10-05T11:00:00+03:00"
+        },
+        {
+          "time": "16:30",
+          "seance_length": null,
+          "sum_length": null,
+          "datetime": "2026-10-05T16:30:00+03:00"
+        }
+      ],
+      "meta": []
+    }
+  },
+  "empty": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [],
+      "meta": []
+    }
+  },
+  "past_date": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The date must not be in the past."
+      }
+    }
+  },
+  "drift": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [
+        {
+          "time": "9:30",
+          "seance_length": 3600,
+          "sum_length": 3600,
+          "datetime": "2026-10-05 09:30"
+        }
+      ],
+      "meta": []
+    }
+  }
+}
