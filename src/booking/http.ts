@@ -1,5 +1,11 @@
 import { scrubSecrets } from '../observability/redact.js';
 import { UpstreamError, type UpstreamErrorKind } from './errors.js';
+import {
+  DEFAULT_RETRY_AFTER_SECONDS,
+  GateSaturatedError,
+  INLINE_RETRY_MAX_SECONDS,
+  retryAfterSeconds,
+} from './gate.js';
 
 // One HTTP exchange with the Altegio API: headers, URL building, timeout,
 // envelope parsing and status mapping. Matches Altegio.Pro MCP (D-10): the
@@ -123,12 +129,20 @@ function readErrorMeta(text: string): {
   };
 }
 
+/** One finished HTTP exchange, before status mapping. */
+interface RawReply {
+  status: number;
+  headers: Headers;
+  text: string;
+}
+
 export class BookingHttp {
   private readonly base: string;
   private readonly token: string;
   private readonly fetchImpl: typeof fetch;
   private readonly gate: GateLike;
   private readonly timeoutMs: number;
+  private readonly now: () => number;
 
   constructor(options: BookingHttpOptions) {
     this.base = options.base.endsWith('/')
@@ -138,6 +152,7 @@ export class BookingHttp {
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.gate = options.gate ?? PASS_THROUGH_GATE;
     this.timeoutMs = options.timeoutMs ?? UPSTREAM_TIMEOUT_MS;
+    this.now = options.now ?? Date.now;
   }
 
   async send(call: UpstreamCallSpec): Promise<UpstreamReply> {
@@ -155,27 +170,70 @@ export class BookingHttp {
       Authorization: `Bearer ${this.token}`,
     };
     if (hasBody) headers['Content-Type'] = 'application/json';
+    const init: RequestInit = {
+      method: call.method,
+      headers,
+      body: hasBody ? JSON.stringify(call.body) : undefined,
+      // A redirect would carry the partner token to another URL; it is
+      // reported as an unexpected status instead.
+      redirect: 'manual',
+    };
 
-    let status: number;
-    let text: string;
+    let reply = await this.attempt(call.route, url, init);
+    let retryAfter: number | null = null;
+    if (reply.status === 429) {
+      retryAfter = this.pauseFor(reply.headers);
+      // At most one retry, and only for a short advised wait. The upstream
+      // did not process a rate-limited request, so sending it again is safe,
+      // the book_check POST included. The gate holds the retry until the
+      // pause ends.
+      if (retryAfter <= INLINE_RETRY_MAX_SECONDS) {
+        reply = await this.attempt(call.route, url, init);
+        if (reply.status === 429) retryAfter = this.pauseFor(reply.headers);
+      }
+    }
+
+    if (reply.status >= 200 && reply.status < 300) {
+      return {
+        status: reply.status,
+        data: parseEnvelopeData(call.route, reply.status, reply.text),
+      };
+    }
+    throw this.statusError(call.route, reply.status, reply.text, retryAfter);
+  }
+
+  /** One fetch through the gate; failures before a status become UpstreamErrors. */
+  private async attempt(
+    route: string,
+    url: URL,
+    init: RequestInit
+  ): Promise<RawReply> {
     try {
-      ({ status, text } = await this.gate.run(async () => {
+      return await this.gate.run(async () => {
         // The timeout starts when the gate admits the call, so time spent
         // waiting in the gate does not count against it.
         const response = await this.fetchImpl(url, {
-          method: call.method,
-          headers,
-          body: hasBody ? JSON.stringify(call.body) : undefined,
-          // A redirect would carry the partner token to another URL; it is
-          // reported as an unexpected status instead.
-          redirect: 'manual',
+          ...init,
           signal: AbortSignal.timeout(this.timeoutMs),
         });
-        return { status: response.status, text: await response.text() };
-      }));
+        return {
+          status: response.status,
+          headers: response.headers,
+          text: await response.text(),
+        };
+      });
     } catch (error) {
       if (error instanceof UpstreamError) throw error;
-      throw new UpstreamError('unavailable', call.route, {
+      if (error instanceof GateSaturatedError) {
+        // Nothing was sent: the gate turned the call away to keep it inside
+        // the host timeout and the shared partner budget.
+        throw new UpstreamError('rate_limited', route, {
+          status: null,
+          retryAfterSeconds: error.retryAfterSeconds,
+          cause: error,
+        });
+      }
+      throw new UpstreamError('unavailable', route, {
         cause: isTimeout(error)
           ? new Error(`Altegio API call timed out after ${this.timeoutMs} ms`, {
               cause: error,
@@ -183,25 +241,28 @@ export class BookingHttp {
           : error,
       });
     }
+  }
 
-    if (status >= 200 && status < 300) {
-      return { status, data: parseEnvelopeData(call.route, status, text) };
-    }
-    throw this.statusError(call.route, status, text);
+  /** Pauses the shared gate for the advised wait of a 429 and returns it in seconds. */
+  private pauseFor(headers: Headers): number {
+    const now = this.now();
+    const wait = retryAfterSeconds(headers, now) ?? DEFAULT_RETRY_AFTER_SECONDS;
+    this.gate.pauseUntil(now + wait * 1000);
+    return wait;
   }
 
   private statusError(
     route: string,
     status: number,
-    text: string
+    text: string,
+    retryAfter: number | null
   ): UpstreamError {
     const meta = readErrorMeta(text);
     const kind = kindOfStatus(status);
     return new UpstreamError(kind, route, {
       status,
       codes: kind === 'rejected' ? meta.codes : [],
-      // Rate-limit headers are read by the throttle, not here.
-      retryAfterSeconds: null,
+      retryAfterSeconds: kind === 'rate_limited' ? retryAfter : null,
       // Scrubbed before anything else touches it (WR-04): later sanitising
       // or truncation could otherwise split the token past the scrubber.
       upstreamMessage:

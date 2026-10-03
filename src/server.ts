@@ -2,6 +2,7 @@ import type { Server } from 'node:http';
 import type { Logger } from 'pino';
 import { createApp } from './app.js';
 import { BookingClient } from './booking/client.js';
+import { RequestGate } from './booking/gate.js';
 import {
   ConfigError,
   formatConfigError,
@@ -76,6 +77,9 @@ function main(): void {
       booking: new BookingClient({
         base: config.ALTEGIO_API_BASE,
         token: config.ALTEGIO_API_TOKEN,
+        // One gate per process, shared by every request and session: all
+        // upstream calls stay below the API limits together (BAPI-02).
+        gate: new RequestGate(),
       }),
     },
     logger,
