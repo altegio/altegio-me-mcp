@@ -69,3 +69,71 @@ export const companyDataSchema = z.looseObject({
 });
 
 export type CompanyData = z.infer<typeof companyDataSchema>;
+
+/** A JSON number, or a string holding a decimal number ("1500", "4.5"). */
+const numeric = z.union([
+  z.number(),
+  z
+    .string()
+    .trim()
+    .regex(/^-?\d+(?:\.\d+)?$/)
+    .transform(Number),
+]);
+
+const bookServiceSchema = z.looseObject({
+  id: z.number().int(),
+  title: z.string(),
+  category_id: z.number().int().nullish(),
+  /** 0 and 0 mean the business set no price. */
+  price_min: numeric.nullish(),
+  price_max: numeric.nullish(),
+  /** Seconds; null unless the request filters by a team member. */
+  seance_length: numeric.nullish(),
+  /** forbidden, allowed or required; anything else is unknown. */
+  prepaid: z.unknown(),
+  /** Absent means active. */
+  active: flag.nullish(),
+});
+
+const serviceCategorySchema = z.looseObject({
+  id: z.number().int(),
+  title: text,
+});
+
+/**
+ * `data` of GET /book_services/{location_id}. Real keys only (seance_length,
+ * sex), not the documented session_length and gender. The HTML `comment`
+ * stays untyped and is never read.
+ */
+export const servicesDataSchema = z.looseObject({
+  services: z.array(bookServiceSchema),
+  category: z.array(serviceCategorySchema),
+  /** Always [] for the booking flow; not read. */
+  events: z.unknown().optional(),
+});
+
+export type ServicesData = z.infer<typeof servicesDataSchema>;
+
+const bookStaffSchema = z.looseObject({
+  id: z.number().int(),
+  name: z.string(),
+  specialization: text,
+  /** An object, or [] when PHP serialises an empty map. */
+  position: z
+    .union([z.looseObject({ title: text }), z.array(z.unknown())])
+    .nullish(),
+  bookable: flag.nullish(),
+  /** 0 when the business hides ratings in its widget. */
+  show_rating: flag.nullish(),
+  rating: numeric.nullish(),
+  /** Next date with a free slot, Y-m-d. */
+  seance_date: text,
+});
+
+/**
+ * `data` of GET /book_staff/{location_id}: an array of team members. The HTML
+ * `information` bio and the avatar stay untyped and are never read.
+ */
+export const teamMembersDataSchema = z.array(bookStaffSchema);
+
+export type TeamMembersData = z.infer<typeof teamMembersDataSchema>;
