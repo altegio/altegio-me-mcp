@@ -599,3 +599,45 @@ export const businessListTeamMembers = defineTool<
     return paginateArray(bookable.map(toTeamMemberItem), input);
   },
 });
+
+// Contract-only stubs (RED): unregistered, replaced in the GREEN commit.
+const availabilityStubInput = z.strictObject({
+  location_id: locationIdInput,
+  ...pageInputShape(),
+});
+
+const availabilityStubOutput = listOutputSchema(z.strictObject({}));
+
+export const businessListDates = defineTool<
+  typeof availabilityStubInput,
+  typeof availabilityStubOutput,
+  ToolDeps
+>({
+  name: 'business_list_dates',
+  title: 'List dates with free time',
+  description: 'Not implemented yet.',
+  annotations: UPSTREAM_READ_HINTS,
+  kind: 'list',
+  upstream: [BOOKING_ROUTES.dates],
+  input: availabilityStubInput,
+  output: availabilityStubOutput,
+  render: () => '',
+  handler: () => Promise.reject(new Error('not implemented')),
+});
+
+export const businessListTimeSlots = defineTool<
+  typeof availabilityStubInput,
+  typeof availabilityStubOutput,
+  ToolDeps
+>({
+  name: 'business_list_time_slots',
+  title: 'List free time slots',
+  description: 'Not implemented yet.',
+  annotations: UPSTREAM_READ_HINTS,
+  kind: 'list',
+  upstream: [BOOKING_ROUTES.timeSlots],
+  input: availabilityStubInput,
+  output: availabilityStubOutput,
+  render: () => '',
+  handler: () => Promise.reject(new Error('not implemented')),
+});

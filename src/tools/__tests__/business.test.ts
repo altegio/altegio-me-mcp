@@ -9,8 +9,10 @@ import {
 } from '../../booking/__tests__/helpers/fake-fetch.js';
 import {
   businessGet,
+  businessListDates,
   businessListServices,
   businessListTeamMembers,
+  businessListTimeSlots,
 } from '../business.js';
 import { ToolError } from '../errors.js';
 import type { ToolInvocation } from '../factory.js';
@@ -1038,10 +1040,462 @@ describe('business_list_team_members (DISC-03)', () => {
   });
 
   it('is registered after business_get and business_list_services', () => {
+    const names = productionTools.map((tool) => tool.name);
+    expect(names.indexOf('business_list_team_members')).toBe(
+      names.indexOf('business_list_services') + 1
+    );
+    expect(names.indexOf('business_list_services')).toBe(
+      names.indexOf('business_get') + 1
+    );
+  });
+});
+
+// business_list_dates and business_list_time_slots (DISC-04, DISC-05)
+// through the real BookingClient with a fake fetch that serves the book_dates
+// and book_times fixtures.
+
+const DATES_PATH = `/book_dates/${LOCATION_ID}`;
+const SLOT_DATE = '2026-10-05';
+const anyMemberTimesPath = (date = SLOT_DATE) =>
+  `/book_times/${LOCATION_ID}/0/${date}`;
+const NAMED_TIMES_PATH = `/book_times/${LOCATION_ID}/2098145/${SLOT_DATE}`;
+
+interface DateItem {
+  date: string;
+}
+
+interface SlotItem {
+  time: string;
+  datetime: string;
+  duration_minutes: number | null;
+  utc_offset: string;
+}
+
+function availabilityClient(routes: { path: string; reply: FakeReply }[]) {
+  const upstream = fakeFetch(
+    routes.map((route) => ({ method: 'GET' as const, ...route }))
+  );
+  const booking = new BookingClient({
+    base: API_BASE,
+    token: TOKEN,
+    fetch: upstream.fetch,
+  });
+  return { booking, upstream };
+}
+
+async function listDates(
+  args: Record<string, unknown>,
+  reply: FakeReply = loadFixture('book_dates', 'default')
+) {
+  const { booking, upstream } = availabilityClient([
+    { path: DATES_PATH, reply },
+  ]);
+  const invocation = await businessListDates.invoke(
+    { location_id: LOCATION_ID, ...args },
+    { booking }
+  );
+  return {
+    invocation,
+    upstream,
+    out: invocation.result.structuredContent as unknown as ListOut<DateItem>,
+    text: textOf(invocation),
+  };
+}
+
+async function listSlots(
+  args: Record<string, unknown>,
+  reply: FakeReply = loadFixture('book_times', 'any_member'),
+  path = anyMemberTimesPath()
+) {
+  const { booking, upstream } = availabilityClient([{ path, reply }]);
+  const invocation = await businessListTimeSlots.invoke(
+    { location_id: LOCATION_ID, date: SLOT_DATE, ...args },
+    { booking }
+  );
+  return {
+    invocation,
+    upstream,
+    out: invocation.result.structuredContent as unknown as ListOut<SlotItem>,
+    text: textOf(invocation),
+  };
+}
+
+function slotsReply(datetimes: readonly string[]): FixtureResponse {
+  return {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+    body: {
+      success: true,
+      data: datetimes.map((datetime) => ({
+        time: '0:00',
+        seance_length: 3600,
+        sum_length: 3600,
+        datetime,
+      })),
+      meta: [],
+    },
+  };
+}
+
+describe('business_list_dates (DISC-04)', () => {
+  it('lists the dates with free time ascending and without duplicates', async () => {
+    const { invocation, out } = await listDates({});
+    expect(invocation.result.isError).toBeUndefined();
+    expect(out.items).toEqual([
+      { date: '2026-10-05' },
+      { date: '2026-10-06' },
+      { date: '2026-10-19' },
+    ]);
+    expect(out.pagination.total).toBe(3);
+  });
+
+  it('reads booking_dates, not the month-keyed booking_days (edge ordering)', async () => {
+    const { out } = await listDates({});
+    // booking_days lists days 5, 6 and 19 under month 10; none of them is a date item.
+    expect(out.items.map((item) => item.date)).not.toContain('5');
+    expect(
+      out.items.every((item) => /^\d{4}-\d{2}-\d{2}$/.test(item.date))
+    ).toBe(true);
+  });
+
+  it('accepts date_from equal to date_to and asks for that single day (edge adjacency)', async () => {
+    const { invocation, upstream } = await listDates({
+      date_from: '2026-10-05',
+      date_to: '2026-10-05',
+    });
+    expect(invocation.result.isError).toBeUndefined();
+    const url = callsTo(upstream, DATES_PATH)[0]?.url;
+    expect(url?.searchParams.get('date_from')).toBe('2026-10-05');
+    expect(url?.searchParams.get('date_to')).toBe('2026-10-05');
+  });
+
+  it('accepts a range of exactly 62 days', async () => {
+    const { invocation } = await listDates({
+      date_from: '2026-10-05',
+      date_to: '2026-12-06',
+    });
+    expect(invocation.result.isError).toBeUndefined();
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    [
+      'date_to 63 days after date_from',
+      { date_from: '2026-10-05', date_to: '2026-12-07' },
+    ],
+    [
+      'date_to before date_from',
+      { date_from: '2026-10-05', date_to: '2026-10-04' },
+    ],
+    ['only date_from', { date_from: '2026-10-05' }],
+    ['only date_to', { date_to: '2026-10-05' }],
+    [
+      'a date that does not exist',
+      { date_from: '2026-02-30', date_to: '2026-03-02' },
+    ],
+    [
+      'a date in another format',
+      { date_from: '05.10.2026', date_to: '2026-10-06' },
+    ],
+    ['a negative team member id', { team_member_id: -1 }],
+    [
+      '11 service ids',
+      { service_ids: Array.from({ length: 11 }, (_, i) => i + 1) },
+    ],
+    ['a duplicate service id', { service_ids: [10303530, 10303530] }],
+  ])('rejects %s before any upstream call', async (_case, args) => {
+    const { invocation, text, upstream } = await listDates(args);
+    expect(invocation.outcome).toBe('invalid_params');
+    expect(text.startsWith('Invalid parameters for business_list_dates')).toBe(
+      true
+    );
+    expect(upstream.calls).toHaveLength(0);
+  });
+
+  it('sends no staff_id for any team member, whether team_member_id is 0 or omitted', async () => {
+    for (const args of [{}, { team_member_id: 0 }]) {
+      const { upstream } = await listDates({
+        ...args,
+        service_ids: [10303530],
+      });
+      const url = callsTo(upstream, DATES_PATH)[0]?.url;
+      expect(url?.searchParams.has('staff_id')).toBe(false);
+      expect(url?.searchParams.getAll('service_ids[]')).toEqual(['10303530']);
+    }
+  });
+
+  it('sends a named team member as staff_id', async () => {
+    const { upstream } = await listDates({ team_member_id: 2098145 });
+    const url = callsTo(upstream, DATES_PATH)[0]?.url;
+    expect(url?.searchParams.get('staff_id')).toBe('2098145');
+  });
+
+  it('names the searched range when no date has free time (edge empty)', async () => {
+    const { out, text } = await listDates(
+      { date_from: '2026-10-05', date_to: '2026-10-19' },
+      loadFixture('book_dates', 'empty')
+    );
+    expect(out.items).toEqual([]);
+    expect(out.pagination.total).toBe(0);
+    expect(text).toContain('No date has free time');
+    expect(text).toContain('from 2026-10-05 to 2026-10-19');
+  });
+
+  it("names the business's booking window when no range was given and no date has free time", async () => {
+    const { out, text } = await listDates(
+      {},
+      loadFixture('book_dates', 'empty')
+    );
+    expect(out.pagination.total).toBe(0);
+    expect(text).toContain("the business's booking window");
+  });
+
+  it('lists the dates in its own text without an UNTRUSTED block', async () => {
+    const { text } = await listDates({});
+    expect(text).toContain('2026-10-05');
+    expect(text).toContain('2026-10-19');
+    expect(text).not.toContain(UNTRUSTED_OPEN);
+  });
+
+  it('pages the ascending dates in order', async () => {
+    const { out, text } = await listDates({ page: 1, page_size: 2 });
+    expect(out.items.map((item) => item.date)).toEqual([
+      '2026-10-05',
+      '2026-10-06',
+    ]);
+    expect(out.pagination.next_page).toBe(2);
+    expect(text).toContain('More: request page 2.');
+  });
+
+  it('turns the 422 for past dates into a chosen-dates error with a next action', async () => {
+    const { invocation } = await listDates(
+      { date_from: '2026-10-05', date_to: '2026-10-06' },
+      loadFixture('book_dates', 'past_date')
+    );
+    const text = expectInBandError(invocation);
+    expect(
+      text.startsWith('The booking service rejected the chosen dates.')
+    ).toBe(true);
+    expect(text).toContain(
+      'Next: choose dates from today on, at most 62 days apart.'
+    );
+  });
+
+  it('is part of the production registry the compliance suite checks', () => {
+    expect(productionTools).toContain(businessListDates);
+  });
+});
+
+describe('business_list_time_slots (DISC-05)', () => {
+  it('merges duplicate slots and sorts them by time, keeping each datetime unchanged', async () => {
+    const { invocation, out } = await listSlots({ service_ids: [10303530] });
+    expect(invocation.result.isError).toBeUndefined();
+    expect(out.items).toEqual([
+      {
+        time: '09:30',
+        datetime: '2026-10-05T09:30:00+03:00',
+        duration_minutes: 60,
+        utc_offset: '+03:00',
+      },
+      {
+        time: '10:00',
+        datetime: '2026-10-05T10:00:00+03:00',
+        duration_minutes: 60,
+        utc_offset: '+03:00',
+      },
+      {
+        time: '10:01',
+        datetime: '2026-10-05T10:01:00+03:00',
+        duration_minutes: 60,
+        utc_offset: '+03:00',
+      },
+      {
+        time: '14:00',
+        datetime: '2026-10-05T14:00:00+03:00',
+        duration_minutes: 45,
+        utc_offset: '+03:00',
+      },
+    ]);
+    expect(out.pagination.total).toBe(4);
+  });
+
+  it('takes HH:MM from the datetime digits, not from the upstream G:i time (Pitfall 3)', async () => {
+    const { out } = await listSlots({ service_ids: [10303530] });
+    // Upstream time is '9:30'; the item carries '09:30'.
+    expect(out.items[0]?.time).toBe('09:30');
+  });
+
+  it('keeps slots one minute apart as two items (edge adjacency)', async () => {
+    const { out } = await listSlots({ service_ids: [10303530] });
+    const times = out.items.map((item) => item.time);
+    expect(times).toContain('10:00');
+    expect(times).toContain('10:01');
+  });
+
+  it('sorts by the instant each datetime denotes, ties in upstream order (edge ordering)', async () => {
+    const datetimes = [
+      '2026-10-05T10:00:00+03:00',
+      '2026-10-05T07:00:00Z',
+      '2026-10-05T09:00:00+03:00',
+    ];
+    const { out } = await listSlots(
+      { service_ids: [10303530] },
+      slotsReply(datetimes)
+    );
+    expect(out.items.map((item) => item.datetime)).toEqual([
+      '2026-10-05T09:00:00+03:00',
+      '2026-10-05T10:00:00+03:00',
+      '2026-10-05T07:00:00Z',
+    ]);
+    expect(out.items.map((item) => item.utc_offset)).toEqual([
+      '+03:00',
+      '+03:00',
+      '+00:00',
+    ]);
+  });
+
+  it('keeps every datetime byte for byte as the upstream wrote it', async () => {
+    const datetimes = [
+      '2026-10-05T09:30:00.000+0300',
+      '2026-10-05T11:00:00-05:30',
+    ];
+    const { out } = await listSlots(
+      { service_ids: [10303530] },
+      slotsReply(datetimes)
+    );
+    expect(out.items.map((item) => item.datetime)).toEqual(datetimes);
+    expect(out.items.map((item) => item.utc_offset)).toEqual([
+      '+03:00',
+      '-05:30',
+    ]);
+  });
+
+  it("states that times are the business's local times with their UTC offset", async () => {
+    const { text } = await listSlots({ service_ids: [10303530] });
+    expect(text).toContain("Times are the business's local times (UTC+03:00)");
+    expect(text).toContain('09:30');
+    expect(text).toContain('2026-10-05T09:30:00+03:00');
+    expect(text).not.toContain(UNTRUSTED_OPEN);
+  });
+
+  it('asks for any team member by default, as path segment 0', async () => {
+    const { upstream } = await listSlots({ service_ids: [10303530] });
+    expect(upstream.unmatched).toEqual([]);
+    expect(upstream.calls[0]?.url.pathname).toBe(
+      `/api/v1${anyMemberTimesPath()}`
+    );
+    expect(upstream.calls[0]?.url.searchParams.getAll('service_ids[]')).toEqual(
+      ['10303530']
+    );
+  });
+
+  it('puts a named team member in the path', async () => {
+    const { out, upstream } = await listSlots(
+      { service_ids: [10303530], team_member_id: 2098145 },
+      loadFixture('book_times', 'named_member'),
+      NAMED_TIMES_PATH
+    );
+    expect(upstream.unmatched).toEqual([]);
+    expect(out.items).toEqual([
+      {
+        time: '11:00',
+        datetime: '2026-10-05T11:00:00+03:00',
+        duration_minutes: 60,
+        utc_offset: '+03:00',
+      },
+      {
+        time: '16:30',
+        datetime: '2026-10-05T16:30:00+03:00',
+        duration_minutes: null,
+        utc_offset: '+03:00',
+      },
+    ]);
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ['an empty service list', { service_ids: [] }],
+    ['no service list', {}],
+    [
+      '11 service ids',
+      { service_ids: Array.from({ length: 11 }, (_, i) => i + 1) },
+    ],
+    ['a duplicate service id', { service_ids: [10303530, 10303530] }],
+    ['a negative team member id', { service_ids: [1], team_member_id: -1 }],
+    ['a date that does not exist', { service_ids: [1], date: '2026-02-30' }],
+    ['a date like 2026-1-5', { service_ids: [1], date: '2026-1-5' }],
+    ['page_size 51', { service_ids: [1], page_size: 51 }],
+  ])('rejects %s before any upstream call', async (_case, args) => {
+    const { invocation, text, upstream } = await listSlots(args);
+    expect(invocation.outcome).toBe('invalid_params');
+    expect(
+      text.startsWith('Invalid parameters for business_list_time_slots')
+    ).toBe(true);
+    expect(upstream.calls).toHaveLength(0);
+  });
+
+  it('accepts page_size 50', async () => {
+    const { invocation, out } = await listSlots({
+      service_ids: [10303530],
+      page_size: 50,
+    });
+    expect(invocation.result.isError).toBeUndefined();
+    expect(out.pagination.page_size).toBe(50);
+  });
+
+  it('continues in order on page 2', async () => {
+    const { out, text } = await listSlots({
+      service_ids: [10303530],
+      page: 2,
+      page_size: 2,
+    });
+    expect(out.items.map((item) => item.time)).toEqual(['10:01', '14:00']);
+    expect(out.pagination.has_more).toBe(false);
+    expect(text).not.toContain('More: request page');
+  });
+
+  it('says there is no free time on that date when the list is empty (edge empty)', async () => {
+    const { out, text } = await listSlots(
+      { service_ids: [10303530] },
+      loadFixture('book_times', 'empty')
+    );
+    expect(out.items).toEqual([]);
+    expect(out.pagination.total).toBe(0);
+    expect(text).toContain(
+      'No free time on 2026-10-05 for this selection of services and team member.'
+    );
+  });
+
+  it('turns the 422 for a past date into a chosen-date error with a next action', async () => {
+    const { invocation } = await listSlots(
+      { service_ids: [10303530] },
+      loadFixture('book_times', 'past_date')
+    );
+    const text = expectInBandError(invocation);
+    expect(
+      text.startsWith('The booking service rejected the chosen date.')
+    ).toBe(true);
+    expect(text).toContain('Next: choose a date from today on');
+  });
+
+  it('reports a slot datetime in an unexpected format as an upstream format error', async () => {
+    const { invocation } = await listSlots(
+      { service_ids: [10303530] },
+      loadFixture('book_times', 'drift')
+    );
+    const text = expectInBandError(invocation);
+    expect(
+      text.startsWith(
+        'The booking service returned data in an unexpected format.'
+      )
+    ).toBe(true);
+  });
+
+  it('is registered after business_list_dates, completing the five tools in flow order', () => {
     expect(productionTools.map((tool) => tool.name)).toEqual([
       'business_get',
       'business_list_services',
       'business_list_team_members',
+      'business_list_dates',
+      'business_list_time_slots',
     ]);
   });
 });
