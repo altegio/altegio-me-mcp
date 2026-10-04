@@ -9,6 +9,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import type { CallRecord } from '../observability/call-log.js';
 import { scrubSecrets } from '../observability/redact.js';
+import { createToolContext } from '../tools/context.js';
 import type { DefinedTool, ToolSpec } from '../tools/factory.js';
 import { SERVER_INSTRUCTIONS } from './instructions.js';
 
@@ -21,6 +22,8 @@ export interface CreateMcpServerOptions<D> {
   toolDeps: D;
   secrets: readonly string[];
   record: CallRecord;
+  /** Trusted caller identity for the gate's per-key cap; wired in 03-09. */
+  clientKey?: string | null;
 }
 
 // A fresh low-level Server per request: nothing is shared between requests
@@ -39,7 +42,7 @@ export function createMcpServer<D>(options: CreateMcpServerOptions<D>): Server {
 
   server.setRequestHandler(
     CallToolRequestSchema,
-    async (request): Promise<CallToolResult> => {
+    async (request, extra): Promise<CallToolResult> => {
       const tool = toolsByName.get(request.params.name);
       if (tool === undefined) {
         record.outcome = 'protocol_error';
@@ -49,9 +52,12 @@ export function createMcpServer<D>(options: CreateMcpServerOptions<D>): Server {
         );
       }
       record.tool = tool.name;
+      // extra.signal aborts when the client cancels or the transport closes;
+      // the context adds the one deadline every call runs under (WR-04).
       const invocation = await tool.invoke(
         request.params.arguments ?? {},
-        toolDeps
+        toolDeps,
+        createToolContext(extra.signal, options.clientKey ?? null)
       );
       record.outcome = invocation.outcome;
       record.error_type = invocation.errorType;

@@ -178,10 +178,13 @@ export const businessGet = defineTool<
   input: businessGetInput,
   output: businessCardSchema,
   render: renderCard,
-  handler: async ({ input, deps }) => {
+  handler: async ({ input, deps, ctx }) => {
     let card: BusinessCard;
     try {
-      card = await deps.booking.company(input.location_id);
+      card = await deps.booking.company(input.location_id, {
+        signal: ctx.signal,
+        key: ctx.clientKey,
+      });
     } catch (error) {
       // Every upstream failure becomes an in-band error that names the next action (BAPI-01).
       throw toToolError(error);
@@ -453,17 +456,24 @@ export const businessListServices = defineTool<
   input: servicesInput,
   output: servicesOutput,
   render: renderServices,
-  handler: async ({ input, deps }) => {
+  handler: async ({ input, deps, ctx }) => {
     let card: BusinessCard;
     let catalog: ServiceCatalog;
     try {
       // The currency is on the card; both reads go through the shared gate.
       [card, catalog] = await Promise.all([
-        deps.booking.company(input.location_id),
-        deps.booking.services(input.location_id, {
-          teamMemberId: input.team_member_id,
-          datetime: input.datetime,
+        deps.booking.company(input.location_id, {
+          signal: ctx.signal,
+          key: ctx.clientKey,
         }),
+        deps.booking.services(
+          input.location_id,
+          {
+            teamMemberId: input.team_member_id,
+            datetime: input.datetime,
+          },
+          { signal: ctx.signal, key: ctx.clientKey }
+        ),
       ]);
     } catch (error) {
       throw toToolError(
@@ -585,13 +595,17 @@ export const businessListTeamMembers = defineTool<
   input: teamMembersInput,
   output: teamMembersOutput,
   render: renderTeamMembers,
-  handler: async ({ input, deps }) => {
+  handler: async ({ input, deps, ctx }) => {
     let members: TeamMember[];
     try {
-      members = await deps.booking.teamMembers(input.location_id, {
-        serviceIds: input.service_ids,
-        datetime: input.datetime,
-      });
+      members = await deps.booking.teamMembers(
+        input.location_id,
+        {
+          serviceIds: input.service_ids,
+          datetime: input.datetime,
+        },
+        { signal: ctx.signal, key: ctx.clientKey }
+      );
     } catch (error) {
       throw toToolError(
         error,
@@ -762,15 +776,19 @@ export const businessListDates = defineTool<
   input: datesInput,
   output: datesOutput,
   render: renderDates,
-  handler: async ({ input, deps }) => {
+  handler: async ({ input, deps, ctx }) => {
     let dates: string[];
     try {
-      dates = await deps.booking.dates(input.location_id, {
-        serviceIds: input.service_ids,
-        teamMemberId: input.team_member_id,
-        dateFrom: input.date_from,
-        dateTo: input.date_to,
-      });
+      dates = await deps.booking.dates(
+        input.location_id,
+        {
+          serviceIds: input.service_ids,
+          teamMemberId: input.team_member_id,
+          dateFrom: input.date_from,
+          dateTo: input.date_to,
+        },
+        { signal: ctx.signal, key: ctx.clientKey }
+      );
     } catch (error) {
       throw toToolError(error, {
         not_found: {
@@ -933,14 +951,15 @@ export const businessListTimeSlots = defineTool<
   input: timeSlotsInput,
   output: timeSlotsOutput,
   render: renderTimeSlots,
-  handler: async ({ input, deps }) => {
+  handler: async ({ input, deps, ctx }) => {
     let slots: TimeSlot[];
     try {
       slots = await deps.booking.timeSlots(
         input.location_id,
         input.team_member_id,
         input.date,
-        input.service_ids
+        input.service_ids,
+        { signal: ctx.signal, key: ctx.clientKey }
       );
     } catch (error) {
       throw toToolError(error, {

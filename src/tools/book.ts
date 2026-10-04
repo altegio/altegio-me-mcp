@@ -28,6 +28,7 @@ import {
   uniqueServiceIds,
   untrustedText,
 } from './business.js';
+import type { ToolContext } from './context.js';
 import { ToolError } from './errors.js';
 import { defineTool } from './factory.js';
 import type { ToolDeps } from './registry.js';
@@ -334,14 +335,16 @@ function output(
 /** After a 201: the card, the services and the named team member, in parallel through the gate. */
 async function verified(
   input: BookCheckInput,
-  deps: ToolDeps
+  deps: ToolDeps,
+  ctx: ToolContext
 ): Promise<BookCheckOutput> {
   const id = input.location_id;
+  const call = { signal: ctx.signal, key: ctx.clientKey };
   const [cardResult, catalogResult, membersResult] = await Promise.allSettled([
-    deps.booking.company(id),
-    deps.booking.services(id),
+    deps.booking.company(id, call),
+    deps.booking.services(id, {}, call),
     input.team_member_id > 0
-      ? deps.booking.teamMembers(id)
+      ? deps.booking.teamMembers(id, {}, call)
       : Promise.resolve(null),
   ]);
   if (cardResult.status === 'rejected') {
@@ -405,11 +408,15 @@ async function verified(
 async function unverified(
   input: BookCheckInput,
   deps: ToolDeps,
+  ctx: ToolContext,
   checkError: UpstreamError
 ): Promise<BookCheckOutput> {
   let card: BusinessCard;
   try {
-    card = await deps.booking.company(input.location_id);
+    card = await deps.booking.company(input.location_id, {
+      signal: ctx.signal,
+      key: ctx.clientKey,
+    });
   } catch {
     throw toToolError(checkError);
   }
@@ -497,23 +504,27 @@ export const bookCheck = defineTool<
   input: bookCheckInput,
   output: bookCheckOutput,
   render: renderBookCheck,
-  handler: async ({ input, deps }) => {
+  handler: async ({ input, deps, ctx }) => {
     try {
-      await deps.booking.check(input.location_id, {
-        serviceIds: input.service_ids,
-        teamMemberId: input.team_member_id,
-        datetime: input.datetime,
-      });
+      await deps.booking.check(
+        input.location_id,
+        {
+          serviceIds: input.service_ids,
+          teamMemberId: input.team_member_id,
+          datetime: input.datetime,
+        },
+        { signal: ctx.signal, key: ctx.clientKey }
+      );
     } catch (error) {
       if (
         error instanceof UpstreamError &&
         (error.kind === 'unavailable' || error.kind === 'contract_drift')
       ) {
-        return unverified(input, deps, error);
+        return unverified(input, deps, ctx, error);
       }
       // A taken or rejected slot gets no link at all (D-06).
       throw toToolError(error, CHECK_ERRORS);
     }
-    return verified(input, deps);
+    return verified(input, deps, ctx);
   },
 });

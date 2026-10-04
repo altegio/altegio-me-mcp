@@ -73,9 +73,17 @@ interface Waiter {
 /** The reason a signal aborted with, as an Error (the reason can be any value). */
 export function abortReason(signal: AbortSignal): Error {
   const reason: unknown = signal.reason;
-  return reason instanceof Error
-    ? reason
-    : new Error(`Call aborted: ${String(reason)}`);
+  // Error-like, not instanceof: a DOMException from AbortSignal.timeout is not
+  // an Error of every realm (Jest runs tests in its own).
+  if (
+    typeof reason === 'object' &&
+    reason !== null &&
+    typeof (reason as { name?: unknown }).name === 'string' &&
+    typeof (reason as { message?: unknown }).message === 'string'
+  ) {
+    return reason as Error;
+  }
+  return new Error(`Call aborted: ${String(reason)}`);
 }
 
 function noop(): void {

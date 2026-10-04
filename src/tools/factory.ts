@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { NO_TOOL_CONTEXT, type ToolContext } from './context.js';
+import { NO_TOOL_CONTEXT, isDeadline, type ToolContext } from './context.js';
 import { textResult, toolErrorResult } from './result.js';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from './untrusted.js';
 
@@ -194,7 +194,17 @@ export function defineTool<
           ctx,
         });
       } catch (error) {
-        return toolErrorResult(def.name, error, 'handler');
+        const failed = toolErrorResult(def.name, error, 'handler');
+        // The call log names why the call ended early; the text stays the one
+        // the error mapping produced.
+        return ctx.signal.aborted
+          ? {
+              ...failed,
+              errorType: isDeadline(ctx.signal)
+                ? 'DeadlineExceeded'
+                : 'ClientGone',
+            }
+          : failed;
       }
 
       const parsedOutput = def.output.safeParse(output);

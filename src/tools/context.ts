@@ -21,12 +21,33 @@ export const NO_TOOL_CONTEXT: ToolContext = Object.freeze({
   clientKey: null,
 });
 
+/**
+ * One signal for a tool call: it aborts when `parent` does (the SDK aborts
+ * extra.signal when the client cancels or the transport closes) or when the
+ * deadline passes, whichever comes first. The reason is the parent's, or a
+ * TimeoutError for the deadline.
+ */
 export function createToolContext(
   parent: AbortSignal | undefined,
   clientKey: string | null,
   deadlineMs: number = TOOL_DEADLINE_MS
 ): ToolContext {
-  void parent;
-  void deadlineMs;
-  return { signal: new AbortController().signal, clientKey };
+  const deadline = AbortSignal.timeout(deadlineMs);
+  const signal =
+    parent === undefined ? deadline : AbortSignal.any([parent, deadline]);
+  return { signal, clientKey };
+}
+
+/**
+ * True when the signal aborted because the deadline passed. Matched by name,
+ * not instanceof: the DOMException of AbortSignal.timeout is not an Error of
+ * every realm (Jest runs tests in its own).
+ */
+export function isDeadline(signal: AbortSignal): boolean {
+  const reason: unknown = signal.reason;
+  return (
+    typeof reason === 'object' &&
+    reason !== null &&
+    (reason as { name?: unknown }).name === 'TimeoutError'
+  );
 }

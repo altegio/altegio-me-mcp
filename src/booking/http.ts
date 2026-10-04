@@ -91,6 +91,23 @@ function isTimeout(error: unknown): boolean {
   return isRecord(error) && error.name === 'TimeoutError';
 }
 
+/**
+ * The tool call ended before the API answered: its deadline passed or its
+ * client went away. Never worded like the per-fetch timeout, so the log tells
+ * the three apart.
+ */
+function cancelledError(route: string, signal: AbortSignal): UpstreamError {
+  const reason: unknown = signal.reason;
+  return new UpstreamError('unavailable', route, {
+    cause: new Error(
+      isTimeout(reason)
+        ? 'Altegio API call stopped: the tool call ran out of time'
+        : 'Altegio API call cancelled: the tool call was dropped',
+      { cause: reason }
+    ),
+  });
+}
+
 /** envelope.data of a 2xx body; null for an empty body. */
 function parseEnvelopeData(
   route: string,
@@ -191,16 +208,20 @@ export class BookingHttp {
       redirect: 'manual',
     };
 
-    let reply = await this.attempt(call.route, url, init);
+    const caller: UpstreamCallOptions = { signal: call.signal, key: call.key };
+    let reply = await this.attempt(call.route, url, init, caller);
     let retryAfter: number | null = null;
     if (reply.status === 429) {
       retryAfter = this.pauseFor(reply.headers);
       // At most one retry, and only for a short advised wait. The upstream
       // did not process a rate-limited request, so sending it again is safe,
       // the book_check POST included. The gate holds the retry until the
-      // pause ends.
+      // pause ends. A call that was dropped meanwhile is not retried.
       if (retryAfter <= INLINE_RETRY_MAX_SECONDS) {
-        reply = await this.attempt(call.route, url, init);
+        if (call.signal?.aborted === true) {
+          throw cancelledError(call.route, call.signal);
+        }
+        reply = await this.attempt(call.route, url, init, caller);
         if (reply.status === 429) retryAfter = this.pauseFor(reply.headers);
       }
     }
@@ -218,22 +239,33 @@ export class BookingHttp {
   private async attempt(
     route: string,
     url: URL,
-    init: RequestInit
+    init: RequestInit,
+    caller: UpstreamCallOptions
   ): Promise<RawReply> {
+    const callSignal = caller.signal;
     try {
-      return await this.gate.run(async () => {
-        // The timeout starts when the gate admits the call, so time spent
-        // waiting in the gate does not count against it.
-        const response = await this.fetchImpl(url, {
-          ...init,
-          signal: AbortSignal.timeout(this.timeoutMs),
-        });
-        return {
-          status: response.status,
-          headers: response.headers,
-          text: await response.text(),
-        };
-      });
+      return await this.gate.run(
+        async () => {
+          // The per-fetch timeout starts when the gate admits the call, so
+          // time spent waiting in the gate does not count against it. The
+          // tool call's own signal (disconnect or deadline) stops the fetch
+          // too (WR-04).
+          const timeout = AbortSignal.timeout(this.timeoutMs);
+          const response = await this.fetchImpl(url, {
+            ...init,
+            signal:
+              callSignal === undefined
+                ? timeout
+                : AbortSignal.any([timeout, callSignal]),
+          });
+          return {
+            status: response.status,
+            headers: response.headers,
+            text: await response.text(),
+          };
+        },
+        { signal: callSignal, key: caller.key }
+      );
     } catch (error) {
       if (error instanceof UpstreamError) throw error;
       if (error instanceof GateSaturatedError) {
@@ -244,6 +276,9 @@ export class BookingHttp {
           retryAfterSeconds: error.retryAfterSeconds,
           cause: error,
         });
+      }
+      if (callSignal?.aborted === true) {
+        throw cancelledError(route, callSignal);
       }
       throw new UpstreamError('unavailable', route, {
         cause: isTimeout(error)

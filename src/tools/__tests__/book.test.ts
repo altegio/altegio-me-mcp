@@ -16,6 +16,7 @@ import {
   NOTE_UNVERIFIED,
   bookCheck,
 } from '../book.js';
+import { createToolContext } from '../context.js';
 import type { ToolInvocation } from '../factory.js';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from '../untrusted.js';
 
@@ -606,6 +607,34 @@ describe('book_check fallbacks (BOOK-05, D-06)', () => {
       })
     );
     expect(out.status).toBe('unverified');
+  });
+
+  it('a check that outlives the tool deadline ends in a tool error with no link and no fallback read (WR-04)', async () => {
+    const upstream = fakeFetch([
+      {
+        method: 'POST',
+        path: CHECK_PATH,
+        reply: () => new Promise<FixtureResponse>(() => undefined),
+      },
+      {
+        method: 'GET',
+        path: COMPANY_PATH,
+        reply: loadFixture('company', 'default'),
+      },
+    ]);
+    const booking = new BookingClient({
+      base: API_BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    const invocation = await bookCheck.invoke(
+      { location_id: LOCATION_ID, service_ids: [10303530], datetime: SLOT },
+      { booking },
+      createToolContext(undefined, null, 50)
+    );
+    expectNoLinkError(invocation);
+    expect(invocation.errorType).toBe('DeadlineExceeded');
+    expect(paths(upstream)).toEqual([`POST ${CHECK_PATH}`]);
   });
 
   it('fallback: an inconclusive check whose card read fails reports the check failure without a link', async () => {
