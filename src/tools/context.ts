@@ -13,12 +13,22 @@ export interface ToolContext {
   readonly signal: AbortSignal;
   /** Trusted caller identity for the gate's per-key cap; null when unknown. */
   readonly clientKey: string | null;
+  /**
+   * A signal that aborts after `ms`: the budget of one step inside the call
+   * (book_check's slot check). A seam, so tests need not wait out real time.
+   */
+  readonly timeout: (ms: number) => AbortSignal;
+}
+
+function stepTimeout(ms: number): AbortSignal {
+  return AbortSignal.timeout(ms);
 }
 
 /** A context that never aborts and has no caller key. */
 export const NO_TOOL_CONTEXT: ToolContext = Object.freeze({
   signal: new AbortController().signal,
   clientKey: null,
+  timeout: stepTimeout,
 });
 
 /**
@@ -35,7 +45,7 @@ export function createToolContext(
   const deadline = AbortSignal.timeout(deadlineMs);
   const signal =
     parent === undefined ? deadline : AbortSignal.any([parent, deadline]);
-  return { signal, clientKey };
+  return { signal, clientKey, timeout: stepTimeout };
 }
 
 /**

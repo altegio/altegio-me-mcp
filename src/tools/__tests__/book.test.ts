@@ -14,9 +14,10 @@ import {
   NOTE_PREPAYMENT,
   NOTE_REPEAT_SELECTION,
   NOTE_UNVERIFIED,
+  BOOK_CHECK_STEP_MS,
   bookCheck,
 } from '../book.js';
-import { createToolContext } from '../context.js';
+import { createToolContext, type ToolContext } from '../context.js';
 import type { ToolInvocation } from '../factory.js';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from '../untrusted.js';
 
@@ -165,6 +166,151 @@ function serverError(): FixtureResponse {
     body: { success: false, data: null, meta: { message: 'Server error' } },
   };
 }
+
+/** A context whose step timeout is a signal the test aborts; no test waits 12 s. */
+function stepContext(parent?: AbortSignal): {
+  ctx: ToolContext;
+  step: AbortController;
+  budgets: number[];
+} {
+  const step = new AbortController();
+  const budgets: number[] = [];
+  const base = createToolContext(parent, null, 1500);
+  const ctx: ToolContext = {
+    ...base,
+    timeout: (ms) => {
+      budgets.push(ms);
+      return step.signal;
+    },
+  };
+  return { ctx, step, budgets };
+}
+
+async function untilCalls(upstream: FakeFetch, count: number): Promise<void> {
+  const stop = Date.now() + 1000;
+  while (upstream.calls.length < count && Date.now() < stop) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  expect(upstream.calls).toHaveLength(count);
+}
+
+/** The signal each fetch received, by upstream path (without the API prefix). */
+function recordSignals(upstream: FakeFetch): {
+  fetch: typeof fetch;
+  signals: Map<string, AbortSignal>;
+} {
+  const signals = new Map<string, AbortSignal>();
+  const recording: typeof fetch = (input, init) => {
+    const url = input instanceof Request ? input.url : input.toString();
+    const path = new URL(url).pathname.replace('/api/v1', '');
+    if (init?.signal) signals.set(path, init.signal);
+    return upstream.fetch(input, init);
+  };
+  return { fetch: recording, signals };
+}
+
+function stalledCheckUpstream(): FakeFetch {
+  return fakeFetch([
+    {
+      method: 'POST',
+      path: CHECK_PATH,
+      reply: () => new Promise<FixtureResponse>(() => undefined),
+    },
+    {
+      method: 'GET',
+      path: COMPANY_PATH,
+      reply: loadFixture('company', 'default'),
+    },
+    {
+      method: 'GET',
+      path: SERVICES_PATH,
+      reply: loadFixture('book_services', 'default'),
+    },
+    {
+      method: 'GET',
+      path: STAFF_PATH,
+      reply: loadFixture('book_staff', 'default'),
+    },
+  ]);
+}
+
+describe('book_check slot check step budget (WR-04, D-01)', () => {
+  const ARGS = {
+    location_id: LOCATION_ID,
+    service_ids: [10303530],
+    datetime: SLOT,
+  };
+
+  it('the step budget is 12 s, a share of the 25 s call deadline', () => {
+    expect(BOOK_CHECK_STEP_MS).toBe(12_000);
+  });
+
+  it('a check that spends its step budget while the call is live gives an unverified plain link, the card read on the call signal', async () => {
+    const upstream = stalledCheckUpstream();
+    const { fetch: recording, signals } = recordSignals(upstream);
+    const booking = new BookingClient({
+      base: API_BASE,
+      token: TOKEN,
+      fetch: recording,
+    });
+    const parent = new AbortController();
+    const { ctx, step, budgets } = stepContext(parent.signal);
+
+    const pending = bookCheck.invoke(ARGS, { booking }, ctx);
+    await untilCalls(upstream, 1);
+    step.abort();
+    const out = okOutput(await pending);
+
+    expect(budgets).toEqual([BOOK_CHECK_STEP_MS]);
+    expect(out.status).toBe('unverified');
+    expect(out.link.kind).toBe('booking_form');
+    expect(out.notes).toContain(NOTE_UNVERIFIED);
+    expect(paths(upstream)).toEqual([
+      `POST ${CHECK_PATH}`,
+      `GET ${COMPANY_PATH}`,
+    ]);
+    expect(signals.get(CHECK_PATH)?.aborted).toBe(true);
+    // The card read is not bound to the spent step budget, only to the call.
+    const cardSignal = signals.get(COMPANY_PATH);
+    expect(cardSignal?.aborted).toBe(false);
+    parent.abort();
+    expect(cardSignal?.aborted).toBe(true);
+  });
+
+  it('a call that ends during the check ends in a tool error and reads no card', async () => {
+    const upstream = stalledCheckUpstream();
+    const booking = new BookingClient({
+      base: API_BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    const parent = new AbortController();
+    const { ctx } = stepContext(parent.signal);
+
+    const pending = bookCheck.invoke(ARGS, { booking }, ctx);
+    await untilCalls(upstream, 1);
+    parent.abort();
+    const invocation = await pending;
+
+    expectNoLinkError(invocation);
+    expect(invocation.errorType).toBe('ClientGone');
+    expect(paths(upstream)).toEqual([`POST ${CHECK_PATH}`]);
+  });
+
+  it('a 201 followed by successful reads still gives status verified', async () => {
+    const { upstream } = setup();
+    const booking = new BookingClient({
+      base: API_BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    const { ctx, budgets } = stepContext();
+    const out = okOutput(await bookCheck.invoke(ARGS, { booking }, ctx));
+    expect(out.status).toBe('verified');
+    expect(out.link.kind).toBe('preselected');
+    expect(budgets).toEqual([BOOK_CHECK_STEP_MS]);
+  });
+});
 
 describe('book_check statement after a 201 (BOOK-01, BOOK-03)', () => {
   it('statement: returns a verified pre-selected link and the selection read from the API', async () => {

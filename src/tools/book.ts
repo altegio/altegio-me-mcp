@@ -63,6 +63,13 @@ export const NOTE_PREPAYMENT =
 export const NOTE_NAMES_UNAVAILABLE =
   'Service or team member names could not be loaded; the booking widget shows them.';
 
+/**
+ * The slot check's own share of the call deadline (WR-04, D-01): when it is
+ * spent, book_check answers unverified with the plain link instead of failing,
+ * and the rest of the 25 s deadline is left for the card read.
+ */
+export const BOOK_CHECK_STEP_MS = 12_000;
+
 const bookCheckInput = z.strictObject({
   location_id: locationIdInput,
   service_ids: uniqueServiceIds(
