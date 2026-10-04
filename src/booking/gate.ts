@@ -1,4 +1,4 @@
-import type { GateLike } from './http.js';
+import type { GateLike, UpstreamCallOptions } from './http.js';
 
 // Outbound throttle for the Altegio API (BAPI-02, D-03). The API blocks a
 // caller over 5 requests/s or 200 requests/min, and the partner token of
@@ -20,6 +20,8 @@ export interface RequestGateOptions {
   maxWaitMs?: number;
   /** A caller arriving when this many callers wait is rejected at once. */
   maxQueue?: number;
+  /** A keyed caller arriving when this many of its calls wait is rejected. */
+  maxQueuePerKey?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -117,7 +119,7 @@ export class RequestGate implements GateLike {
     this.sleep = options.sleep ?? realSleep;
   }
 
-  run<T>(start: () => Promise<T>): Promise<T> {
+  run<T>(start: () => Promise<T>, _opts?: UpstreamCallOptions): Promise<T> {
     const now = this.now();
     this.forgetOldStarts(now);
     const wait = this.projectedStart(now) - now;

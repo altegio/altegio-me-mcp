@@ -15,15 +15,23 @@ import {
 export const ALTEGIO_ACCEPT = 'application/vnd.api.v2+json';
 export const UPSTREAM_TIMEOUT_MS = 10_000;
 
+/** What one upstream call tells the gate about its caller. */
+export interface UpstreamCallOptions {
+  /** Aborts the call: a queued call leaves the gate, a started one stops. */
+  signal?: AbortSignal;
+  /** Caller identity for the per-key queue cap; null or missing is uncapped. */
+  key?: string | null;
+}
+
 /** Admission control for upstream calls; the throttle implements it. */
 export interface GateLike {
-  run<T>(start: () => Promise<T>): Promise<T>;
+  run<T>(start: () => Promise<T>, opts?: UpstreamCallOptions): Promise<T>;
   pauseUntil(untilMs: number): void;
 }
 
 /** Runs every call at once and ignores pauses. */
 export const PASS_THROUGH_GATE: GateLike = Object.freeze({
-  run<T>(start: () => Promise<T>): Promise<T> {
+  run<T>(start: () => Promise<T>, _opts?: UpstreamCallOptions): Promise<T> {
     return start();
   },
   pauseUntil(): void {
