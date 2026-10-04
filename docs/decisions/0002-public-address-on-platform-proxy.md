@@ -4,6 +4,7 @@
 - Date: 2026-10-04
 - Deciders: Mike Kondakov
 - Amends: [ADR 0001](0001-scope-and-architecture.md) D3 (the domain part only)
+- Amended by: [ADR 0003](0003-host-in-platform-project.md) (the GCP project)
 
 ## Context
 
@@ -30,6 +31,8 @@ The public MCP address is **`https://mcp.alteg.io/me`**, served by the platform 
 stack. The rest of D3 stands: the server runs on our own Cloud Run service in our own GCP project,
 deploys only through a Cloud Build trigger on merge to `main`, and keeps its own request logging,
 rate limits and abuse protection. The domain `mcp.altegio.me` is dropped.
+*Amended 2026-10-04 by [ADR 0003](0003-host-in-platform-project.md): the Cloud Run service runs
+in the platform's GCP project `altegio-mcp`, not in a project of its own.*
 
 What the platform team needs to provide:
 

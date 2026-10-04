@@ -84,9 +84,9 @@ Other notes:
 - TypeScript, Express, zod, pino. Patterns reused from Altegio.Pro MCP: tool factory with zod
   schemas, annotations on every tool, untrusted-text fencing, pagination, actionable errors,
   CI layout.
-- Target hosting: its own Cloud Run service in its own GCP project, published at
-  `https://mcp.alteg.io/me` as a route on the platform's `mcp.alteg.io` proxy, next to
-  `https://mcp.alteg.io/pro` (ADR 0002). The proxy admits only Altegio account holders today;
+- Target hosting: its own Cloud Run service in the platform's GCP project `altegio-mcp`,
+  where every Altegio MCP server lives (ADR 0003), published at `https://mcp.alteg.io/me` as a
+  route on the platform's `mcp.alteg.io` proxy, next to `https://mcp.alteg.io/pro` (ADR 0002). The proxy admits only Altegio account holders today;
   the anonymous `/me` route is requested from the platform team.
 - The booking client calls the Altegio public API (`api.alteg.io/api/v1`) with the partner
   token and never creates, holds or changes a booking: `book_check` is a validation-only call,
@@ -236,18 +236,21 @@ the pull request title.
 
 ## Deploy
 
-Deploys go only through git: a Cloud Build trigger on merge to `main` deploys to the service's
-own Cloud Run project. No manual `gcloud run deploy`. Clients reach the service at
-`https://mcp.alteg.io/me`, a route on the platform proxy that forwards to the service's `/mcp`
-(ADR 0002). The trigger, the service and the route are not set up yet; until then the server
-runs locally and in CI only.
+Deploys go only through git: a Cloud Build trigger on merge to `main` deploys the Cloud Run
+service `altegio-me-mcp` in the platform's GCP project `altegio-mcp`, region `europe-west1`
+(ADR 0003). No manual `gcloud run deploy`. The service reads the partner token from the
+project's existing Secret Manager secret `ALTEGIO_API_TOKEN`, the one Altegio.Pro MCP uses.
+Clients reach the service at `https://mcp.alteg.io/me`, a route on the platform proxy that
+forwards to the service's `/mcp` (ADR 0002). The trigger, the service and the route are not set
+up yet; until then the server runs locally and in CI only.
 
 ## Cost estimate
 
 Rough, refined per phase. Assumptions: Cloud Run in `europe-west1`, 1 vCPU / 512 MiB, one minimum instance (cold
 starts hurt chat latency). The server calls no LLM: the model runs on the AI host's side. The
-platform proxy in front of the service (`mcp.alteg.io`, ADR 0002) runs in the platform's own
-project and is not counted here.
+service runs in the platform's project `altegio-mcp` (ADR 0003), and every resource carries the
+label `app=altegio-me-mcp`, so this cost shows up there as a separate line. The platform proxy in
+front of the service (`mcp.alteg.io`, ADR 0002) is the platform's cost and is not counted here.
 
 | Item | Expected (≈100k tool calls / month) | Peak (≈1M tool calls / month) |
 |---|---|---|

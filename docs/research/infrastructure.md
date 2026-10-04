@@ -8,6 +8,14 @@ not inspected.
 
 ## I1. GCP project and billing
 
+Decision (owner, 2026-10-04, [ADR 0003](../decisions/0003-host-in-platform-project.md)): the
+service runs as its own Cloud Run service `altegio-me-mcp` in the platform's project
+`altegio-mcp`, where every Altegio MCP server lives. No project of its own and no billing link.
+It reuses the project's Artifact Registry repo `cloud-run`, its Cloud Build GitHub connection and
+its secret `ALTEGIO_API_TOKEN`. The platform team grants the rights and links the repository
+(open item I6). The proposal below is superseded; it stays for the record and is the fallback if
+the platform team declines.
+
 What exists:
 
 - The platform runs in project `altegio-mcp`, region `europe-west1`: Cloud Run services

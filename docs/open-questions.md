@@ -51,11 +51,14 @@ D1-D4 are decided by the owner, Mike Kondakov, before Phase 5, not by a design o
 
 | # | Question | Blocks | Status |
 |---|---|---|---|
-| I1 | GCP project and billing account for the service | First deploy | not asked: answered from Altegio.Pro MCP setup 2026-10-03 |
+| I1 | GCP project and billing account for the service | First deploy | superseded 2026-10-04 by ADR 0003 (platform project `altegio-mcp`); see I6 |
 | I2 | Domain: `mcp.altegio.me` or another; DNS owner | First deploy | superseded 2026-10-04 by ADR 0002 (address `https://mcp.alteg.io/me`); see I5 |
-| I5 | Anonymous `/me` route on the `mcp.alteg.io` customer proxy: forward to our Cloud Run over https, pass the client IP, sign proxied requests (platform team, ADR 0002) | First public deploy (OPS-03, OPS-08) | draft ready 2026-10-04 in Slack `#altegio-mcp-platform`, not sent yet |
+| I5 | Anonymous `/me` route on the `mcp.alteg.io` customer proxy: forward to our Cloud Run over https, pass the client IP, sign proxied requests (platform team, ADR 0002) | First public deploy (OPS-03, OPS-08) | draft ready 2026-10-04 in Slack `#altegio-mcp-platform`, not sent yet; send together with I6 |
+| I6 | Hosting in the platform project `altegio-mcp` (ADR 0003): rights to run the one-time setup, the repository linked to the Cloud Build GitHub connection, runtime access to `ALTEGIO_API_TOKEN` and the proxy-origin key; the platform team may prefer a container on `mcp-customer-servers` (platform team) | First deploy (OPS-01, OPS-02, OPS-04) | draft 2026-10-04 for Slack `#altegio-mcp-platform`, not sent yet |
 | I3 | Developer account and partner token for the Altegio.me MCP | Local run against the real API | not asked: owner decision 2026-10-03 (account 2630) |
 | I4 | Organization admin on standby to apply the main-branch ruleset if GitHub refuses the OrganizationAdmin bypass actor to a repo admin | Phase 1 CI gate (CI-02) | not asked: ask only if applying the ruleset fails (plan 01-08) |
+
+I1 superseded (owner decision, 2026-10-04, [ADR 0003](decisions/0003-host-in-platform-project.md)): the service runs as its own Cloud Run service `altegio-me-mcp` in the platform's project `altegio-mcp`, where every Altegio MCP server lives. No project of its own, no billing link and no organization-level GitHub connection. In production the service reads the existing secret `ALTEGIO_API_TOKEN` in that project (I3). The open item moves to the platform team (I6). The earlier answer below stays for the record and is the fallback if the platform team declines.
 
 I1 answer (from the Altegio.Pro MCP and mcp.alteg.io platform setup, 2026-10-03): a new GCP project `altegio-me-mcp` in europe-west1. Creating the project, linking billing and connecting the GitHub organization to Cloud Build need organization or infrastructure rights. Details in [research/infrastructure.md](research/infrastructure.md).
 
