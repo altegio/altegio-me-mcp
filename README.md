@@ -128,6 +128,16 @@ values) when one is missing or invalid.
 | `MCP_PROXY_BACKEND_KEY` | Shared key of the proxy signature, a comma-separated list during a rotation, each key at least 32 characters. Production uses the file form below | none | with `PROXY_AUTH=required`, this or `MCP_PROXY_BACKEND_KEY_FILE` |
 | `MCP_PROXY_BACKEND_KEY_FILE` | Absolute path of a mounted file that holds the proxy key; wins over `MCP_PROXY_BACKEND_KEY` and is re-read lazily every 60 s, so a rotation needs no restart | none | with `PROXY_AUTH=required`, this or `MCP_PROXY_BACKEND_KEY` |
 | `COMMIT_SHA` | Commit of the deployed build, 7 to 40 lowercase hex characters; reported as `commit` by `GET /health` | none (`commit` is `null`) | no |
+| `TRUSTED_PROXY_HOPS` | Proxies between the caller and the server, counted from the right of `X-Forwarded-For`. It picks the client address when the proxy does not sign `x-mcp-auth-client-ip`, and with `PROXY_AUTH=off`. `0` means no proxy. The leftmost entries and the TCP peer are never used | `1` | no |
+| `SHARED_EGRESS_CIDRS` | Comma-separated IPv4 or IPv6 CIDRs whose addresses share one request budget and are not limited per address, because many users sit behind them. The default is Anthropic's outbound range used by claude.ai | `160.79.104.0/21` | no |
+| `EXTRA_ALLOWED_ORIGINS` | Comma-separated http(s) origins served next to the `PUBLIC_BASE_URL` origin. Requests without an `Origin` header are always served; a refused origin's host is logged as `origin_host` | `https://claude.ai,https://claude.com` | no |
+| `EDGE_MAX_INFLIGHT` | Most `POST /mcp` requests in flight at once; more get HTTP 429. Kept below the Cloud Run concurrency of 80 so our own 429 comes before Google's | `60` | no |
+| `EDGE_MAX_INFLIGHT_PER_IP` | Most requests in flight at once from one address (an IPv6 caller counts as its /64) | `6` | no |
+| `EDGE_IP_BURST` | Token-bucket size for one address: requests it may send at once | `40` | no |
+| `EDGE_IP_REFILL_PER_SEC` | Token-bucket refill for one address, in requests per second | `3` | no |
+| `EDGE_POOL_BURST` | Token-bucket size for the shared-egress pool. Above the request gate's capacity on purpose: under saturation the gate's in-band "busy, retry in N s" answer is friendlier to the model than an HTTP 429 | `200` | no |
+| `EDGE_POOL_REFILL_PER_SEC` | Token-bucket refill for the shared-egress pool, in requests per second | `20` | no |
+| `GATE_MAX_QUEUE_PER_KEY` | Most upstream calls one non-pool client may have waiting in the request gate; the shared pool is not capped per client | `8` | no |
 
 `ALTEGIO_API_TOKEN` has the same name and the same rule (any non-empty string) as in Altegio.Pro
 MCP. [`.env.example`](.env.example) carries the placeholder `your_partner_token_here`, so a copied

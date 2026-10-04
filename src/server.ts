@@ -17,6 +17,8 @@ import {
 } from './config/schema.js';
 import { createLogger } from './observability/logger.js';
 import { MIN_SECRET_LENGTH, scrubSecrets } from './observability/redact.js';
+import { createSharedEgressList } from './security/client-ip.js';
+import { createEdgeLimiter } from './security/edge-limiter.js';
 import { MIN_PROXY_KEY_LENGTH, parseProxyKeys } from './security/proxy-auth.js';
 import { productionTools } from './tools/registry.js';
 import { PACKAGE_NAME, PACKAGE_VERSION } from './util/package-metadata.js';
@@ -179,7 +181,9 @@ async function main(): Promise<void> {
         tokenSource,
         // One gate per process, shared by every request and session: all
         // upstream calls stay below the API limits together (BAPI-02).
-        gate: new RequestGate(),
+        gate: new RequestGate({
+          maxQueuePerKey: config.GATE_MAX_QUEUE_PER_KEY,
+        }),
       }),
     },
     logger,
@@ -187,6 +191,21 @@ async function main(): Promise<void> {
     allowedOrigins: [new URL(config.PUBLIC_BASE_URL).origin],
     allowLoopbackOrigins: config.NODE_ENV !== 'production',
     proxyAuth,
+    edge: {
+      limiter: createEdgeLimiter({
+        maxInflight: config.EDGE_MAX_INFLIGHT,
+        maxInflightPerIp: config.EDGE_MAX_INFLIGHT_PER_IP,
+        ipBurst: config.EDGE_IP_BURST,
+        ipRefillPerSec: config.EDGE_IP_REFILL_PER_SEC,
+        poolBurst: config.EDGE_POOL_BURST,
+        poolRefillPerSec: config.EDGE_POOL_REFILL_PER_SEC,
+      }),
+      identity: {
+        trustedHops: config.TRUSTED_PROXY_HOPS,
+        proxyAuthOn: config.PROXY_AUTH === 'required',
+        sharedEgress: createSharedEgressList(config.SHARED_EGRESS_CIDRS),
+      },
+    },
     commit: config.COMMIT_SHA ?? null,
   });
 

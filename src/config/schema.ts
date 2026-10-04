@@ -1,5 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
+import { isValidCidr } from '../security/client-ip.js';
 import {
   MIN_PROXY_KEY_LENGTH,
   parseProxyKeys,
@@ -23,6 +24,16 @@ export const CONFIG_KEYS = [
   'MCP_PROXY_BACKEND_KEY',
   'MCP_PROXY_BACKEND_KEY_FILE',
   'COMMIT_SHA',
+  'TRUSTED_PROXY_HOPS',
+  'SHARED_EGRESS_CIDRS',
+  'EXTRA_ALLOWED_ORIGINS',
+  'EDGE_MAX_INFLIGHT',
+  'EDGE_MAX_INFLIGHT_PER_IP',
+  'EDGE_IP_BURST',
+  'EDGE_IP_REFILL_PER_SEC',
+  'EDGE_POOL_BURST',
+  'EDGE_POOL_REFILL_PER_SEC',
+  'GATE_MAX_QUEUE_PER_KEY',
 ] as const;
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -48,6 +59,47 @@ const PROXY_AUTH_MODES = ['required', 'off'] as const;
 const COMMIT_SHA_FORMAT = /^[0-9a-f]{7,40}$/;
 
 const httpUrl = (): z.ZodURL => z.url({ protocol: /^https?$/ });
+
+// Edge protection numbers (OPS-06). The defaults are tuned by the load test
+// (plan 03-12); the README documents every one.
+const positiveInteger = (fallback: number) =>
+  z
+    .string()
+    .regex(/^\d+$/)
+    .transform(Number)
+    .pipe(z.number().int().min(1))
+    .default(fallback);
+
+const positiveNumber = (fallback: number) =>
+  z
+    .string()
+    .regex(/^\d+(\.\d+)?$/)
+    .transform(Number)
+    .pipe(z.number().positive())
+    .default(fallback);
+
+const commaList = (value: string): string[] =>
+  value.split(',').map((entry) => entry.trim());
+
+const isHttpUrl = (value: string): boolean =>
+  URL.canParse(value) && /^https?:$/.test(new URL(value).protocol);
+
+// Only the origin of each entry is kept, so a trailing slash or a path cannot
+// make an allowed origin miss the comparison in the origin guard.
+const originList = (fallback: string[]) =>
+  z
+    .string()
+    .transform(commaList)
+    .pipe(z.array(z.string().refine(isHttpUrl)).min(1))
+    .transform((entries) => entries.map((entry) => new URL(entry).origin))
+    .default(fallback);
+
+const cidrList = (fallback: string[]) =>
+  z
+    .string()
+    .transform(commaList)
+    .pipe(z.array(z.string().refine(isValidCidr)).min(1))
+    .default(fallback);
 
 // ALTEGIO_API_TOKEN is validated exactly as in Altegio.Pro MCP (D-02): any
 // non-empty string. A wrong or placeholder token shows up as a 401 on the
@@ -86,6 +138,28 @@ const ConfigSchema = z
       .refine((path) => isAbsolute(path))
       .optional(),
     COMMIT_SHA: z.string().regex(COMMIT_SHA_FORMAT).optional(),
+    // How many proxies sit between the caller and us, counted from the right of
+    // X-Forwarded-For. 1 is the platform proxy; 0 is a deployment with none.
+    TRUSTED_PROXY_HOPS: z
+      .string()
+      .regex(/^\d+$/)
+      .transform(Number)
+      .pipe(z.number().int().min(0))
+      .default(1),
+    // Anthropic's published outbound range: many claude.ai users share it, so
+    // it is one pool, not one caller.
+    SHARED_EGRESS_CIDRS: cidrList(['160.79.104.0/21']),
+    EXTRA_ALLOWED_ORIGINS: originList([
+      'https://claude.ai',
+      'https://claude.com',
+    ]),
+    EDGE_MAX_INFLIGHT: positiveInteger(60),
+    EDGE_MAX_INFLIGHT_PER_IP: positiveInteger(6),
+    EDGE_IP_BURST: positiveInteger(40),
+    EDGE_IP_REFILL_PER_SEC: positiveNumber(3),
+    EDGE_POOL_BURST: positiveInteger(200),
+    EDGE_POOL_REFILL_PER_SEC: positiveNumber(20),
+    GATE_MAX_QUEUE_PER_KEY: positiveInteger(8),
   })
   .superRefine(
     (config, ctx) => {
@@ -158,6 +232,9 @@ const ConfigSchema = z
 
 export type Config = z.output<typeof ConfigSchema>;
 
+const POSITIVE_INTEGER = 'must be a positive integer';
+const POSITIVE_NUMBER = 'must be a positive number';
+
 const MESSAGES: Readonly<
   Record<ConfigKey, { missing: string; invalid: string }>
 > = {
@@ -206,6 +283,48 @@ const MESSAGES: Readonly<
   COMMIT_SHA: {
     missing: 'is required (see .env.example)',
     invalid: 'must be 7 to 40 lowercase hexadecimal characters',
+  },
+  TRUSTED_PROXY_HOPS: {
+    missing: 'is required (see .env.example)',
+    invalid: 'must be a non-negative integer',
+  },
+  SHARED_EGRESS_CIDRS: {
+    missing: 'is required (see .env.example)',
+    invalid:
+      'must be a comma-separated list of IPv4 or IPv6 CIDRs, for example 160.79.104.0/21',
+  },
+  EXTRA_ALLOWED_ORIGINS: {
+    missing: 'is required (see .env.example)',
+    invalid:
+      'must be a comma-separated list of http(s) origins, for example https://claude.ai',
+  },
+  EDGE_MAX_INFLIGHT: {
+    missing: 'is required (see .env.example)',
+    invalid: POSITIVE_INTEGER,
+  },
+  EDGE_MAX_INFLIGHT_PER_IP: {
+    missing: 'is required (see .env.example)',
+    invalid: POSITIVE_INTEGER,
+  },
+  EDGE_IP_BURST: {
+    missing: 'is required (see .env.example)',
+    invalid: POSITIVE_INTEGER,
+  },
+  EDGE_IP_REFILL_PER_SEC: {
+    missing: 'is required (see .env.example)',
+    invalid: POSITIVE_NUMBER,
+  },
+  EDGE_POOL_BURST: {
+    missing: 'is required (see .env.example)',
+    invalid: POSITIVE_INTEGER,
+  },
+  EDGE_POOL_REFILL_PER_SEC: {
+    missing: 'is required (see .env.example)',
+    invalid: POSITIVE_NUMBER,
+  },
+  GATE_MAX_QUEUE_PER_KEY: {
+    missing: 'is required (see .env.example)',
+    invalid: POSITIVE_INTEGER,
   },
 };
 

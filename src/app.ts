@@ -11,7 +11,15 @@ import {
   createMcpRequestHandler,
   type SecretList,
 } from './mcp/stateless-handler.js';
-import { createCallLogMiddleware } from './observability/call-log.js';
+import {
+  createCallLogMiddleware,
+  getCallRecord,
+} from './observability/call-log.js';
+import {
+  classifyClient,
+  gateKeyOf,
+  resolveClientAddress,
+} from './security/client-ip.js';
 import { createProxyAuthMiddleware } from './security/proxy-auth.js';
 import type { DefinedTool } from './tools/factory.js';
 
@@ -155,9 +163,34 @@ export function createApp<D>(deps: AppDeps<D>): Express {
     next();
   };
 
-  // Chain: call log -> origin guard -> proxy auth -> body parser -> batch
-  // refusal -> MCP handler. Proxy auth runs before the body is parsed, so an
-  // unsigned request on the public run.app address costs no parsing.
+  // Which client a request belongs to, decided after the signature check so
+  // forwarded data is read only on a request the proxy vouched for (OPS-06).
+  // The key goes to the limiter and, through the gate, to the per-key queue
+  // cap; the address itself is never stored, only how many entries
+  // X-Forwarded-For carried.
+  const edge: RequestHandler[] = [];
+  if (deps.edge !== undefined && deps.edge !== null) {
+    const { limiter, identity } = deps.edge;
+    edge.push((req, res, next) => {
+      const { address, forwardedForCount } = resolveClientAddress({
+        headers: req.headers,
+        verified: res.locals.proxyVerified === true,
+        proxyAuthOn: identity.proxyAuthOn,
+        trustedHops: identity.trustedHops,
+      });
+      const classification = classifyClient(address, identity.sharedEgress);
+      res.locals.clientKind = classification.kind;
+      res.locals.clientKey = gateKeyOf(classification);
+      getCallRecord(res).forwarded_for_count = forwardedForCount;
+      next();
+    }, limiter);
+  }
+
+  // Chain: call log -> origin guard -> proxy auth -> client identity -> edge
+  // limiter (a limiter built by createEdgeLimiter() in src/server.ts) -> body
+  // parser -> batch refusal -> MCP handler. Proxy auth and the limiter run
+  // before the body is parsed, so an unsigned or excess request on the public
+  // run.app address costs no parsing.
   const proxyAuth: RequestHandler[] =
     deps.proxyAuth === undefined || deps.proxyAuth === null
       ? []
@@ -168,6 +201,7 @@ export function createApp<D>(deps: AppDeps<D>): Express {
     createCallLogMiddleware(deps.logger, toolNames),
     originGuard,
     ...proxyAuth,
+    ...edge,
     express.json({ limit: MCP_BODY_LIMIT }),
     rejectBatch,
     mcpHandler
