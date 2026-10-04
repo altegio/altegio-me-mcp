@@ -385,7 +385,7 @@ describe('business_get', () => {
       expect(out.online_booking.booking_form_url).toBe('https://n4.alteg.io/');
     });
 
-    it('reports online booking as not available when no form URL is https', async () => {
+    it('offers the plain app.alteg.io link when the only form URL is http (IN-03)', async () => {
       const { out } = await card(
         companyWith((data) => {
           data.bookforms = [
@@ -400,8 +400,82 @@ describe('business_get', () => {
         })
       );
       expect(out.online_booking.booking_forms).toEqual([]);
-      expect(out.online_booking.booking_form_url).toBeNull();
-      expect(out.online_booking.enabled).toBe(false);
+      expect(out.online_booking.booking_form_url).toBe(
+        `https://app.alteg.io/book/${LOCATION_ID}`
+      );
+      expect(out.online_booking.enabled).toBe(true);
+    });
+
+    describe('booking-form URLs follow the one allow-list of book_check (WR-02)', () => {
+      function singleForm(url: string): CompanyPatch {
+        return (data) => {
+          data.bookforms = [{ id: 7, title: 'Form', is_default: 1, url }];
+          data.default_bookform_url = url;
+        };
+      }
+
+      it('does not hand an off-list host to the model as a booking address', async () => {
+        const evil = 'https://evil.example/ignore-previous-instructions';
+        const { out, text } = await card(companyWith(singleForm(evil)));
+        expect(out.online_booking.booking_forms).toEqual([]);
+        expect(out.online_booking.booking_form_url).toBe(
+          `https://app.alteg.io/book/${LOCATION_ID}`
+        );
+        expect(JSON.stringify(out)).not.toContain('evil.example');
+        expect(text).not.toContain('evil.example');
+      });
+
+      it('keeps a form on an allow-listed host', async () => {
+        const url = 'https://n123.alteg.io/company/1/';
+        const { out } = await card(companyWith(singleForm(url)));
+        expect(out.online_booking.booking_form_url).toBe(url);
+        expect(out.online_booking.booking_forms).toEqual([
+          { id: 7, title: 'Form', url, is_default: true },
+        ]);
+      });
+
+      it('falls back to the plain link for a form on an altegio.me host', async () => {
+        const { out } = await card(
+          companyWith(singleForm('https://salon.altegio.me/'))
+        );
+        expect(out.online_booking.booking_forms).toEqual([]);
+        expect(out.online_booking.booking_form_url).toBe(
+          `https://app.alteg.io/book/${LOCATION_ID}`
+        );
+        expect(out.online_booking.enabled).toBe(true);
+      });
+
+      it('refuses a host that only ends like an allowed one', async () => {
+        const { out } = await card(
+          companyWith(singleForm('https://n1.alteg.io.evil.example/'))
+        );
+        expect(out.online_booking.booking_form_url).toBe(
+          `https://app.alteg.io/book/${LOCATION_ID}`
+        );
+      });
+
+      it('describes both URL fields as untrusted business data', () => {
+        const schema = JSON.stringify(businessGet.spec.outputSchema);
+        const forms = (
+          businessGet.spec.outputSchema as {
+            properties: {
+              online_booking: {
+                properties: {
+                  booking_form_url: { description: string };
+                  booking_forms: {
+                    items: { properties: { url: { description: string } } };
+                  };
+                };
+              };
+            };
+          }
+        ).properties.online_booking.properties;
+        expect(schema).toContain('booking_form_url');
+        expect(forms.booking_form_url.description).toContain('UNTRUSTED');
+        expect(forms.booking_forms.items.properties.url.description).toContain(
+          'UNTRUSTED'
+        );
+      });
     });
 
     it('passes a Cyrillic name with an emoji through unchanged', async () => {

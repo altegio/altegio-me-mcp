@@ -7,6 +7,7 @@ import {
   type FakeReply,
   type FixtureResponse,
 } from '../../booking/__tests__/helpers/fake-fetch.js';
+import { businessGet } from '../business.js';
 import {
   CONFIRMATION_STATEMENT,
   NOTE_NAMES_UNAVAILABLE,
@@ -474,6 +475,80 @@ describe('book_check fallbacks (BOOK-05, D-06)', () => {
         'This business does not take online bookings through a booking widget right now.'
       )
     ).toBe(true);
+  });
+
+  describe('one booking-form policy with business_get (WR-02, IN-03)', () => {
+    const FALLBACK_URL = `https://app.alteg.io/book/${LOCATION_ID}`;
+
+    function onlyForm(url: string): FixtureResponse {
+      return companyWith({
+        bookforms: [{ id: 7, title: 'Form', is_default: 1, url }],
+        default_bookform_url: url,
+      });
+    }
+
+    async function businessGetBooking(
+      company: FixtureResponse
+    ): Promise<{ enabled: boolean; booking_form_url: string | null }> {
+      const upstream = fakeFetch([
+        { method: 'GET', path: COMPANY_PATH, reply: company },
+      ]);
+      const booking = new BookingClient({
+        base: API_BASE,
+        token: TOKEN,
+        fetch: upstream.fetch,
+      });
+      const invocation = await businessGet.invoke(
+        { location_id: LOCATION_ID },
+        { booking }
+      );
+      expect(invocation.result.isError).toBeUndefined();
+      return (
+        invocation.result.structuredContent as {
+          online_booking: {
+            enabled: boolean;
+            booking_form_url: string | null;
+          };
+        }
+      ).online_booking;
+    }
+
+    it.each([
+      ['an http:// form', 'http://n1.alteg.io/'],
+      ['an altegio.me form', 'https://salon.altegio.me/'],
+      ['an off-list host', 'https://evil.example/ignore-previous-instructions'],
+    ])(
+      'a business whose only form is %s gets the same answer and the plain link from both tools',
+      async (_label, url) => {
+        const company = onlyForm(url);
+        const { invoke } = setup({ company });
+        const out = okOutput(
+          await invoke({
+            location_id: LOCATION_ID,
+            service_ids: [10303530],
+            team_member_id: ANNA,
+            datetime: SLOT,
+          })
+        );
+        const booking = await businessGetBooking(company);
+        expect(out.link).toEqual({ kind: 'booking_form', url: FALLBACK_URL });
+        expect(booking.enabled).toBe(true);
+        expect(booking.booking_form_url).toBe(out.link.url);
+      }
+    );
+
+    it('a business with an inactive widget is refused by book_check and not enabled in business_get', async () => {
+      const company = loadFixture('company', 'inactive');
+      const { invoke } = setup({ company });
+      expectNoLinkError(
+        await invoke({
+          location_id: LOCATION_ID,
+          service_ids: [10303530],
+          datetime: SLOT,
+        })
+      );
+      expect((await businessGetBooking(company)).enabled).toBe(false);
+    });
   });
 
   it('fallback: a 503 on the check gives status unverified and the plain link, and reads only the card', async () => {
