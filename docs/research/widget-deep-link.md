@@ -169,41 +169,56 @@ driven:
 
 ## Browser check results
 
-- Run: 2026-10-04 06:13 UTC (`npm --prefix scripts/browser-check start`), Google Chrome
+- Run: 2026-10-04 06:41 UTC (`npm --prefix scripts/browser-check start`), Google Chrome
   154.0.8037.93, headed, Playwright 1.63.0.
-- Location 726120 "BaBarber", booking form 1472304. Link host `n1472304.alteg.io`.
+- Location 726120 "BaBarber" (time zone Asia/Bangkok, +07:00), booking form 1472304. Link host
+  `n1472304.alteg.io`.
 - Demo location 722227, used in the examples above, could not be used: its widget is inactive
-  (`company.active` 0, see plan 02-09). The owner chose 726120 instead on 2026-10-04. The run
-  passed the location as `ALTEGIO_E2E_LOCATION_ID=726120` in the process environment, so the
-  local env file was not changed.
-- Evidence: `scripts/browser-check/output/2026-10-04T06-13-33-050Z/` (git-ignored) holds
-  `results.json` and `plain-fallback.png`. It also holds three read-only widget screenshots,
-  taken by opening the step URLs directly without any click: `widget-probe-select-master.png`,
-  `widget-probe-select-services.png` and `widget-probe-select-time.png`.
-- What discovery found: the partner API lists 8 team members at 726120, none of them bookable,
-  and 0 services bookable online. The widget shows the same thing: all 8 professionals are
-  listed, "Select services" says "Nothing found", and "Select date and time" says "There are no
-  available spots for upcoming months". With no free slot to verify with `book_check`, the check
-  had no pre-selected link to open.
+  (`company.active` 0, see plan 02-09). The owner chose 726120 instead, and on 2026-10-04
+  configured it for this check (services enabled for online booking, team members bookable,
+  schedules for the coming days). The run passed the location as `ALTEGIO_E2E_LOCATION_ID=726120`
+  in the process environment, so the local env file was not changed.
+- An earlier run the same day (06:13 UTC, before that setup) found no bookable service and no
+  free time at 726120, so only `plain-fallback` could run then. This run replaces it.
+- Slot used: 2026-10-04 14:00 local time with team member Max Rivera (3110938) and service "VIP
+  Barber Package" (13884511); the second service is "Face Care" (13884510). `book_check` returned
+  201 for each linked combination before its link was opened. The cases ran between 13:41 and
+  13:44 local time, 16 to 19 minutes before the slot.
+- Evidence: `scripts/browser-check/output/2026-10-04T06-41-30-024Z/` (git-ignored) holds
+  `results.json` and one PNG per run case: `single-named.png`, `multi-services.png`,
+  `any-member.png`, `plain-fallback.png`, `taken-slot.png`, `menu-and-steps.png`,
+  `personal-or-group.png`.
 
 | Case | Link kind | Expected | Seen | Result | Note |
 |------|-----------|----------|------|--------|------|
-| single-named | - | service, team member and time pre-selected | no link: 8 team members, 0 bookable | not-run | location has no free slot (BOOK-04 core not shown) |
-| multi-services | - | two services pre-selected | no link: 8 team members, 0 bookable | not-run | location has no free slot |
-| any-member | - | service and time pre-selected with `m-1` | no link: 0 services for any team member | not-run | location has no service bookable online |
+| single-named | preselected | service, team member and time pre-selected | menu form: Max Rivera, "Sunday, 4 October 14:00 — 14:33", VIP Barber Package | pass | BOOK-04 core; link `?o=m3110938s13884511d2604101400` |
+| multi-services | preselected | two services, team member and time pre-selected | Max Rivera, VIP Barber Package and Face Care selected; date row says "Select date and time" | fail | time not applied within 30 s; the combination was confirmed free by `book_check` |
+| any-member | preselected | service and time pre-selected with `m-1` | "Any available professional", VIP Barber Package; date row says "Select date and time" | fail | `m-1` and the service applied; time not applied within 30 s |
 | plain-fallback | booking_form | form opens with nothing pre-selected | lands on `/company/726120/personal/menu?o=` (empty `o=`), menu style, nothing selected | pass | BOOK-05 link |
-| taken-slot | - | no time selected for a non-free time | no link | not-run | needs a free slot to shift by one minute |
-| menu-and-steps | - | time shown in the menu form and the step form | main form is menu style (from plain-fallback); no link | not-run | needs a free slot; `BROWSER_CHECK_STEPS_LOCATION_ID` not set |
-| personal-or-group | - | no personal-or-group chooser | plain link skips the chooser and lands on the menu | not-run | the pre-selected link was not opened |
+| taken-slot | preselected | no time selected for a non-free time (14:01) | widget dropped the `d` token (final URL `?o=m3110938s13884511`); team member and service kept, "Select date and time" | pass | matches the silent reset described in "Landing behaviour" |
+| menu-and-steps | preselected | time shown in the menu form | same link as single-named; this load showed "Select date and time" | fail | menu style only; `BROWSER_CHECK_STEPS_LOCATION_ID` not set, so the step-by-step style was not run |
+| personal-or-group | preselected | no personal-or-group chooser | same link as single-named; lands on the menu with team member, 14:00 and the service selected | pass | the form offers no group events, so no chooser exists to skip |
 | half-hour-zone | - | time kept in a half-hour zone | - | not-run | `BROWSER_CHECK_HALF_HOUR_LOCATION_ID` not set |
-| dst-boundary | - | time kept after an offset change | no link | not-run | needs a free slot |
+| dst-boundary | - | time kept after an offset change | - | not-run | Asia/Bangkok has no offset change in the 28 bookable dates (2026-10-04 to 2026-10-31) |
 | any-member-disabled | - | widget reaction to `m-1` when disabled | - | not-run | `BROWSER_CHECK_ANY_DISABLED_LOCATION_ID` not set |
-| slug-host | - | same link on an `altegio.me` host | no link | not-run | needs a free slot |
+| slug-host | - | same link on an `altegio.me` host | - | not-run | no booking form of 726120 is on an `altegio.me` host |
 | group-event-order | - | - | - | not applicable | group events are deferred (EXT-01); the builder never writes `aid` or `act` |
 
-B4 status: partial: the plain booking-form link (BOOK-05) opened the form with nothing
-pre-selected on 2026-10-04 (location 726120, form 1472304); the BOOK-04 core (service, team
-member and time pre-selected) was not shown in a browser, because location 726120 has no service
-bookable online and no free time, so no pre-selected link could be verified and opened.
+What the three failures have in common: the widget applied the team member (or `m-1`) and every
+service but left the time unselected, and it kept that state for the whole 30 s wait. The link is
+not the cause: `menu-and-steps` and `personal-or-group` opened the very same link as
+`single-named`, at 13:43:41 and 13:43:48 local time; the first load showed no time, the second
+showed 14:00 selected. The time pre-selection therefore did not hold on every page load in this
+run. Possible causes, not confirmed: a race in the widget between its own free-time request and
+applying the `d` token, or the slot being close to the start (the widget applies the time only
+when it equals one of the free times it loads itself). `src/booking/deep-link.ts` was not
+changed.
+
+B4 status: partial: on 2026-10-04 (location 726120, form 1472304) the BOOK-04 core passed in
+`single-named` (service, team member and time pre-selected, and again in `personal-or-group` with
+the same link), the plain booking-form link (BOOK-05) opened the form with nothing pre-selected,
+and a non-free time was dropped (`taken-slot`); the time was not applied in `multi-services`,
+`any-member` and `menu-and-steps`, the last with the same link as `single-named`, so the time
+pre-selection is not reliable on every page load.
 
 Owner review: pending
