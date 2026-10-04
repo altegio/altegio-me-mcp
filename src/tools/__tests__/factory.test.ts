@@ -1,12 +1,15 @@
 import { describe, expect, it } from '@jest/globals';
 import { z } from 'zod';
 import { BookingClient } from '../../booking/client.js';
+import { UpstreamError } from '../../booking/errors.js';
+import { GateSaturatedError } from '../../booking/gate.js';
 import {
   fakeFetch,
   loadFixture,
 } from '../../booking/__tests__/helpers/fake-fetch.js';
 import { businessGet } from '../business.js';
 import { createToolContext } from '../context.js';
+import { ToolError } from '../errors.js';
 import type { ToolDeps } from '../registry.js';
 import {
   defineTool,
@@ -444,5 +447,125 @@ describe('tool context (WR-04, D-01)', () => {
     await tool.invoke({}, undefined, createToolContext(undefined, 'client-9'));
     await tool.invoke({}, undefined);
     expect(seen).toEqual(['client-9', null]);
+  });
+});
+
+describe('upstream failure fields of an invocation (OPS-05, Pitfall 17)', () => {
+  function throwing(
+    thrown: () => Error
+  ): ReturnType<typeof defineTool<typeof countInput, typeof countOutput>> {
+    return defineTool({
+      name: 'demo_throws',
+      title: 'Throw demo',
+      description: 'Throws what it is given.',
+      annotations: readHints,
+      input: countInput,
+      output: countOutput,
+      render: (out) => `Count: ${out.count}`,
+      handler: () => Promise.reject(thrown()),
+    });
+  }
+
+  const upstream = (
+    kind: 'unauthorized' | 'rate_limited',
+    status: number | null
+  ) => new UpstreamError(kind, '/company/{location_id}', { status });
+
+  /** `inner` wrapped in `causes` plain errors, each the cause of the one above. */
+  function wrapped(inner: Error, causes: number): Error {
+    let current: Error = inner;
+    for (let level = 0; level < causes; level += 1) {
+      current = new Error(`level ${level}`, { cause: current });
+    }
+    return current;
+  }
+
+  it('names the kind of the UpstreamError behind a ToolError', async () => {
+    const invocation = await throwing(
+      () =>
+        new ToolError('Not accepted.', 'try later.', {
+          cause: upstream('unauthorized', 401),
+        })
+    ).invoke({}, undefined);
+    expect(invocation.outcome).toBe('tool_error');
+    expect(invocation.upstreamKind).toBe('unauthorized');
+    expect(invocation.gateLimited).toBe(false);
+  });
+
+  it('reads a rate_limited kind from a real 429 as upstream throttling', async () => {
+    const invocation = await throwing(() =>
+      upstream('rate_limited', 429)
+    ).invoke({}, undefined);
+    expect(invocation.upstreamKind).toBe('rate_limited');
+    expect(invocation.gateLimited).toBe(false);
+  });
+
+  it('reports a call our own gate turned away as gateLimited with no upstream kind', async () => {
+    const invocation = await throwing(
+      () =>
+        new ToolError('Busy.', 'wait.', {
+          cause: new UpstreamError('rate_limited', '/company/{location_id}', {
+            status: null,
+            cause: new GateSaturatedError(3),
+          }),
+        })
+    ).invoke({}, undefined);
+    expect(invocation.upstreamKind).toBeNull();
+    expect(invocation.gateLimited).toBe(true);
+  });
+
+  it('finds an UpstreamError up to five levels down and no deeper', async () => {
+    const found = await throwing(() =>
+      wrapped(upstream('unauthorized', 401), 4)
+    ).invoke({}, undefined);
+    expect(found.upstreamKind).toBe('unauthorized');
+    const tooDeep = await throwing(() =>
+      wrapped(upstream('unauthorized', 401), 5)
+    ).invoke({}, undefined);
+    expect(tooDeep.upstreamKind).toBeNull();
+  });
+
+  it('carries null and false for a non-upstream error, an invalid call and a success', async () => {
+    const plain = await throwing(() => new Error('boom')).invoke({}, undefined);
+    expect(plain.upstreamKind).toBeNull();
+    expect(plain.gateLimited).toBe(false);
+    const toolOnly = await throwing(
+      () => new ToolError('Nope.', 'fix it.')
+    ).invoke({}, undefined);
+    expect(toolOnly.upstreamKind).toBeNull();
+    const invalid = await countTool().invoke({ count: 'x' }, undefined);
+    expect(invalid.outcome).toBe('invalid_params');
+    expect(invalid.upstreamKind).toBeNull();
+    expect(invalid.gateLimited).toBe(false);
+    const ok = await countTool().invoke({}, undefined);
+    expect(ok.upstreamKind).toBeNull();
+    expect(ok.gateLimited).toBe(false);
+  });
+
+  it('does not blame the upstream for a call that ended by deadline or disconnect', async () => {
+    const parent = new AbortController();
+    const tool = defineTool({
+      name: 'demo_dropped',
+      title: 'Dropped demo',
+      description: 'Fails as a dropped upstream call does.',
+      annotations: readHints,
+      input: countInput,
+      output: countOutput,
+      render: (out) => `Count: ${out.count}`,
+      handler: () => {
+        parent.abort();
+        return Promise.reject(
+          new UpstreamError('unavailable', '/company/{location_id}')
+        );
+      },
+    });
+    const invocation = await tool.invoke(
+      {},
+      undefined,
+      createToolContext(parent.signal, null, 60_000)
+    );
+    expect(invocation.errorType).toBe('ClientGone');
+    expect(invocation.upstreamKind).toBeNull();
+    expect(invocation.gateLimited).toBe(false);
   });
 });

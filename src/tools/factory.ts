@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { UpstreamErrorKind } from '../booking/errors.js';
 import { NO_TOOL_CONTEXT, isDeadline, type ToolContext } from './context.js';
 import { textResult, toolErrorResult } from './result.js';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from './untrusted.js';
@@ -39,6 +40,10 @@ export interface ToolInvocation {
   result: ToolResult;
   outcome: ToolOutcome;
   errorType: string | null;
+  /** Kind of the Altegio API failure behind a tool error; null otherwise (OPS-05). */
+  upstreamKind: UpstreamErrorKind | null;
+  /** True when our own request gate turned the call away, nothing was sent upstream. */
+  gateLimited: boolean;
 }
 
 /** Rendered text per call is capped here (research Pitfall 16, A11). */
@@ -228,6 +233,8 @@ export function defineTool<
           },
           outcome: 'tool_error',
           errorType: 'OutputTooLarge',
+          upstreamKind: null,
+          gateLimited: false,
         };
       }
 
@@ -241,6 +248,8 @@ export function defineTool<
         result: textResult(capText(text), data),
         outcome: 'ok',
         errorType: null,
+        upstreamKind: null,
+        gateLimited: false,
       };
     },
   };
