@@ -1,3 +1,4 @@
+import type { SecretSource } from '../config/secret-source.js';
 import { scrubSecrets } from '../observability/redact.js';
 import { UpstreamError, type UpstreamErrorKind } from './errors.js';
 import {
@@ -45,7 +46,10 @@ export const PASS_THROUGH_GATE: GateLike = Object.freeze({
 
 export interface BookingHttpOptions {
   base: string;
-  token: string;
+  /** A plain token, wrapped in a static source. Exactly one of token and tokenSource. */
+  token?: string;
+  /** A token that can change while the process runs. */
+  tokenSource?: SecretSource;
   fetch?: typeof fetch;
   gate?: GateLike;
   timeoutMs?: number;
@@ -177,7 +181,7 @@ export class BookingHttp {
     this.base = options.base.endsWith('/')
       ? options.base.slice(0, -1)
       : options.base;
-    this.token = options.token;
+    this.token = options.token ?? '';
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.gate = options.gate ?? PASS_THROUGH_GATE;
     this.timeoutMs = options.timeoutMs ?? UPSTREAM_TIMEOUT_MS;

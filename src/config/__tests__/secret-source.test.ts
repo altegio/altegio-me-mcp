@@ -213,12 +213,35 @@ describe('createFileSecretSource: known() and refresh()', () => {
     expect(h.source.known()).toEqual([NEW_KEY, OLD_KEY]);
   });
 
-  it('does not read before the TTL and reports false', async () => {
+  it('re-reads on demand even before the lazy TTL, and resolves true when the value changed (OPS-04)', async () => {
     const h = await harness(OLD_KEY);
     h.file.payload = NEW_KEY;
     await h.clock.sleep(SECRET_TTL_MS - 1);
+    await expect(h.source.refresh()).resolves.toBe(true);
+    expect(h.reads()).toBe(2);
+    expect(h.source.current()).toBe(NEW_KEY);
+  });
+
+  it('is not used up by a lazy re-read: a forced one still runs right after it', async () => {
+    const h = await harness(OLD_KEY);
+    await h.advance(SECRET_TTL_MS);
+    expect(h.reads()).toBe(2);
+    h.file.payload = NEW_KEY;
+    await expect(h.source.refresh()).resolves.toBe(true);
+    expect(h.reads()).toBe(3);
+  });
+
+  it('forces at most one re-read per TTL, counted from the last forced one', async () => {
+    const h = await harness(OLD_KEY);
     await expect(h.source.refresh()).resolves.toBe(false);
-    expect(h.reads()).toBe(1);
+    expect(h.reads()).toBe(2);
+    h.file.payload = NEW_KEY;
+    await h.clock.sleep(SECRET_TTL_MS - 1);
+    await expect(h.source.refresh()).resolves.toBe(false);
+    expect(h.reads()).toBe(2);
+    await h.clock.sleep(1);
+    await expect(h.source.refresh()).resolves.toBe(true);
+    expect(h.reads()).toBe(3);
   });
 
   it('reads once after the TTL, resolves true when the value changed and false when not', async () => {

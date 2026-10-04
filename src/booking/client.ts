@@ -341,10 +341,12 @@ function toTeamMember(member: TeamMembersData[number]): TeamMember {
   };
 }
 
+export type BookingClientOptions = BookingHttpOptions;
+
 export class BookingClient {
   private readonly http: BookingHttp;
 
-  constructor(options: BookingHttpOptions) {
+  constructor(options: BookingClientOptions) {
     this.http = new BookingHttp(options);
   }
 
