@@ -892,6 +892,15 @@ describe('business_list_services (DISC-02)', () => {
     expect(upstream.calls).toHaveLength(0);
   });
 
+  it.each(['2026-13-45T99:99:99+99:99', '2026-02-31T10:00:00+03:00'])(
+    'rejects the datetime %s as invalid input before any request (WR-01)',
+    async (datetime) => {
+      const { invocation, upstream } = await listServices({ datetime });
+      expect(invocation.outcome).toBe('invalid_params');
+      expect(upstream.calls).toHaveLength(0);
+    }
+  );
+
   it('keeps forged markup in a service title out of its own text', async () => {
     const fixture = structuredClone(loadFixture('book_services', 'default'));
     const data = (fixture.body as { data: { services: { title: string }[] } })
@@ -1011,6 +1020,15 @@ describe('business_list_team_members (DISC-03)', () => {
     expect(upstream.calls).toHaveLength(0);
   });
 
+  it.each(['2026-13-45T99:99:99+99:99', '2026-02-31T10:00:00+03:00'])(
+    'rejects the datetime %s as invalid input before any request (WR-01)',
+    async (datetime) => {
+      const { invocation, upstream } = await listTeamMembers({ datetime });
+      expect(invocation.outcome).toBe('invalid_params');
+      expect(upstream.calls).toHaveLength(0);
+    }
+  );
+
   it('says no team member can be booked for this selection when the list is empty (edge empty)', async () => {
     const { out, text } = await listTeamMembers(
       {},
@@ -1025,6 +1043,59 @@ describe('business_list_team_members (DISC-03)', () => {
     const { out } = await listTeamMembers({ page: 2, page_size: 2 });
     expect(out.items.map((item) => item.id)).toEqual([2098148, 2098149]);
     expect(out.pagination.has_more).toBe(false);
+  });
+
+  describe('a rating is shown only when somebody rated the team member (CR-01)', () => {
+    function staffWith(member: Record<string, unknown>): FixtureResponse {
+      return {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        body: {
+          success: true,
+          data: [
+            { id: 2820042, name: 'Team member', bookable: true, ...member },
+          ],
+          meta: [],
+        },
+      };
+    }
+
+    it('returns rating null and says no rating shown for rating 0, show_rating 1, votes_count 0', async () => {
+      const { out, text } = await listTeamMembers(
+        {},
+        staffWith({ rating: 0, show_rating: 1, votes_count: 0 })
+      );
+      expect(out.items[0]?.rating).toBeNull();
+      expect(summaryPart(text)).toContain(
+        'team member 2820042: no rating shown'
+      );
+      expect(text).not.toContain('rating 0');
+    });
+
+    it('keeps a positive rating that has votes', async () => {
+      const { out, text } = await listTeamMembers(
+        {},
+        staffWith({ rating: 4.8, show_rating: 1, votes_count: 12 })
+      );
+      expect(out.items[0]?.rating).toBe(4.8);
+      expect(summaryPart(text)).toContain('team member 2820042: rating 4.8');
+    });
+
+    it('keeps a positive rating when the payload has no votes_count', async () => {
+      const { out } = await listTeamMembers(
+        {},
+        staffWith({ rating: 5, show_rating: 1 })
+      );
+      expect(out.items[0]?.rating).toBe(5);
+    });
+
+    it('keeps rating null when the business hides ratings, whatever the votes', async () => {
+      const { out } = await listTeamMembers(
+        {},
+        staffWith({ rating: 4.9, show_rating: 0, votes_count: 30 })
+      );
+      expect(out.items[0]?.rating).toBeNull();
+    });
   });
 
   it('turns the 422 for a past datetime into a chosen-time error with a next action', async () => {

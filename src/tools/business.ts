@@ -7,6 +7,7 @@ import {
   type TeamMember,
   type TimeSlot,
 } from '../booking/client.js';
+import { calendarDayNumber } from '../booking/calendar.js';
 import {
   SLOT_DATETIME_PATTERN,
   formatUtcOffset,
@@ -260,6 +261,9 @@ const DATETIME_FILTER_DESCRIPTION =
 const datetimeFilter = z
   .string()
   .regex(SLOT_DATETIME_PATTERN)
+  .refine((value) => parseSlotDatetime(value) !== null, {
+    message: 'must be a slot datetime with a valid date, time and offset',
+  })
   .optional()
   .describe(DATETIME_FILTER_DESCRIPTION);
 
@@ -616,25 +620,6 @@ export const businessListTeamMembers = defineTool<
 
 /** Widest date range business_list_dates asks for, in days (02-RESEARCH Pitfall 6). */
 export const MAX_DATE_RANGE_DAYS = 62;
-
-/** Day number of a YYYY-MM-DD date that exists in the calendar, else null. */
-function calendarDayNumber(value: string): number | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  const [, year, month, day] = match ?? [];
-  if (year === undefined || month === undefined || day === undefined) {
-    return null;
-  }
-  const ms = Date.UTC(Number(year), Number(month) - 1, Number(day));
-  const date = new Date(ms);
-  if (
-    date.getUTCFullYear() !== Number(year) ||
-    date.getUTCMonth() !== Number(month) - 1 ||
-    date.getUTCDate() !== Number(day)
-  ) {
-    return null;
-  }
-  return ms / 86_400_000;
-}
 
 function calendarDate(description: string) {
   return z
