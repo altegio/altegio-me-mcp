@@ -11,6 +11,11 @@
 // records what the widget shows, with one screenshot per case. It only reads
 // pages: it never interacts with the widget, so no booking can result.
 // Text matching only; the widget DOM is not a contract (02-RESEARCH A9).
+//
+// BROWSER_CHECK_MIN_LEAD_HOURS (default 0) makes discovery skip slots that
+// start sooner than that many hours after it starts. After the cases, the
+// single-named link is loaded BROWSER_CHECK_REPEAT_LOADS more times
+// (default 3) to count how often the widget applies the pre-selection.
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
@@ -39,6 +44,8 @@ const MAX_TEAM_MEMBERS = 5;
 const MAX_SERVICE_GROUPS = 5;
 const MAX_DATES = 3;
 const MAX_CHECKS_PER_DATE = 3;
+const DEFAULT_REPEAT_LOADS = 3;
+const HOUR_MS = 3_600_000;
 const PACKAGE_DIR = import.meta.dirname;
 
 export const CASES = [
@@ -140,12 +147,39 @@ interface CaseResult {
   screenshot: string | null;
 }
 
+/** One extra page load of the same link (repeated-load tally). */
+interface RepeatLoad {
+  load: number;
+  at: string;
+  final_url: string | null;
+  /** Expectation label -> held on this load. */
+  checks: Record<string, boolean>;
+  time_range: string | null;
+  all_held: boolean;
+  screenshot: string | null;
+  error: string | null;
+}
+
+interface RepeatResult {
+  case: CaseId;
+  link: string | null;
+  loads: RepeatLoad[];
+  /** Expectation label -> number of loads on which it held. */
+  tally: Record<string, number>;
+  all_held: number;
+  /** Why the loads did not run; null when they ran. */
+  reason: string | null;
+}
+
 interface Results {
   run_at: string;
   chrome_version: string;
   location_id: number;
   form_id: number | null;
+  discovered_at: string;
+  min_lead_hours: number;
   cases: CaseResult[];
+  repeat_loads: RepeatResult;
 }
 
 interface ChosenService {
@@ -153,16 +187,26 @@ interface ChosenService {
   title: string;
 }
 
+/** Discovery ignores slots that start before `earliest` (BROWSER_CHECK_MIN_LEAD_HOURS). */
+interface LeadWindow {
+  /** When discovery started, ms since the epoch. */
+  startedAt: number;
+  minLeadHours: number;
+  /** startedAt plus the minimum lead, ms since the epoch. */
+  earliest: number;
+}
+
 /** A verified free slot: book_check returned 201 for exactly this selection. */
 interface Selection {
   card: BusinessCard;
+  lead: LeadWindow;
   /** 0 = any team member. */
   teamMemberId: number;
   teamMemberName: string | null;
   services: readonly ChosenService[];
-  /** Every date with free time for this selection, sorted. */
+  /** Every date with free time for this selection on or after the lead window, sorted. */
   dates: readonly string[];
-  /** The free slots of the chosen date. */
+  /** The free slots of the chosen date that start inside the lead window. */
   slots: readonly TimeSlot[];
   slot: TimeSlot;
 }
@@ -295,7 +339,50 @@ function selectionNotes(selection: Selection): string[] {
   const services = selection.services.map((service) => service.id).join(', ');
   return [
     `discovery: location ${selection.card.locationId}, ${member}, services ${services}, slot ${selection.slot.datetime}, verified by book_check (201)`,
+    `discovery: ${leadText(selection.slot, selection.lead)}`,
   ];
+}
+
+/** How far after discovery the slot starts, and the minimum lead asked for. */
+function leadText(slot: TimeSlot, lead: LeadWindow): string {
+  const start = Date.parse(slot.datetime);
+  if (!Number.isFinite(start)) return `slot start ${slot.datetime} not parsed`;
+  const minutes = Math.round((start - lead.startedAt) / 60_000);
+  const hours = Math.floor(minutes / 60);
+  return `slot starts ${hours} h ${minutes - hours * 60} min after discovery (minimum lead ${lead.minLeadHours} h)`;
+}
+
+/** True when the slot starts no earlier than the lead window allows. */
+function inLeadWindow(slot: TimeSlot, lead: LeadWindow): boolean {
+  if (lead.minLeadHours === 0) return true;
+  const start = Date.parse(slot.datetime);
+  return Number.isFinite(start) && start >= lead.earliest;
+}
+
+/** The business's calendar date (YYYY-MM-DD) at an instant; null when its zone is unknown. */
+function businessDate(instant: number, card: BusinessCard): string | null {
+  if (card.timeZoneName !== null) {
+    try {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: card.timeZoneName,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date(instant));
+    } catch {
+      // Unknown zone name: fall back to the fixed offset below.
+    }
+  }
+  if (card.utcOffsetHours === null) return null;
+  return new Date(instant + card.utcOffsetHours * HOUR_MS)
+    .toISOString()
+    .slice(0, 10);
+}
+
+/** The first "HH:MM — HH:MM" range on the page, as shown; null when none. */
+function timeRange(text: string): string | null {
+  const match = /(\d{1,2}:\d{2})\s*[—–-]\s*(\d{1,2}:\d{2})/.exec(text);
+  return match === null ? null : `${match[1]} — ${match[2]}`;
 }
 
 /** Service titles, the team member's name, HH:MM and the day of the slot. */
@@ -361,12 +448,12 @@ function zoneOffsetMinutes(timeZone: string, date: string): number | null {
   }
 }
 
-function positiveIntFromEnv(name: string): number | null {
+function positiveIntFromEnv(name: string, what = 'location id'): number | null {
   const raw = process.env[name];
   if (raw === undefined || raw.trim() === '') return null;
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`${name} must be a positive integer location id`);
+    throw new Error(`${name} must be a positive integer ${what}`);
   }
   return value;
 }
@@ -470,15 +557,22 @@ async function candidates(
   return found;
 }
 
-/** The first verified free slot for the mode, or the reason there is none. */
+/**
+ * The first verified free slot for the mode that starts inside the lead
+ * window, or the reason there is none.
+ */
 async function findSelection(
   client: BookingClient,
   card: BusinessCard,
   mode: 'named' | 'any',
-  serviceCount: number
+  serviceCount: number,
+  lead: LeadWindow
 ): Promise<Selection | string> {
   // What discovery saw, so a "no verified free slot" reason says why.
   const trace: string[] = [];
+  // Dates before the business's date at the end of the lead cannot hold a slot in the window.
+  const firstDate =
+    lead.minLeadHours === 0 ? null : businessDate(lead.earliest, card);
   try {
     const locationId = card.locationId;
     for (const candidate of await candidates(
@@ -496,17 +590,24 @@ async function findSelection(
             teamMemberId: candidate.teamMemberId,
           })
         ),
-      ].sort();
+      ]
+        .filter((date) => firstDate === null || date >= firstDate)
+        .sort();
       const who = `m${candidate.teamMemberId === 0 ? '-1' : candidate.teamMemberId} s${ids.join('s')}`;
-      trace.push(`${who}: ${dates.length} date(s)`);
+      trace.push(
+        `${who}: ${dates.length} date(s)${firstDate === null ? '' : ` from ${firstDate}`}`
+      );
       for (const date of dates.slice(0, MAX_DATES)) {
-        const slots = await client.timeSlots(
+        const all = await client.timeSlots(
           locationId,
           candidate.teamMemberId,
           date,
           ids
         );
-        trace.push(`${who} ${date}: ${slots.length} slot(s)`);
+        const slots = all.filter((slot) => inLeadWindow(slot, lead));
+        trace.push(
+          `${who} ${date}: ${all.length} slot(s)${lead.minLeadHours === 0 ? '' : `, ${slots.length} at least ${lead.minLeadHours} h ahead`}`
+        );
         for (const slot of slots.slice(0, MAX_CHECKS_PER_DATE)) {
           const refused = await rejection(
             client,
@@ -520,6 +621,7 @@ async function findSelection(
           } else {
             return {
               card,
+              lead,
               teamMemberId: candidate.teamMemberId,
               teamMemberName: candidate.teamMemberName,
               services: candidate.services,
@@ -532,7 +634,11 @@ async function findSelection(
       }
     }
     const who = mode === 'named' ? 'a named team member' : 'any team member';
-    return `no verified free slot for ${serviceCount} service(s) with ${who} at location ${card.locationId} (${trace.join('; ') || 'no candidate'})`;
+    const window =
+      lead.minLeadHours === 0
+        ? ''
+        : ` starting at least ${lead.minLeadHours} h after discovery`;
+    return `no verified free slot${window} for ${serviceCount} service(s) with ${who} at location ${card.locationId} (${trace.join('; ') || 'no candidate'})`;
   } catch (error) {
     return `discovery failed: ${describeError(error)}${trace.length > 0 ? ` (${trace.join('; ')})` : ''}`;
   }
@@ -805,12 +911,9 @@ async function dstBoundary(
   }
   try {
     const ids = named.services.map((service) => service.id);
-    const slots = await client.timeSlots(
-      card.locationId,
-      named.teamMemberId,
-      date,
-      ids
-    );
+    const slots = (
+      await client.timeSlots(card.locationId, named.teamMemberId, date, ids)
+    ).filter((slot) => inLeadWindow(slot, named.lead));
     for (const slot of slots.slice(0, MAX_CHECKS_PER_DATE)) {
       const parts = slotParts(slot.datetime);
       if (parts.offsetMinutes === current) continue;
@@ -983,6 +1086,36 @@ async function settle(
   return view;
 }
 
+/**
+ * Opens the link in a fresh context (booking write route refused), waits for
+ * the widget to settle, saves a full-page screenshot and returns what it read.
+ */
+async function loadOnce(
+  browser: Browser,
+  link: string,
+  expectations: Expectation[],
+  shotPath: string
+): Promise<PageView> {
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+  });
+  // Defence in depth: the check never interacts with the widget, and the
+  // booking write route is refused outright as well.
+  await context.route(/book_record/i, (route) => route.abort());
+  try {
+    const page = await context.newPage();
+    await page.goto(link, {
+      waitUntil: 'domcontentloaded',
+      timeout: NAVIGATION_TIMEOUT_MS,
+    });
+    const view = await settle(page, expectations);
+    await page.screenshot({ path: shotPath, fullPage: true });
+    return view;
+  } finally {
+    await context.close();
+  }
+}
+
 async function runCase(
   browser: Browser,
   plan: PlannedCase,
@@ -1000,27 +1133,16 @@ async function runCase(
   };
   if (plan.link === null) return result;
 
-  const context = await browser.newContext({
-    viewport: { width: 1280, height: 900 },
-  });
-  // Defence in depth: the check never interacts with the widget, and the
-  // booking write route is refused outright as well.
-  await context.route(/book_record/i, (route) => route.abort());
   try {
-    const page = await context.newPage();
-    await page.goto(plan.link, {
-      waitUntil: 'domcontentloaded',
-      timeout: NAVIGATION_TIMEOUT_MS,
-    });
-    const view = await settle(page, plan.expectations);
     const shot = join(outputDir, `${plan.id}.png`);
-    await page.screenshot({ path: shot, fullPage: true });
+    const view = await loadOnce(browser, plan.link, plan.expectations, shot);
     result.screenshot = relative(PACKAGE_DIR, shot);
     result.seen.push(`final URL: ${view.url}`);
     result.seen.push(
       `final URL keeps o=: ${hasOrderParameter(view.url) ? 'yes' : 'no'}`
     );
     result.seen.push(`form style: ${formStyle(view.url)}`);
+    result.seen.push(`time range shown: ${timeRange(view.text) ?? 'none'}`);
     if (isChallenge(view.text)) {
       result.status = 'blocked';
       result.reason =
@@ -1043,8 +1165,74 @@ async function runCase(
   } catch (error) {
     result.status = 'fail';
     result.reason = `browser error: ${describeError(error)}`;
-  } finally {
-    await context.close();
+  }
+  return result;
+}
+
+/**
+ * Loads the plan's link `count` more times, each in a fresh context with the
+ * same wait as a case, and counts on how many loads each expectation held.
+ */
+async function repeatLoads(
+  browser: Browser,
+  plan: PlannedCase | undefined,
+  count: number,
+  outputDir: string
+): Promise<RepeatResult> {
+  const id: CaseId = plan?.id ?? 'single-named';
+  const result: RepeatResult = {
+    case: id,
+    link: plan?.link ?? null,
+    loads: [],
+    tally: {},
+    all_held: 0,
+    reason: null,
+  };
+  if (plan === undefined || plan.link === null) {
+    result.reason = plan?.notRun ?? `case ${id} has no link`;
+    return result;
+  }
+  for (const expectation of plan.expectations) {
+    result.tally[expectation.label] = 0;
+  }
+  for (let load = 1; load <= count; load += 1) {
+    console.log(`Repeat load ${load}/${count} of ${id}...`);
+    const entry: RepeatLoad = {
+      load,
+      at: new Date().toISOString(),
+      final_url: null,
+      checks: {},
+      time_range: null,
+      all_held: false,
+      screenshot: null,
+      error: null,
+    };
+    try {
+      const shot = join(outputDir, `${id}-repeat-${load}.png`);
+      const view = await loadOnce(browser, plan.link, plan.expectations, shot);
+      entry.screenshot = relative(PACKAGE_DIR, shot);
+      entry.final_url = view.url;
+      entry.time_range = timeRange(view.text);
+      if (isChallenge(view.text)) {
+        entry.error = 'Cloudflare challenge page';
+      } else {
+        for (const expectation of plan.expectations) {
+          const held = expectation.holds(view);
+          entry.checks[expectation.label] = held;
+          if (held) {
+            result.tally[expectation.label] =
+              (result.tally[expectation.label] ?? 0) + 1;
+          }
+        }
+        entry.all_held = plan.expectations.every(
+          (expectation) => entry.checks[expectation.label] === true
+        );
+        if (entry.all_held) result.all_held += 1;
+      }
+    } catch (error) {
+      entry.error = `browser error: ${describeError(error)}`;
+    }
+    result.loads.push(entry);
   }
   return result;
 }
@@ -1071,6 +1259,24 @@ function markdownTable(results: CaseResult[]): string {
   ].join('\n');
 }
 
+function repeatSummary(repeat: RepeatResult): string {
+  if (repeat.reason !== null) {
+    return `Repeated loads of ${repeat.case}: not run (${repeat.reason})`;
+  }
+  const total = repeat.loads.length;
+  const lines = [
+    `Repeated loads of ${repeat.case}: everything applied on ${repeat.all_held}/${total}`,
+    ...Object.entries(repeat.tally).map(
+      ([label, held]) => `  ${label}: ${held}/${total}`
+    ),
+    ...repeat.loads.map(
+      (load) =>
+        `  load ${load.load}: ${load.error ?? (load.all_held ? 'all held' : 'not all held')}, time range ${load.time_range ?? 'none'}`
+    ),
+  ];
+  return lines.join('\n');
+}
+
 function printLinks(plans: PlannedCase[]): void {
   for (const plan of plans) {
     console.log(`## ${plan.id}`);
@@ -1091,7 +1297,8 @@ function printLinks(plans: PlannedCase[]): void {
 
 async function discover(
   client: BookingClient,
-  locationId: number
+  locationId: number,
+  lead: LeadWindow
 ): Promise<{
   card: BusinessCard;
   plans: PlannedCase[];
@@ -1099,10 +1306,10 @@ async function discover(
   const card = await loadCard(client, locationId);
   if (typeof card === 'string') throw new Error(card);
 
-  const named = await findSelection(client, card, 'named', 1);
-  const multi = await findSelection(client, card, 'named', 2);
+  const named = await findSelection(client, card, 'named', 1, lead);
+  const multi = await findSelection(client, card, 'named', 2, lead);
   const any = card.anyTeamMemberAllowed
-    ? await findSelection(client, card, 'any', 1)
+    ? await findSelection(client, card, 'any', 1, lead)
     : 'any team member is disabled';
 
   const stepsId = positiveIntFromEnv('BROWSER_CHECK_STEPS_LOCATION_ID');
@@ -1117,7 +1324,7 @@ async function discover(
     const other = await loadCard(client, id);
     return typeof other === 'string'
       ? other
-      : findSelection(client, other, mode, 1);
+      : findSelection(client, other, mode, 1, lead);
   };
   const steps = await optionalSelection(stepsId, 'named');
   const half = await optionalSelection(halfId, 'named');
@@ -1128,7 +1335,7 @@ async function discover(
     typeof anyOffCard === 'string' ||
     anyOffCard.anyTeamMemberAllowed
       ? null
-      : await findSelection(client, anyOffCard, 'any', 1);
+      : await findSelection(client, anyOffCard, 'any', 1, lead);
 
   const plans: PlannedCase[] = [
     singleNamed(named),
@@ -1176,13 +1383,27 @@ async function main(argv: readonly string[]): Promise<number> {
     return 2;
   }
 
+  const minLeadHours =
+    positiveIntFromEnv('BROWSER_CHECK_MIN_LEAD_HOURS', 'number of hours') ?? 0;
+  const repeatCount =
+    positiveIntFromEnv('BROWSER_CHECK_REPEAT_LOADS', 'number of loads') ??
+    DEFAULT_REPEAT_LOADS;
+
   const client = new BookingClient({
     base: API_BASE,
     token,
     gate: new RequestGate(),
   });
-  console.log(`Discovering free slots at location ${locationId}...`);
-  const { card, plans } = await discover(client, locationId);
+  const startedAt = Date.now();
+  const lead: LeadWindow = {
+    startedAt,
+    minLeadHours,
+    earliest: startedAt + minLeadHours * HOUR_MS,
+  };
+  console.log(
+    `Discovering free slots at location ${locationId}${minLeadHours === 0 ? '' : ` starting at least ${minLeadHours} h from now`}...`
+  );
+  const { card, plans } = await discover(client, locationId, lead);
 
   if (argv.includes('--print-links')) {
     printLinks(plans);
@@ -1204,11 +1425,18 @@ async function main(argv: readonly string[]): Promise<number> {
   }
   const chromeVersion = browser.version();
   const results: CaseResult[] = [];
+  let repeat: RepeatResult;
   try {
     for (const plan of plans) {
       console.log(`Case ${plan.id}...`);
       results.push(await runCase(browser, plan, outputDir));
     }
+    repeat = await repeatLoads(
+      browser,
+      plans.find((plan) => plan.id === 'single-named'),
+      repeatCount,
+      outputDir
+    );
   } finally {
     await browser.close();
   }
@@ -1218,13 +1446,18 @@ async function main(argv: readonly string[]): Promise<number> {
     chrome_version: chromeVersion,
     location_id: locationId,
     form_id: defaultFormId(card),
+    discovered_at: new Date(startedAt).toISOString(),
+    min_lead_hours: minLeadHours,
     cases: results,
+    repeat_loads: repeat,
   };
   const resultsPath = join(outputDir, 'results.json');
   await writeFile(resultsPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 
   console.log('');
   console.log(markdownTable(results));
+  console.log('');
+  console.log(repeatSummary(repeat));
   console.log('');
   console.log(
     `Chrome ${report.chrome_version}. Results: ${relative(PACKAGE_DIR, resultsPath)}`

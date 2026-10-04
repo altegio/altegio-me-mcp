@@ -141,6 +141,21 @@ its variable):
   +05:30).
 - `BROWSER_CHECK_ANY_DISABLED_LOCATION_ID`: a business with "any team member" disabled.
 
+Run options:
+
+- `BROWSER_CHECK_MIN_LEAD_HOURS` (positive whole hours, default 0 = no minimum): discovery skips
+  every slot that starts sooner than that many hours after discovery begins, for every slot-based
+  case, and takes the first verified free slot after that. Use it to keep the linked slot away
+  from the widget's own minimum lead time, for example `BROWSER_CHECK_MIN_LEAD_HOURS=24`. Each
+  case's `seen` notes how far ahead its slot starts.
+- `BROWSER_CHECK_REPEAT_LOADS` (positive whole number, default 3): after the cases, the
+  `single-named` link is opened that many more times, each in a fresh context with the same 30 s
+  wait, read-only like every case. `results.json` gets a `repeat_loads` entry with each load's
+  checks, final URL, the time range the widget showed and a screenshot
+  (`single-named-repeat-<n>.png`), plus a tally of how many loads applied the service, the team
+  member and the time. It shows whether the pre-selection holds on every load. The tally does not
+  change the exit code.
+
 ### What the check never does
 
 It never clicks, types, fills, presses or submits anything in the widget, and it aborts any
@@ -150,9 +165,10 @@ request to the booking write route, so no booking can result. The only POST it s
 ### Results
 
 Each run writes `scripts/browser-check/output/<timestamp>/results.json` (`run_at`,
-`chrome_version`, `location_id`, `form_id` and one entry per case with `link`, `link_kind`,
-`expected`, `seen`, `status`, `reason`, `screenshot`) and one PNG per case, then prints a Markdown
-results table. The output folder is git-ignored.
+`chrome_version`, `location_id`, `form_id`, `discovered_at`, `min_lead_hours`, one entry per case
+with `link`, `link_kind`, `expected`, `seen`, `status`, `reason`, `screenshot`, and
+`repeat_loads`) and one PNG per case and per repeated load, then prints a Markdown results table
+and the repeated-load tally. The output folder is git-ignored.
 
 ### Manual fallback
 
