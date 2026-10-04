@@ -30,7 +30,6 @@ import {
 
 const START_MS = 1_700_000_000_000;
 const SHARED_EGRESS = createSharedEgressList(['160.79.104.0/21']);
-const NEVER_ABORTS = new AbortController().signal;
 
 export interface SimulationResult {
   multiplier: number;
@@ -83,11 +82,14 @@ export async function simulatePeak(opts: {
     const key = gateKeyOf(
       classifyClient(pickClientAddress(rng), SHARED_EGRESS)
     );
+    // A signal per call: one long-lived signal would collect a dependent for
+    // every AbortSignal.any() the client builds from it, tens of thousands at 10x.
+    const signal = new AbortController().signal;
     const ctx: ToolContext = {
       ...NO_TOOL_CONTEXT,
-      signal: NEVER_ABORTS,
+      signal,
       clientKey: key,
-      timeout: () => NEVER_ABORTS,
+      timeout: () => signal,
     };
     toolCalls += 1;
     running.push(

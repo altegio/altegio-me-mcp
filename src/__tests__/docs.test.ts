@@ -132,3 +132,74 @@ describe('docs/research/widget-deep-link.md browser check results', () => {
     expect(review?.[1]).not.toMatch(/^pending\b/i);
   });
 });
+
+// The recorded OPS-07 results (plan 03-12): tiers 1 and 2 must state maxima
+// within the standard partner limits and no upstream 429, so a later edit
+// cannot leave a figure above its limit unnoticed.
+const LOADTEST_DOC = readFileSync(
+  join(process.cwd(), 'docs', 'loadtest', 'results.md'),
+  'utf8'
+);
+
+function loadtestSection(heading: string): string {
+  const start = LOADTEST_DOC.indexOf(`${heading}\n`);
+  if (start === -1) return '';
+  const rest = LOADTEST_DOC.slice(start + heading.length + 1);
+  const next = rest.search(/^## /m);
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
+describe('docs/loadtest/results.md (OPS-07)', () => {
+  it.each([
+    '## Peak arithmetic',
+    '## Tier 1: simulation',
+    '## Tier 2: local container',
+    '## Tier 3: live, bounded',
+    '## Known deviation',
+  ])('has the section %s', (heading) => {
+    expect(LOADTEST_DOC).toContain(`\n${heading}\n`);
+  });
+
+  it.each(['## Tier 1: simulation', '## Tier 2: local container'])(
+    'records the maxima within the limits and no upstream 429 in %s',
+    (heading) => {
+      const text = loadtestSection(heading);
+      expect(text).not.toBe('');
+      const perSecond =
+        /^Max upstream starts in any 1 s: (\d+) \(limit 5\)$/m.exec(text);
+      const perMinute =
+        /^Max upstream starts in any 60 s: (\d+) \(limit 200\)$/m.exec(text);
+      expect(perSecond).not.toBeNull();
+      expect(perMinute).not.toBeNull();
+      expect(Number(perSecond?.[1])).toBeGreaterThan(0);
+      expect(Number(perSecond?.[1])).toBeLessThanOrEqual(5);
+      expect(Number(perMinute?.[1])).toBeGreaterThan(0);
+      expect(Number(perMinute?.[1])).toBeLessThanOrEqual(200);
+      expect(text).toMatch(/^Upstream 429 responses: 0$/m);
+    }
+  );
+
+  it('dates and pins each measured tier to a commit', () => {
+    for (const heading of [
+      '## Tier 1: simulation',
+      '## Tier 2: local container',
+    ]) {
+      const text = loadtestSection(heading);
+      expect(text).toMatch(/\d{4}-\d{2}-\d{2}/);
+      expect(text).toMatch(/Commit: [0-9a-f]{7}/);
+    }
+  });
+
+  it('keeps the live run marked as not run until plan 03-16 runs it', () => {
+    expect(loadtestSection('## Tier 3: live, bounded')).toMatch(
+      /^Status: (not run yet \(plan 03-16\)|run \d{4}-\d{2}-\d{2})/m
+    );
+  });
+
+  it('records the dedicated partner type as a known deviation (D-03, B3)', () => {
+    const text = loadtestSection('## Known deviation');
+    expect(text).toContain('D-03');
+    expect(text).toContain('B3');
+    expect(text).toContain('2630');
+  });
+});
