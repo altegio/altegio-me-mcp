@@ -1,10 +1,13 @@
 # Altegio.me MCP Server
 
-Status: the stateless MCP server foundation is built and tested, with the tool compliance suite,
-the CI gate and the container image. No booking tools are registered yet, so `tools/list`
-returns an empty list. The next work is the booking tools for a known business: business card,
-services, team members, free slots, slot check and a pre-filled booking widget link. Decisions
-and research are in [`docs/`](docs/).
+Status: the stateless MCP server serves six read-only booking tools for a known business:
+business card (`business_get`), services (`business_list_services`), team members
+(`business_list_team_members`), dates with free time (`business_list_dates`), free time slots
+(`business_list_time_slots`) and a slot check that hands off a pre-selected booking widget link
+(`book_check`). They call the Altegio public booking API through a throttled client
+(`src/booking`), and a live suite has checked that client against a real business. Hosting, the
+catalog of bookable businesses and search come next. Decisions and research are in
+[`docs/`](docs/).
 
 A remote [MCP](https://modelcontextprotocol.io) server that lets clients of businesses using
 Altegio (salons, barbershops, studios and similar) find a business, browse its services, team
@@ -48,6 +51,9 @@ New SDK Server + Streamable HTTP transport for this one request (src/mcp)
         |
         v
 Tool registry and factory (src/tools) -> scrubbed, fenced result or in-band error
+        |
+        v
+Booking client (src/booking) -> request gate -> Altegio public booking API (api.alteg.io/api/v1)
 ```
 
 `GET /health` answers `{"status":"ok","version":...}` for Cloud Run. `GET` and `DELETE` on `/mcp`
@@ -58,7 +64,8 @@ answer 405, because the server is stateless: it never sends an `mcp-session-id`,
 |---|---|
 | `src/config` | Environment validation with zod; fixed error text that never echoes a value |
 | `src/mcp` | The only code that imports the MCP SDK: server creation, stateless request handler, server instructions |
-| `src/tools` | Tool factory with zod schemas and annotations, registry, pagination shape, in-band errors, untrusted-text fencing |
+| `src/tools` | Tool factory with zod schemas and annotations, registry, the six booking tools, pagination shape, in-band errors, untrusted-text fencing |
+| `src/booking` | Typed client for the six documented booking routes (company card, services, team members, dates, time slots, slot check), the request gate that throttles calls on the partner budget, and the deep-link builder for the booking widget |
 | `src/observability` | pino logger, one structured call log line per `POST /mcp`, secret scrubbing |
 | `src/compliance` | Directory-compliance rules R1-R13 and deliberately bad fixtures; test-only, not in the build |
 | `src/util` | Package name and version read from `package.json` |
@@ -80,9 +87,11 @@ Other notes:
 - Target hosting: its own Cloud Run service in its own GCP project, on a domain that matches
   the brand (for example `mcp.altegio.me`, to be confirmed). It does not sit behind the
   `mcp.alteg.io` proxy, which only admits Altegio account holders.
-- Later phases add the Altegio public booking API client
-  (`api.alteg.io/api/v1`, partner token), a catalog index of bookable businesses refreshed by a
-  scheduled job, and an OAuth 2.1 authorization server with phone + SMS sign-in.
+- The booking client calls the Altegio public API (`api.alteg.io/api/v1`) with the partner
+  token and never creates, holds or changes a booking: `book_check` is a validation-only call,
+  and a live run confirmed that it leaves the slot free. Later phases add a catalog index of
+  bookable businesses refreshed by a scheduled job, and an OAuth 2.1 authorization server with
+  phone + SMS sign-in.
 - Decisions and their reasons: [`docs/decisions/0001-scope-and-architecture.md`](docs/decisions/0001-scope-and-architecture.md).
 - What other teams must answer before or during the build: [`docs/open-questions.md`](docs/open-questions.md).
 
@@ -111,8 +120,8 @@ values) when one is missing or invalid.
 
 `ALTEGIO_API_TOKEN` has the same name and the same rule (any non-empty string) as in Altegio.Pro
 MCP. [`.env.example`](.env.example) carries the placeholder `your_partner_token_here`, so a copied
-`.env` starts the server. A real token is needed once the server calls the Altegio API; a wrong
-one then shows up as HTTP 401 from that API. A token shorter than 8 characters cannot be redacted
+`.env` starts the server. Tool calls need the real partner token of developer account 2630; a
+wrong one shows up as HTTP 401 from the Altegio API. A token shorter than 8 characters cannot be redacted
 from output, so the server then logs one `config_warning` line at startup that names the setting,
 never its value. Real secrets live in GCP Secret Manager, never in git.
 
@@ -136,8 +145,9 @@ curl -s localhost:8080/health
 npx -y @modelcontextprotocol/inspector@2.9.0 --cli http://localhost:8080/mcp --transport http --method tools/list
 ```
 
-`GET /health` returns the status and version. `tools/list` returns an empty list until the
-booking tools land. Raw HTTP clients must send `Accept: application/json, text/event-stream` on
+`GET /health` returns the status and version. `tools/list` lists the six booking tools. Tool
+calls reach the Altegio API, so they need the real partner token in `.env`; with the placeholder
+token they return an in-band error. Raw HTTP clients must send `Accept: application/json, text/event-stream` on
 `POST /mcp`, as the Streamable HTTP transport requires.
 
 ## Checks
@@ -159,6 +169,23 @@ the build when a tool:
 - has a description that addresses the model with instructions;
 - asks for personal data in its inputs;
 - uses a write or sign-in upstream route (the registry is read-only in this phase).
+
+The live suite checks the booking client against the real Altegio API. It is opt-in and never
+part of CI:
+
+```bash
+npm run test:live
+```
+
+It needs the real `ALTEGIO_API_TOKEN` and `ALTEGIO_E2E_LOCATION_ID` (the location id of a real
+business, for example the demo location `722227`, whose booking routes answer although its
+widget reports `active: 0`) in `.env`. It parses
+every route with the same schemas as the fixture tests, checks that two identical slot checks
+are both accepted and leave the slot free, and makes at most 20 upstream calls per run, because
+the partner budget is shared with Altegio.Pro MCP. `ALTEGIO_E2E_RECORD=1 npm run test:live`
+also refreshes the sanitised recordings in `src/booking/__tests__/fixtures/live/` (no token, no
+e-mail addresses, no phone numbers, no names); the required test run parses them with the route
+schemas. Without `ALTEGIO_E2E=1`, which only `test:live` sets, every live test is skipped.
 
 ## Docker
 

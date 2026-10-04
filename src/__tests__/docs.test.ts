@@ -33,6 +33,8 @@ const REQUIRED_MENTIONS = [
   'ALTEGIO_API_TOKEN',
   'Node 22',
   'default-branch-ci-gate',
+  'npm run test:live',
+  'src/booking',
 ] as const;
 
 function section(heading: string): string {

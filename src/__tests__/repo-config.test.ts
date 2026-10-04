@@ -208,6 +208,27 @@ describe('.github/workflows/ci.yml', () => {
       expect(action).toMatch(/^actions\/[a-z-]+@v\d+$/);
     }
   });
+
+  it('never turns on the live suite (ALTEGIO_E2E stays out of CI)', () => {
+    expect(workflow).not.toContain('ALTEGIO_E2E');
+  });
+});
+
+describe('live suite script', () => {
+  const scripts = (
+    JSON.parse(read('package.json')) as { scripts: Record<string, string> }
+  ).scripts;
+
+  it('test:live sets ALTEGIO_E2E=1 and loads the local .env', () => {
+    const testLive = scripts['test:live'] ?? '';
+    expect(testLive).toContain('ALTEGIO_E2E=1');
+    expect(testLive).toContain('--env-file=.env');
+  });
+
+  it('the required test and check scripts do not turn on the live suite', () => {
+    expect(scripts.test).not.toContain('ALTEGIO_E2E');
+    expect(scripts.check).not.toContain('ALTEGIO_E2E');
+  });
 });
 
 describe('commitlint', () => {
