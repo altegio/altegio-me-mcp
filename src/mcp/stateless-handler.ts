@@ -45,6 +45,9 @@ export function createMcpRequestHandler<D>(
       secrets:
         typeof opts.secrets === 'function' ? opts.secrets() : opts.secrets,
       record: getCallRecord(res),
+      // Set by the client identity step (OPS-06); null for the shared pool and
+      // when the edge is off, so the gate's per-key cap never applies to them.
+      clientKey: (res.locals.clientKey as string | null | undefined) ?? null,
     });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

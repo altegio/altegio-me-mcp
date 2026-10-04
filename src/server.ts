@@ -1,6 +1,6 @@
 import type { Server } from 'node:http';
 import type { Logger } from 'pino';
-import { createApp } from './app.js';
+import { allowedOriginsFor, createApp } from './app.js';
 import { BookingClient } from './booking/client.js';
 import { RequestGate } from './booking/gate.js';
 import {
@@ -188,7 +188,10 @@ async function main(): Promise<void> {
     },
     logger,
     secrets,
-    allowedOrigins: [new URL(config.PUBLIC_BASE_URL).origin],
+    allowedOrigins: allowedOriginsFor(
+      config.PUBLIC_BASE_URL,
+      config.EXTRA_ALLOWED_ORIGINS
+    ),
     allowLoopbackOrigins: config.NODE_ENV !== 'production',
     proxyAuth,
     edge: {

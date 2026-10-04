@@ -89,7 +89,9 @@ function rpcMethodOf(body: unknown): RpcMethod {
     : 'other';
 }
 
-function printable(value: string): string | null {
+// Printable ASCII only, cut at 100 characters; null when nothing is left.
+// Exported for the origin guard, which logs a refused origin's host the same way.
+export function printable(value: string): string | null {
   const cleaned = value
     .replace(NON_PRINTABLE_ASCII, '')
     .slice(0, MCP_CLIENT_MAX_CHARS);

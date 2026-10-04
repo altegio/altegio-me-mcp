@@ -14,6 +14,7 @@ import {
 import {
   createCallLogMiddleware,
   getCallRecord,
+  printable,
 } from './observability/call-log.js';
 import {
   classifyClient,
@@ -113,12 +114,20 @@ function isOriginAllowed(
   return allowLoopbackOrigins && LOOPBACK_HOSTNAMES.has(parsed.hostname);
 }
 
-// The origin of PUBLIC_BASE_URL plus the configured extra origins (OPS-08).
+// The origin of PUBLIC_BASE_URL plus the configured extra origins, such as
+// https://claude.ai (OPS-08, research Pitfall 15), without duplicates.
 export function allowedOriginsFor(
   publicBaseUrl: string,
-  _extraOrigins: readonly string[]
+  extraOrigins: readonly string[]
 ): string[] {
-  return [new URL(publicBaseUrl).origin];
+  return [...new Set([new URL(publicBaseUrl).origin, ...extraOrigins])];
+}
+
+// The host of a refused origin, for the call log: a 403 on the first claude.ai
+// run is then diagnosable from the line alone. An origin that does not parse is
+// logged as it arrived, cleaned the same way.
+function refusedOriginHost(origin: string): string | null {
+  return printable(URL.canParse(origin) ? new URL(origin).host : origin);
 }
 
 export function createApp<D>(deps: AppDeps<D>): Express {
@@ -155,6 +164,7 @@ export function createApp<D>(deps: AppDeps<D>): Express {
       next();
       return;
     }
+    getCallRecord(res).origin_host = refusedOriginHost(origin);
     res.status(403).json(rpcError(-32000, 'Forbidden origin'));
   };
 
