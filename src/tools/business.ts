@@ -10,8 +10,11 @@ import {
 import { calendarDayNumber } from '../booking/calendar.js';
 import {
   SLOT_DATETIME_PATTERN,
+  bookableFormUrl,
+  canTakeOnlineBookings,
   formatUtcOffset,
   parseSlotDatetime,
+  plainBookingLink,
 } from '../booking/deep-link.js';
 import { defineTool, type ToolHints } from './factory.js';
 import {
@@ -48,10 +51,17 @@ export function untrustedText(label: string) {
   return z.string().nullable().describe(`${label} ${UNTRUSTED_NOTE}`);
 }
 
+/** Like untrustedText for a field that is always present. */
+function untrustedString(label: string) {
+  return z.string().describe(`${label} ${UNTRUSTED_NOTE}`);
+}
+
 const bookingFormSchema = z.strictObject({
   id: z.number().int().describe('Booking form id.'),
   title: untrustedText('Booking form title.'),
-  url: z.string().describe('Booking form address.'),
+  url: untrustedString(
+    'Booking form address, only on a host Altegio uses for booking forms.'
+  ),
   is_default: z.boolean().describe('Whether this is the default form.'),
 });
 
@@ -89,10 +99,9 @@ const businessCardSchema = z.strictObject({
       .boolean()
       .describe('Whether a client may book without choosing a team member.'),
     prepayment_policy: untrustedText('Prepayment policy type.'),
-    booking_form_url: z
-      .string()
-      .nullable()
-      .describe('Address of the default booking form.'),
+    booking_form_url: untrustedText(
+      'Address of the default booking form, or the plain booking link app.alteg.io/book/{location_id} when the form is not on a host Altegio uses for booking forms; null when there is no form.'
+    ),
     booking_forms: z.array(bookingFormSchema),
   }),
   next_free_slot: z
@@ -107,21 +116,6 @@ type BusinessCardOutput = z.infer<typeof businessCardSchema>;
 
 /** Cap on the business name, in code points; other text fields use the default. */
 export const NAME_MAX_CHARS = 200;
-
-/**
- * A booking-form address we may hand to a client: an https URL that parses
- * and needed no cleaning. Anything else is dropped (T-02-38).
- */
-function httpsUrl(value: string | null): string | null {
-  if (value === null) return null;
-  const text = sanitizeUntrusted(value);
-  if (text === null || text !== value) return null;
-  try {
-    return new URL(text).protocol === 'https:' ? text : null;
-  } catch {
-    return null;
-  }
-}
 
 function renderPhoneConfirmation(required: boolean | null): string {
   if (required === null) return 'unknown';
@@ -193,7 +187,7 @@ export const businessGet = defineTool<
       throw toToolError(error);
     }
     const forms = card.bookingForms.flatMap((form) => {
-      const url = httpsUrl(form.url);
+      const url = bookableFormUrl(form.url);
       return url === null
         ? []
         : [
@@ -206,12 +200,16 @@ export const businessGet = defineTool<
           ];
     });
     // The client's precedence (default form, default_bookform_url, first
-    // form), restricted to https addresses.
+    // form), restricted to the addresses book_check would also link to. A card
+    // with a form but no such address gets the plain link book_check falls back
+    // to, so both tools name the same place (WR-02, IN-03).
     const formUrl =
       forms.find((form) => form.is_default)?.url ??
-      httpsUrl(card.bookingFormUrl) ??
+      bookableFormUrl(card.bookingFormUrl) ??
       forms[0]?.url ??
-      null;
+      (card.bookingFormUrl === null
+        ? null
+        : plainBookingLink(card.locationId, card.bookingFormUrl).url);
     const nextSlot =
       card.nextFreeSlot !== null &&
       SLOT_DATETIME_PATTERN.test(card.nextFreeSlot)
@@ -232,7 +230,7 @@ export const businessGet = defineTool<
       },
       currency: sanitizeUntrusted(card.currency),
       online_booking: {
-        enabled: card.widgetActive && formUrl !== null,
+        enabled: canTakeOnlineBookings(card),
         widget_active: card.widgetActive,
         phone_confirmation: card.phoneConfirmation,
         any_team_member_allowed: card.anyTeamMemberAllowed,

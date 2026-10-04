@@ -72,6 +72,11 @@ Fallback when nothing can be pre-selected: `default_bookform_url`, or
 `https://app.alteg.io/book/{loc}` (302 to the default form, 404 when there is none). Some regions
 use `altegio.asia` or `altegio.org` hosts instead of `alteg.io`.
 
+`business_get` and `book_check` share one allow-list (`bookableFormUrl` in `src/booking/deep-link.ts`):
+a form address is handed out only when it is https and on `alteg.io`, `altegio.asia` or
+`altegio.org` (or a subdomain). A form on an `altegio.me` host falls back to the `app.alteg.io`
+plain link in both tools until the `slug-host` browser case below has run.
+
 ## Still to check in a real browser (Phase 2)
 
 Each item points to its row in "Browser check results" below.

@@ -8,6 +8,7 @@ import {
 import {
   SLOT_DATETIME_PATTERN,
   buildBookingLink,
+  canTakeOnlineBookings,
   formatUtcOffset,
   parseSlotDatetime,
   plainBookingLink,
@@ -205,9 +206,9 @@ const NO_BOOKING_WIDGET = {
     'tell the user to contact the business directly, using the contact details from business_get.',
 } as const;
 
-/** The card must show an active widget with a booking form; otherwise a link would lead nowhere. */
+/** The same predicate as business_get's `enabled`: an active widget and a booking form; otherwise a link would lead nowhere. */
 function requireBookingWidget(card: BusinessCard): void {
-  if (card.bookingFormUrl === null || !card.widgetActive) {
+  if (!canTakeOnlineBookings(card)) {
     throw new ToolError(
       NO_BOOKING_WIDGET.message,
       NO_BOOKING_WIDGET.nextAction
