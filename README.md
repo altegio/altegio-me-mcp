@@ -56,7 +56,10 @@ Tool registry and factory (src/tools) -> scrubbed, fenced result or in-band erro
 Booking client (src/booking) -> request gate -> Altegio public booking API (api.alteg.io/api/v1)
 ```
 
-`GET /health` answers `{"status":"ok","version":...}` for Cloud Run. `GET` and `DELETE` on `/mcp`
+`GET /health` answers `{"status":"ok","version":...,"commit":...}` for Cloud Run (`commit` is the
+`COMMIT_SHA` of the build, or `null`), and stays open. With `PROXY_AUTH=required` (the default),
+`POST /mcp` is served only with a valid `x-mcp-proxy-auth` signature from the platform proxy; any
+other request gets HTTP 401 `proxy_auth_required` before its body is read. `GET` and `DELETE` on `/mcp`
 answer 405, because the server is stateless: it never sends an `mcp-session-id`, and every
 `POST /mcp` is served by a fresh server and transport that are closed when the response ends.
 
@@ -120,6 +123,10 @@ values) when one is missing or invalid.
 | `PUBLIC_BASE_URL` | Public URL of the server; its origin is the allowed browser `Origin` | none | yes, http(s) URL |
 | `LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent` | `info` | no |
 | `NODE_ENV` | `development`, `test` or `production`; `.env.example` sets `development` for local runs and the Docker image sets `production` | `production` | no |
+| `PROXY_AUTH` | `required` or `off`. With `required`, `POST /mcp` is served only with a valid `x-mcp-proxy-auth` signature from the platform proxy and the server does not start without a proxy key. `.env.example` sets `off` for local runs | `required` | no |
+| `MCP_PROXY_BACKEND_KEY` | Shared key of the proxy signature, a comma-separated list during a rotation, each key at least 32 characters. Production uses the file form below | none | with `PROXY_AUTH=required`, this or `MCP_PROXY_BACKEND_KEY_FILE` |
+| `MCP_PROXY_BACKEND_KEY_FILE` | Absolute path of a mounted file that holds the proxy key; wins over `MCP_PROXY_BACKEND_KEY` and is re-read lazily every 60 s, so a rotation needs no restart | none | with `PROXY_AUTH=required`, this or `MCP_PROXY_BACKEND_KEY` |
+| `COMMIT_SHA` | Commit of the deployed build, 7 to 40 lowercase hex characters; reported as `commit` by `GET /health` | none (`commit` is `null`) | no |
 
 `ALTEGIO_API_TOKEN` has the same name and the same rule (any non-empty string) as in Altegio.Pro
 MCP. [`.env.example`](.env.example) carries the placeholder `your_partner_token_here`, so a copied
@@ -148,7 +155,7 @@ curl -s localhost:8080/health
 npx -y @modelcontextprotocol/inspector@2.9.0 --cli http://localhost:8080/mcp --transport http --method tools/list
 ```
 
-`GET /health` returns the status and version. `tools/list` lists the six booking tools. Tool
+`GET /health` returns the status, version and commit. `tools/list` lists the six booking tools. Tool
 calls reach the Altegio API, so they need the real partner token in `.env`; with the placeholder
 token they return an in-band error. Raw HTTP clients must send `Accept: application/json, text/event-stream` on
 `POST /mcp`, as the Streamable HTTP transport requires.
@@ -211,13 +218,15 @@ docker run --rm -p 8080:8080 \
   -e PORT=8080 \
   -e ALTEGIO_API_TOKEN=your_partner_token_here \
   -e PUBLIC_BASE_URL=http://localhost:8080 \
+  -e PROXY_AUTH=off \
   altegio-me-mcp
 ```
 
 The image is `node:22-alpine`, built in two stages, installs production dependencies only and
-runs as the non-root `node` user. `scripts/smoke.sh IMAGE` starts the image with a canary token,
-checks `/health`, the stateless `/mcp` endpoint, the logs (no token, no tool arguments), the
-container user and a clean SIGTERM stop. It runs locally (Docker through Colima on macOS) and in
+runs as the non-root `node` user. `scripts/smoke.sh IMAGE` starts the image with a canary token
+and a proxy key file copied into the container, signs its requests the way the platform proxy does,
+and checks `/health`, the signed `/mcp` path, the refusal of an unsigned request, the logs (no token,
+no tool arguments), the container user and a clean SIGTERM stop. It runs locally (Docker through Colima on macOS) and in
 CI.
 
 ## CI and branch rules

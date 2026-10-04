@@ -144,6 +144,9 @@ async function validEnv(): Promise<Record<string, string>> {
     ...envExampleValues(),
     PORT: String(await freePort()),
     ALTEGIO_API_TOKEN: CANARY,
+    // Explicit, so no case relies on the check being off by default (it is
+    // required by default). The fail-closed startup cases are plan 03-18's.
+    PROXY_AUTH: 'off',
   };
 }
 
@@ -224,6 +227,7 @@ describe('node dist/server.js', () => {
       expect(await health.json()).toEqual({
         status: 'ok',
         version: PACKAGE_VERSION,
+        commit: null,
       });
 
       const list = await fetch(`${base}/mcp`, {
@@ -325,7 +329,9 @@ describe('node dist/server.js', () => {
       await within(server.exited, SHUTDOWN_WINDOW_MS);
 
       const warnings = stdoutRecords(server).filter(
-        (record) => record.event === 'config_warning'
+        (record) =>
+          record.event === 'config_warning' &&
+          record.setting === 'ALTEGIO_API_TOKEN'
       );
       expect(warnings).toHaveLength(1);
       expect(warnings[0]?.setting).toBe('ALTEGIO_API_TOKEN');
@@ -342,7 +348,14 @@ describe('node dist/server.js', () => {
       await waitForStdout(server, '"event":"server_started"', 10_000);
       server.child.kill('SIGTERM');
       await within(server.exited, SHUTDOWN_WINDOW_MS);
-      expect(server.stdout()).not.toContain('config_warning');
+      // PROXY_AUTH=off logs its own config_warning; only the token one is checked here.
+      expect(
+        stdoutRecords(server).filter(
+          (record) =>
+            record.event === 'config_warning' &&
+            record.setting === 'ALTEGIO_API_TOKEN'
+        )
+      ).toEqual([]);
     },
     TEST_TIMEOUT_MS
   );

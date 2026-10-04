@@ -8,10 +8,15 @@ import {
   loadConfig,
 } from '../schema.js';
 
+// PROXY_AUTH defaults to required, which fails without a proxy key, so the
+// shared fixture turns it off explicitly; the proxy-key cases set it themselves.
 const VALID: Record<string, string> = {
   ALTEGIO_API_TOKEN: 'partner-token-value',
   PUBLIC_BASE_URL: 'https://mcp.example.com',
+  PROXY_AUTH: 'off',
 };
+
+const PROXY_KEY = 'proxy-key-0123456789abcdef0123456789abcdef';
 
 function parseDotenv(text: string): Record<string, string> {
   const values: Record<string, string> = {};
@@ -63,7 +68,7 @@ describe('.env.example', () => {
 
 describe('loadConfig defaults and required keys', () => {
   it('reports only the token and the public URL for an empty environment', () => {
-    const error = configErrorFor({});
+    const error = configErrorFor({ PROXY_AUTH: 'off' });
     expect(error.issues.map((issue) => issue.key)).toEqual([
       'ALTEGIO_API_TOKEN',
       'PUBLIC_BASE_URL',
@@ -78,6 +83,7 @@ describe('loadConfig defaults and required keys', () => {
       PUBLIC_BASE_URL: 'https://mcp.example.com',
       LOG_LEVEL: 'info',
       NODE_ENV: 'production',
+      PROXY_AUTH: 'off',
     });
   });
 
@@ -101,7 +107,10 @@ describe('loadConfig defaults and required keys', () => {
   });
 
   it('gives a missing token the same message as an empty one', () => {
-    const error = configErrorFor({ PUBLIC_BASE_URL: VALID.PUBLIC_BASE_URL });
+    const error = configErrorFor({
+      PUBLIC_BASE_URL: VALID.PUBLIC_BASE_URL,
+      PROXY_AUTH: 'off',
+    });
     expect(error.issues).toEqual([
       { key: 'ALTEGIO_API_TOKEN', message: 'Partner API token is required' },
     ]);
@@ -206,6 +215,7 @@ describe('loadConfig URLs and enums', () => {
         ALTEGIO_API_TOKEN: VALID.ALTEGIO_API_TOKEN,
         ALTEGIO_API_BASE: 'http://api.example.com/api/v1',
         LOG_LEVEL: 'verbose',
+        PROXY_AUTH: 'off',
       })
     ).toEqual(['ALTEGIO_API_BASE', 'PUBLIC_BASE_URL', 'LOG_LEVEL']);
   });
@@ -245,6 +255,10 @@ describe('ConfigError reporting', () => {
       ALTEGIO_API_TOKEN: '',
       ALTEGIO_API_BASE: 'nope',
       PORT: 'abc',
+      PROXY_AUTH: 'maybe',
+      MCP_PROXY_BACKEND_KEY: 'short',
+      MCP_PROXY_BACKEND_KEY_FILE: 'relative/path',
+      COMMIT_SHA: 'NOT-HEX',
     });
     expect(error.issues.map((issue) => issue.key)).toEqual([...CONFIG_KEYS]);
   });
@@ -253,6 +267,7 @@ describe('ConfigError reporting', () => {
     const error = configErrorFor({
       PORT: 'abc',
       PUBLIC_BASE_URL: 'nope',
+      PROXY_AUTH: 'off',
     });
     const lines = formatConfigError(error).split('\n');
     expect(lines[0]).toBe('Invalid configuration:');
@@ -276,6 +291,10 @@ describe('ConfigError reporting', () => {
       LOG_LEVEL: `${canary}-level`,
       NODE_ENV: `${canary}-env`,
       ALTEGIO_API_BASE: `${canary}-base`,
+      PROXY_AUTH: `${canary}-auth`,
+      MCP_PROXY_BACKEND_KEY: `${canary}`,
+      MCP_PROXY_BACKEND_KEY_FILE: `${canary}-file`,
+      COMMIT_SHA: `${canary}-sha`,
     });
     const text = `${formatConfigError(error)}\n${error.message}\n${JSON.stringify(
       error.issues
@@ -285,9 +304,124 @@ describe('ConfigError reporting', () => {
   });
 
   it('gives each issue a fixed, non-empty message', () => {
-    const error = configErrorFor({});
+    const error = configErrorFor({ PROXY_AUTH: 'maybe' });
     for (const issue of error.issues) {
       expect(issue.message.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('loadConfig proxy signature settings (OPS-03, D-04)', () => {
+  const WITHOUT_PROXY_SETTING: Record<string, string> = {
+    ALTEGIO_API_TOKEN: VALID.ALTEGIO_API_TOKEN ?? '',
+    PUBLIC_BASE_URL: VALID.PUBLIC_BASE_URL ?? '',
+  };
+
+  it('defaults PROXY_AUTH to required', () => {
+    expect(
+      loadConfig({ ...WITHOUT_PROXY_SETTING, MCP_PROXY_BACKEND_KEY: PROXY_KEY })
+        .PROXY_AUTH
+    ).toBe('required');
+  });
+
+  it('fails without PROXY_AUTH and without either key setting, with a fixed message', () => {
+    const error = configErrorFor(WITHOUT_PROXY_SETTING);
+    expect(error.issues).toEqual([
+      {
+        key: 'MCP_PROXY_BACKEND_KEY_FILE',
+        message:
+          'is required when PROXY_AUTH is required: set it to the path of the mounted proxy key file (or set MCP_PROXY_BACKEND_KEY; local runs set PROXY_AUTH=off)',
+      },
+    ]);
+    const text = `${formatConfigError(error)}\n${error.message}`;
+    expect(text).toContain('MCP_PROXY_BACKEND_KEY_FILE');
+    expect(text).not.toContain(WITHOUT_PROXY_SETTING.ALTEGIO_API_TOKEN ?? '');
+  });
+
+  it('treats an empty key and an empty file path as not set', () => {
+    expect(
+      issueKeys({
+        ...WITHOUT_PROXY_SETTING,
+        MCP_PROXY_BACKEND_KEY: '',
+        MCP_PROXY_BACKEND_KEY_FILE: '  ',
+      })
+    ).toEqual(['MCP_PROXY_BACKEND_KEY_FILE']);
+  });
+
+  it('accepts a key file path', () => {
+    const config = loadConfig({
+      ...WITHOUT_PROXY_SETTING,
+      MCP_PROXY_BACKEND_KEY_FILE: '/secrets/proxy-key/key',
+    });
+    expect(config.PROXY_AUTH).toBe('required');
+    expect(config.MCP_PROXY_BACKEND_KEY_FILE).toBe('/secrets/proxy-key/key');
+  });
+
+  it('accepts a key of 32 or more characters, also inside a rotation list', () => {
+    expect(
+      loadConfig({ ...WITHOUT_PROXY_SETTING, MCP_PROXY_BACKEND_KEY: PROXY_KEY })
+        .MCP_PROXY_BACKEND_KEY
+    ).toBe(PROXY_KEY);
+    expect(
+      loadConfig({
+        ...WITHOUT_PROXY_SETTING,
+        MCP_PROXY_BACKEND_KEY: `short,${PROXY_KEY}`,
+      }).MCP_PROXY_BACKEND_KEY
+    ).toBe(`short,${PROXY_KEY}`);
+  });
+
+  it('rejects a key setting with no key of 32 characters, without echoing it', () => {
+    const short = 'too-short-key-value';
+    const error = configErrorFor({
+      ...WITHOUT_PROXY_SETTING,
+      MCP_PROXY_BACKEND_KEY: short,
+    });
+    expect(error.issues).toEqual([
+      {
+        key: 'MCP_PROXY_BACKEND_KEY',
+        message: 'must hold at least one key of 32 or more characters',
+      },
+    ]);
+    expect(formatConfigError(error)).not.toContain(short);
+  });
+
+  it('rejects a relative key file path', () => {
+    expect(
+      issueKeys({
+        ...WITHOUT_PROXY_SETTING,
+        MCP_PROXY_BACKEND_KEY_FILE: 'secrets/key',
+      })
+    ).toEqual(['MCP_PROXY_BACKEND_KEY_FILE']);
+  });
+
+  it('needs no key when PROXY_AUTH is explicitly off', () => {
+    expect(
+      loadConfig({ ...WITHOUT_PROXY_SETTING, PROXY_AUTH: 'off' })
+    ).toMatchObject({ PROXY_AUTH: 'off' });
+  });
+
+  it('rejects an unknown PROXY_AUTH value instead of treating it as off', () => {
+    expect(
+      issueKeys({
+        ...WITHOUT_PROXY_SETTING,
+        PROXY_AUTH: 'false',
+        MCP_PROXY_BACKEND_KEY: PROXY_KEY,
+      })
+    ).toEqual(['PROXY_AUTH']);
+  });
+
+  it.each(['0123abc', 'a'.repeat(40)])('accepts COMMIT_SHA %j', (sha) => {
+    expect(loadConfig({ ...VALID, COMMIT_SHA: sha }).COMMIT_SHA).toBe(sha);
+  });
+
+  it.each(['0123ab', 'a'.repeat(41), '0123ABC', 'zzzzzzz'])(
+    'rejects COMMIT_SHA %j',
+    (sha) => {
+      expect(issueKeys({ ...VALID, COMMIT_SHA: sha })).toEqual(['COMMIT_SHA']);
+    }
+  );
+
+  it('treats an empty COMMIT_SHA as unset', () => {
+    expect(loadConfig({ ...VALID, COMMIT_SHA: '' }).COMMIT_SHA).toBeUndefined();
   });
 });

@@ -1,4 +1,9 @@
+import { isAbsolute } from 'node:path';
 import { z } from 'zod';
+import {
+  MIN_PROXY_KEY_LENGTH,
+  parseProxyKeys,
+} from '../security/proxy-auth.js';
 
 // Order matters: it is the order in which problems are reported.
 export const CONFIG_KEYS = [
@@ -8,6 +13,10 @@ export const CONFIG_KEYS = [
   'PUBLIC_BASE_URL',
   'LOG_LEVEL',
   'NODE_ENV',
+  'PROXY_AUTH',
+  'MCP_PROXY_BACKEND_KEY',
+  'MCP_PROXY_BACKEND_KEY_FILE',
+  'COMMIT_SHA',
 ] as const;
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -25,6 +34,12 @@ export const LOG_LEVELS = [
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
 const NODE_ENVS = ['development', 'test', 'production'] as const;
+
+// 'required' is the default and fails closed: without a usable proxy key the
+// server does not start. Only an explicit 'off' disables the check (D-04).
+const PROXY_AUTH_MODES = ['required', 'off'] as const;
+
+const COMMIT_SHA_FORMAT = /^[0-9a-f]{7,40}$/;
 
 const httpUrl = (): z.ZodURL => z.url({ protocol: /^https?$/ });
 
@@ -49,15 +64,56 @@ const ConfigSchema = z
     PUBLIC_BASE_URL: httpUrl(),
     LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
     NODE_ENV: z.enum(NODE_ENVS).default('production'),
+    PROXY_AUTH: z.enum(PROXY_AUTH_MODES).default('required'),
+    MCP_PROXY_BACKEND_KEY: z.string().optional(),
+    MCP_PROXY_BACKEND_KEY_FILE: z
+      .string()
+      .refine((path) => isAbsolute(path))
+      .optional(),
+    COMMIT_SHA: z.string().regex(COMMIT_SHA_FORMAT).optional(),
   })
   .superRefine(
     (config, ctx) => {
       // Runs even when other keys failed, so every problem is reported at
       // once; the values may then be unvalidated, hence the defensive reads.
-      const { NODE_ENV: nodeEnv, ALTEGIO_API_BASE: base } = config as {
+      const {
+        NODE_ENV: nodeEnv,
+        ALTEGIO_API_BASE: base,
+        PROXY_AUTH: proxyAuth,
+        MCP_PROXY_BACKEND_KEY: proxyKey,
+        MCP_PROXY_BACKEND_KEY_FILE: proxyKeyFile,
+      } = config as {
         NODE_ENV?: unknown;
         ALTEGIO_API_BASE?: unknown;
+        PROXY_AUTH?: unknown;
+        MCP_PROXY_BACKEND_KEY?: unknown;
+        MCP_PROXY_BACKEND_KEY_FILE?: unknown;
       };
+
+      // Fail closed: anything but an explicit 'off' needs a usable proxy key.
+      // The file wins over the plain value in src/server.ts; a plain value that
+      // is set must still hold a key of the minimum length.
+      if (proxyAuth !== 'off') {
+        if (proxyKeyFile === undefined && proxyKey === undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['MCP_PROXY_BACKEND_KEY_FILE'],
+            message: 'proxy key is required',
+          });
+        }
+        if (
+          proxyKey !== undefined &&
+          (typeof proxyKey !== 'string' ||
+            parseProxyKeys(proxyKey).length === 0)
+        ) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['MCP_PROXY_BACKEND_KEY'],
+            message: 'proxy key is too short',
+          });
+        }
+      }
+
       if (nodeEnv !== 'production') return;
       if (typeof base !== 'string' || !URL.canParse(base)) return;
       if (new URL(base).protocol !== 'https:') {
@@ -104,6 +160,23 @@ const MESSAGES: Readonly<
   NODE_ENV: {
     missing: 'is required (see .env.example)',
     invalid: `must be one of ${NODE_ENVS.join(', ')}`,
+  },
+  PROXY_AUTH: {
+    missing: 'is required (see .env.example)',
+    invalid: `must be one of ${PROXY_AUTH_MODES.join(', ')}`,
+  },
+  MCP_PROXY_BACKEND_KEY: {
+    missing: 'is required (see .env.example)',
+    invalid: `must hold at least one key of ${String(MIN_PROXY_KEY_LENGTH)} or more characters`,
+  },
+  MCP_PROXY_BACKEND_KEY_FILE: {
+    missing:
+      'is required when PROXY_AUTH is required: set it to the path of the mounted proxy key file (or set MCP_PROXY_BACKEND_KEY; local runs set PROXY_AUTH=off)',
+    invalid: 'must be an absolute file path',
+  },
+  COMMIT_SHA: {
+    missing: 'is required (see .env.example)',
+    invalid: 'must be 7 to 40 lowercase hexadecimal characters',
   },
 };
 

@@ -8,6 +8,7 @@ import express, {
 import type { Logger } from 'pino';
 import { createMcpRequestHandler } from './mcp/stateless-handler.js';
 import { createCallLogMiddleware } from './observability/call-log.js';
+import { createProxyAuthMiddleware } from './security/proxy-auth.js';
 import type { DefinedTool } from './tools/factory.js';
 
 export const MCP_BODY_LIMIT = '100kb';
@@ -21,6 +22,12 @@ export interface AppDeps<D> {
   secrets: readonly string[];
   allowedOrigins: readonly string[];
   allowLoopbackOrigins: boolean;
+  // Verifies the platform proxy's signature on POST /mcp (OPS-03, D-04). Absent
+  // or null leaves the check off, which only src/server.ts does, and only for
+  // an explicit PROXY_AUTH=off.
+  proxyAuth?: { keys: () => readonly string[]; now?: () => number } | null;
+  // The deployed commit, reported by /health.
+  commit?: string | null;
 }
 
 interface JsonRpcErrorBody {
@@ -99,7 +106,11 @@ export function createApp<D>(deps: AppDeps<D>): Express {
   );
 
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', version: deps.version });
+    res.json({
+      status: 'ok',
+      version: deps.version,
+      commit: deps.commit ?? null,
+    });
   });
 
   // Mounted after the call log so a rejected request is still logged once.
@@ -128,10 +139,19 @@ export function createApp<D>(deps: AppDeps<D>): Express {
     next();
   };
 
+  // Chain: call log -> origin guard -> proxy auth -> body parser -> batch
+  // refusal -> MCP handler. Proxy auth runs before the body is parsed, so an
+  // unsigned request on the public run.app address costs no parsing.
+  const proxyAuth: RequestHandler[] =
+    deps.proxyAuth === undefined || deps.proxyAuth === null
+      ? []
+      : [createProxyAuthMiddleware(deps.proxyAuth)];
+
   app.post(
     '/mcp',
     createCallLogMiddleware(deps.logger, toolNames),
     originGuard,
+    ...proxyAuth,
     express.json({ limit: MCP_BODY_LIMIT }),
     rejectBatch,
     mcpHandler

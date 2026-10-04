@@ -4,6 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { z } from 'zod';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { PACKAGE_VERSION } from '../util/package-metadata.js';
+import { PROXY_AUTH_HEADER } from '../security/proxy-auth.js';
 import { createApp } from '../app.js';
 import { defineTool } from '../tools/factory.js';
 import {
@@ -18,6 +19,7 @@ import {
   toolsListBody,
   waitForLogs,
 } from './helpers/http-harness.js';
+import { signProxyRequest } from './helpers/sign-request.js';
 
 const clients: Client[] = [];
 
@@ -78,7 +80,11 @@ describe('stateless MCP over POST /mcp (tracer)', () => {
     try {
       const { status, body } = await getJson(`${harness.baseUrl}/health`);
       expect(status).toBe(200);
-      expect(body).toEqual({ status: 'ok', version: PACKAGE_VERSION });
+      expect(body).toEqual({
+        status: 'ok',
+        version: PACKAGE_VERSION,
+        commit: null,
+      });
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
@@ -407,5 +413,133 @@ describe('independence and registry behaviour', () => {
         allowLoopbackOrigins: false,
       })
     ).toThrow('Duplicate tool name: demo_echo_items');
+  });
+});
+
+describe('proxy-origin signature on POST /mcp (OPS-03, D-04)', () => {
+  const KEY = 'http-test-key-0123456789abcdef0123456789abcdef';
+  const REFUSAL = {
+    error: 'proxy_auth_required',
+    error_description: 'requests must come through mcp-proxy',
+  };
+
+  function signed(
+    headers: Record<string, string> = {}
+  ): Record<string, string> {
+    return {
+      ...headers,
+      [PROXY_AUTH_HEADER]: signProxyRequest({
+        key: KEY,
+        method: 'POST',
+        path: '/mcp',
+        headers,
+      }),
+    };
+  }
+
+  it('serves a signed tools/list', async () => {
+    const harness = await startApp({ proxyAuth: { keys: () => [KEY] } });
+    const res = await postMcp(harness.baseUrl, toolsListBody(), signed());
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as RpcResponse;
+    expect(body.result?.tools?.map((tool) => tool.name)).toEqual([
+      'demo_echo_items',
+    ]);
+  });
+
+  it('refuses an unsigned tools/list with 401 and the exact body', async () => {
+    const harness = await startApp({ proxyAuth: { keys: () => [KEY] } });
+    const res = await postMcp(harness.baseUrl, toolsListBody());
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual(REFUSAL);
+  });
+
+  it('refuses a signature made with another key, a stale one and a malformed one', async () => {
+    const now = Date.now();
+    const harness = await startApp({
+      proxyAuth: { keys: () => [KEY], now: () => now },
+    });
+    const wrongKey = signProxyRequest({
+      key: 'another-key-0123456789abcdef0123456789abcdef',
+      method: 'POST',
+      path: '/mcp',
+      nowMs: now,
+    });
+    const stale = signProxyRequest({
+      key: KEY,
+      method: 'POST',
+      path: '/mcp',
+      nowMs: now - 301_000,
+    });
+    for (const header of [wrongKey, stale, 'nonsense']) {
+      const res = await postMcp(harness.baseUrl, toolsListBody(), {
+        [PROXY_AUTH_HEADER]: header,
+      });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual(REFUSAL);
+    }
+  });
+
+  it('refuses before the body is parsed', async () => {
+    const harness = await startApp({ proxyAuth: { keys: () => [KEY] } });
+    const res = await postMcp(harness.baseUrl, '{ not json');
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual(REFUSAL);
+  });
+
+  it('covers the identity headers the proxy adds', async () => {
+    const harness = await startApp({ proxyAuth: { keys: () => [KEY] } });
+    const identity = { 'x-mcp-auth-client-ip': '203.0.113.7' };
+    const header = signed(identity)[PROXY_AUTH_HEADER] ?? '';
+    const ok = await postMcp(harness.baseUrl, toolsListBody(), {
+      ...identity,
+      [PROXY_AUTH_HEADER]: header,
+    });
+    expect(ok.status).toBe(200);
+    const tampered = await postMcp(harness.baseUrl, toolsListBody(), {
+      'x-mcp-auth-client-ip': '203.0.113.8',
+      [PROXY_AUTH_HEADER]: header,
+    });
+    expect(tampered.status).toBe(401);
+  });
+
+  it('refuses everything when the key list is empty, never failing open', async () => {
+    const harness = await startApp({ proxyAuth: { keys: () => [] } });
+    expect((await postMcp(harness.baseUrl, toolsListBody())).status).toBe(401);
+    expect(
+      (await postMcp(harness.baseUrl, toolsListBody(), signed())).status
+    ).toBe(401);
+  });
+
+  it('logs a refused request once, with no header value and no key', async () => {
+    const harness = await startApp({ proxyAuth: { keys: () => [KEY] } });
+    const header = signed()[PROXY_AUTH_HEADER] ?? '';
+    await postMcp(harness.baseUrl, toolsListBody(), {
+      [PROXY_AUTH_HEADER]: header.replace(/.$/, '0'),
+    });
+    const logs = await waitForLogs(harness, 1);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      event: 'mcp_call',
+      http_status: 401,
+      outcome: 'http_error',
+    });
+    const text = JSON.stringify(logs);
+    expect(text).not.toContain(KEY);
+    expect(text).not.toContain(header.slice(0, -1));
+  });
+
+  it('leaves /health open', async () => {
+    const harness = await startApp({
+      proxyAuth: { keys: () => [KEY] },
+      commit: '0123abc',
+    });
+    const { status, body } = await getJson(`${harness.baseUrl}/health`);
+    expect(status).toBe(200);
+    expect(body).toEqual({
+      status: 'ok',
+      version: PACKAGE_VERSION,
+      commit: '0123abc',
+    });
   });
 });

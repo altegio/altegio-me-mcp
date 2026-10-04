@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Container smoke test: scripts/smoke.sh IMAGE
-# Runs the image with a canary token and checks /health, the stateless /mcp
-# endpoint, the log contents, the container user and the SIGTERM shutdown.
+# Runs the image with a canary token and a proxy key file, and checks /health,
+# the stateless /mcp endpoint with requests signed the way the platform proxy
+# signs them, the 401 for an unsigned request, the log contents, the container
+# user and the SIGTERM shutdown.
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
@@ -17,6 +19,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CANARY_TOKEN="smoke-token-$(date +%s)-$RANDOM"
 CANARY_ARG="smoke-arg-$RANDOM"
 WORK_DIR="$(mktemp -d)"
+# Random per run; the container reads it from a file, as production reads the
+# Secret Manager mount. The verifier takes the text of the key as the HMAC key.
+PROXY_KEY="$(openssl rand -hex 32)"
+PROXY_KEY_FILE="$WORK_DIR/proxy-key"
+COMMIT_VALUE="0123abc"
 
 cleanup() {
   docker rm -f "$NAME" >/dev/null 2>&1 || true
@@ -33,9 +40,33 @@ fail() {
   exit 1
 }
 
-# post_mcp NAME JSON: POST to /mcp, keep headers in $WORK_DIR/NAME.headers and
-# the body in $WORK_DIR/NAME.body, print the HTTP status.
+# sign_post_mcp: the x-mcp-proxy-auth value for POST /mcp now (research
+# Pattern 1): v1:<seconds>:<hex HMAC-SHA256> over 'mcp-proxy-auth/v1', the
+# seconds, the method and the path, joined by newlines. No x-mcp-auth-* header
+# is sent, so no identity lines follow.
+sign_post_mcp() {
+  local seconds mac
+  seconds="$(date +%s)"
+  mac="$(printf 'mcp-proxy-auth/v1\n%s\nPOST\n/mcp' "$seconds" |
+    openssl dgst -sha256 -hmac "$PROXY_KEY" |
+    sed 's/^.*= //')"
+  printf 'v1:%s:%s' "$seconds" "$mac"
+}
+
+# post_mcp NAME JSON: signed POST to /mcp, keep headers in
+# $WORK_DIR/NAME.headers and the body in $WORK_DIR/NAME.body, print the HTTP
+# status.
 post_mcp() {
+  curl -sS -D "$WORK_DIR/$1.headers" -o "$WORK_DIR/$1.body" -w '%{http_code}' \
+    -X POST "$BASE_URL/mcp" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -H "x-mcp-proxy-auth: $(sign_post_mcp)" \
+    --data "$2"
+}
+
+# post_mcp_unsigned NAME JSON: the same request without the signature header.
+post_mcp_unsigned() {
   curl -sS -D "$WORK_DIR/$1.headers" -o "$WORK_DIR/$1.body" -w '%{http_code}' \
     -X POST "$BASE_URL/mcp" \
     -H 'Content-Type: application/json' \
@@ -45,13 +76,23 @@ post_mcp() {
 
 EXPECTED_VERSION="$(jq -r .version "$ROOT/package.json")"
 
+# The key file is copied into the container instead of bind-mounted: a bind
+# mount of a macOS temp directory is not visible under Colima. Mode 0644 so the
+# non-root node user can read it.
+printf '%s' "$PROXY_KEY" >"$PROXY_KEY_FILE"
+chmod 0644 "$PROXY_KEY_FILE"
+
 docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" -p "${HOST_PORT}:8080" \
+docker create --name "$NAME" -p "${HOST_PORT}:8080" \
   -e PORT=8080 \
   -e ALTEGIO_API_TOKEN="$CANARY_TOKEN" \
   -e PUBLIC_BASE_URL="$BASE_URL" \
   -e LOG_LEVEL=info \
+  -e MCP_PROXY_BACKEND_KEY_FILE=/tmp/proxy-key \
+  -e COMMIT_SHA="$COMMIT_VALUE" \
   "$IMAGE" >/dev/null
+docker cp "$PROXY_KEY_FILE" "$NAME:/tmp/proxy-key"
+docker start "$NAME" >/dev/null
 
 # Wait for /health (30 seconds at most).
 ready=0
@@ -68,6 +109,8 @@ jq -e '.status == "ok"' "$WORK_DIR/health.json" >/dev/null ||
   fail "/health status is not ok: $(cat "$WORK_DIR/health.json")"
 jq -e --arg v "$EXPECTED_VERSION" '.version == $v' "$WORK_DIR/health.json" >/dev/null ||
   fail "/health version is not $EXPECTED_VERSION: $(cat "$WORK_DIR/health.json")"
+jq -e --arg c "$COMMIT_VALUE" '.commit == $c' "$WORK_DIR/health.json" >/dev/null ||
+  fail "/health commit is not $COMMIT_VALUE: $(cat "$WORK_DIR/health.json")"
 
 # initialize: 200, a protocol version, no session header (stateless server).
 init_status="$(post_mcp initialize '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0.0.0"}}}')"
@@ -94,6 +137,13 @@ post_mcp call "$call_body" >/dev/null
 jq -e '.error' "$WORK_DIR/call.body" >/dev/null ||
   fail "tools/call with an unknown tool returned no JSON-RPC error: $(cat "$WORK_DIR/call.body")"
 
+# An unsigned request is refused before its body is read: 401 and the fixed
+# proxy_auth_required body (OPS-03, D-04).
+unsigned_status="$(post_mcp_unsigned unsigned '{"jsonrpc":"2.0","id":4,"method":"tools/list"}')"
+[ "$unsigned_status" = "401" ] || fail "an unsigned POST /mcp returned HTTP $unsigned_status, expected 401"
+jq -e '.error == "proxy_auth_required"' "$WORK_DIR/unsigned.body" >/dev/null ||
+  fail "the unsigned refusal has no proxy_auth_required error: $(cat "$WORK_DIR/unsigned.body")"
+
 # The container runs as the node user, not root.
 configured_user="$(docker inspect --format '{{.Config.User}}' "$NAME")"
 [ "$configured_user" = "node" ] || fail "container user is '$configured_user', expected node"
@@ -107,10 +157,11 @@ stop_seconds=$((stop_finished - stop_started))
 exit_code="$(docker inspect --format '{{.State.ExitCode}}' "$NAME")"
 [ "$exit_code" = "0" ] || fail "container exit code is $exit_code, expected 0"
 
-# Logs: exactly one mcp_call line per POST, no canary token, no canary argument.
+# Logs: exactly one mcp_call line per POST (three signed, one unsigned), no
+# canary token, no canary argument.
 docker logs "$NAME" >"$WORK_DIR/container.log" 2>&1
 call_lines="$(grep -c '"event":"mcp_call"' "$WORK_DIR/container.log" || true)"
-[ "$call_lines" = "3" ] || fail "expected 3 mcp_call log lines, found $call_lines"
+[ "$call_lines" = "4" ] || fail "expected 4 mcp_call log lines, found $call_lines"
 if grep -qF "$CANARY_TOKEN" "$WORK_DIR/container.log"; then
   fail "the canary token appears in the container logs"
 fi
