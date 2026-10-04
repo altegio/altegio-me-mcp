@@ -256,7 +256,9 @@ describe('ConfigError reporting', () => {
       NODE_ENV: 'staging',
       LOG_LEVEL: 'verbose',
       PUBLIC_BASE_URL: 'nope',
-      ALTEGIO_API_TOKEN: '',
+      // Any non-empty token is valid, so this key is the one that cannot fail
+      // while a token file is named.
+      ALTEGIO_API_TOKEN: 'x',
       ALTEGIO_API_TOKEN_FILE: 'relative/token',
       ALTEGIO_API_BASE: 'nope',
       PORT: 'abc',
@@ -265,7 +267,9 @@ describe('ConfigError reporting', () => {
       MCP_PROXY_BACKEND_KEY_FILE: 'relative/path',
       COMMIT_SHA: 'NOT-HEX',
     });
-    expect(error.issues.map((issue) => issue.key)).toEqual([...CONFIG_KEYS]);
+    expect(error.issues.map((issue) => issue.key)).toEqual(
+      CONFIG_KEYS.filter((key) => key !== 'ALTEGIO_API_TOKEN')
+    );
   });
 
   it('formats the failure as a header, one line per issue and a pointer', () => {

@@ -127,10 +127,16 @@ export function createStaticSecretSource(secret: string): SecretSource {
   };
 }
 
-/** Every individual value a source holds or held (current and previous), payloads split by `split`. */
+/**
+ * Every individual value a source holds or held (current and previous), for a
+ * scrub list. known() returns whole payloads, so a key list such as 'old,new'
+ * comes back as one comma string that would never match a single key quoted on
+ * its own; `split` turns a payload into its values (parseProxyKeys for the
+ * proxy key). Without `split` a payload is one value, as the partner token is.
+ */
 export function knownValues(
-  _source: SecretSource,
-  _split: (payload: string) => readonly string[] = (payload) => [payload]
+  source: SecretSource,
+  split: (payload: string) => readonly string[] = (payload) => [payload]
 ): string[] {
-  return [];
+  return [...new Set(source.known().flatMap((payload) => split(payload)))];
 }

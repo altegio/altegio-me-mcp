@@ -6,6 +6,7 @@ import { RequestGate } from './booking/gate.js';
 import {
   createFileSecretSource,
   createStaticSecretSource,
+  knownValues,
   type SecretSource,
 } from './config/secret-source.js';
 import {
@@ -54,6 +55,41 @@ function exitWithProxyKeyProblem(reason: string): never {
   process.exit(1);
 }
 
+function exitWithTokenProblem(reason: string): never {
+  // Names the setting, never a value (OPS-04, threat T-03-22).
+  process.stderr.write(
+    `Partner token unusable: ${reason}\n  - ALTEGIO_API_TOKEN_FILE: mount a file that holds the partner token (or set ALTEGIO_API_TOKEN for local runs)\n`
+  );
+  process.exit(1);
+}
+
+// The file wins over the plain value, and an unreadable or empty file is never
+// replaced by the plain value: startup stops instead (T-03-22).
+async function buildTokenSource(
+  config: Config,
+  logger: Logger
+): Promise<SecretSource> {
+  if (config.ALTEGIO_API_TOKEN_FILE !== undefined) {
+    try {
+      return await createFileSecretSource({
+        path: config.ALTEGIO_API_TOKEN_FILE,
+        setting: 'ALTEGIO_API_TOKEN_FILE',
+        logger,
+      });
+    } catch {
+      return exitWithTokenProblem(
+        'ALTEGIO_API_TOKEN_FILE is unreadable or empty'
+      );
+    }
+  }
+  if (config.ALTEGIO_API_TOKEN === undefined) {
+    return exitWithTokenProblem(
+      'neither ALTEGIO_API_TOKEN nor ALTEGIO_API_TOKEN_FILE is set'
+    );
+  }
+  return createStaticSecretSource(config.ALTEGIO_API_TOKEN);
+}
+
 // The file wins over the plain value. The initial read is awaited, so a
 // missing mount stops startup instead of leaving /mcp open (fail closed).
 async function buildProxyKeySource(config: Config): Promise<SecretSource> {
@@ -81,21 +117,39 @@ async function buildProxyKeySource(config: Config): Promise<SecretSource> {
 async function main(): Promise<void> {
   const config = loadConfigOrExit();
   const logger = createLogger({ level: config.LOG_LEVEL });
-  const secrets = [config.ALTEGIO_API_TOKEN];
+  const tokenSource = await buildTokenSource(config, logger);
 
   let proxyAuth: { keys: () => readonly string[] } | null = null;
+  let proxyKeys: SecretSource | null = null;
   if (config.PROXY_AUTH === 'required') {
-    const proxyKeys = await buildProxyKeySource(config);
-    proxyAuth = { keys: () => parseProxyKeys(proxyKeys.current()) };
-    // Keys must never reach a log line or a tool result.
-    secrets.push(...parseProxyKeys(proxyKeys.current()));
+    const keySource = await buildProxyKeySource(config);
+    proxyKeys = keySource;
+    proxyAuth = { keys: () => parseProxyKeys(keySource.current()) };
   }
+
+  // Read per request, so a rotation is covered at once: the partner token now
+  // and before it, the plain value when one is set next to the file, and every
+  // single proxy key now and before (a payload such as 'old,new' is split, so
+  // a rotated-out key quoted on its own is redacted too). None of them may
+  // reach a log line or a tool result.
+  const plainToken = config.ALTEGIO_API_TOKEN;
+  const secrets = (): readonly string[] => [
+    ...knownValues(tokenSource),
+    ...(plainToken === undefined ? [] : [plainToken]),
+    ...(proxyKeys === null ? [] : knownValues(proxyKeys, parseProxyKeys)),
+  ];
 
   // The token rule stays as in Altegio.Pro MCP (any non-empty string), so a
   // token too short to scrub is reported here by name, never by value (WR-04).
-  if (config.ALTEGIO_API_TOKEN.length < MIN_SECRET_LENGTH) {
+  if (tokenSource.current().length < MIN_SECRET_LENGTH) {
     logger.warn(
-      { event: 'config_warning', setting: 'ALTEGIO_API_TOKEN' },
+      {
+        event: 'config_warning',
+        setting:
+          config.ALTEGIO_API_TOKEN_FILE === undefined
+            ? 'ALTEGIO_API_TOKEN'
+            : 'ALTEGIO_API_TOKEN_FILE',
+      },
       'partner token is shorter than the secret scrubber minimum, so it cannot be redacted from output'
     );
   }
@@ -105,7 +159,7 @@ async function main(): Promise<void> {
       {
         event: 'process_error',
         error_type: errorClass(error),
-        error_message: errorMessage(error, secrets),
+        error_message: errorMessage(error, secrets()),
       },
       'fatal process error'
     );
@@ -122,7 +176,7 @@ async function main(): Promise<void> {
     toolDeps: {
       booking: new BookingClient({
         base: config.ALTEGIO_API_BASE,
-        token: config.ALTEGIO_API_TOKEN,
+        tokenSource,
         // One gate per process, shared by every request and session: all
         // upstream calls stay below the API limits together (BAPI-02).
         gate: new RequestGate(),

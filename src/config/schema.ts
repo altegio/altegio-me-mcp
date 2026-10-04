@@ -5,11 +5,17 @@ import {
   parseProxyKeys,
 } from '../security/proxy-auth.js';
 
+// Fixed text, naming both settings and no value. zod's own messages can quote
+// the input, so none of them is ever passed through (threat T-1-12).
+const PARTNER_TOKEN_REQUIRED =
+  'Partner API token is required (ALTEGIO_API_TOKEN or ALTEGIO_API_TOKEN_FILE)';
+
 // Order matters: it is the order in which problems are reported.
 export const CONFIG_KEYS = [
   'PORT',
   'ALTEGIO_API_BASE',
   'ALTEGIO_API_TOKEN',
+  'ALTEGIO_API_TOKEN_FILE',
   'PUBLIC_BASE_URL',
   'LOG_LEVEL',
   'NODE_ENV',
@@ -48,6 +54,11 @@ const httpUrl = (): z.ZodURL => z.url({ protocol: /^https?$/ });
 // first upstream call, which starts in Phase 2. A token shorter than the
 // scrubber minimum is reported at startup by src/server.ts (WR-04).
 //
+// ALTEGIO_API_TOKEN_FILE is the production form (OPS-04, D-05): the absolute
+// path of the mounted secret, re-read while the process runs so a rotation by
+// the platform needs no restart. It wins over ALTEGIO_API_TOKEN in
+// src/server.ts, and one of the two must be set.
+//
 // NODE_ENV defaults to production so a deployment that sets nothing runs with
 // the loopback Origin allowance off, and the partner token is only ever sent
 // to an https API base in production (WR-03).
@@ -60,8 +71,11 @@ const ConfigSchema = z
       .pipe(z.number().int().min(1).max(65535))
       .default(8080),
     ALTEGIO_API_BASE: httpUrl().default('https://api.alteg.io/api/v1'),
-    ALTEGIO_API_TOKEN: z.string().min(1, 'Partner API token is required'),
-    ALTEGIO_API_TOKEN_FILE: z.string().optional(),
+    ALTEGIO_API_TOKEN: z.string().min(1).optional(),
+    ALTEGIO_API_TOKEN_FILE: z
+      .string()
+      .refine((path) => isAbsolute(path))
+      .optional(),
     PUBLIC_BASE_URL: httpUrl(),
     LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
     NODE_ENV: z.enum(NODE_ENVS).default('production'),
@@ -80,16 +94,30 @@ const ConfigSchema = z
       const {
         NODE_ENV: nodeEnv,
         ALTEGIO_API_BASE: base,
+        ALTEGIO_API_TOKEN: token,
+        ALTEGIO_API_TOKEN_FILE: tokenFile,
         PROXY_AUTH: proxyAuth,
         MCP_PROXY_BACKEND_KEY: proxyKey,
         MCP_PROXY_BACKEND_KEY_FILE: proxyKeyFile,
       } = config as {
         NODE_ENV?: unknown;
         ALTEGIO_API_BASE?: unknown;
+        ALTEGIO_API_TOKEN?: unknown;
+        ALTEGIO_API_TOKEN_FILE?: unknown;
         PROXY_AUTH?: unknown;
         MCP_PROXY_BACKEND_KEY?: unknown;
         MCP_PROXY_BACKEND_KEY_FILE?: unknown;
       };
+
+      // One of the two token settings must be set; a file path that is set but
+      // invalid is reported by its own rule, not as a missing token.
+      if (token === undefined && tokenFile === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['ALTEGIO_API_TOKEN'],
+          message: PARTNER_TOKEN_REQUIRED,
+        });
+      }
 
       // Fail closed: anything but an explicit 'off' needs a usable proxy key.
       // The file wins over the plain value in src/server.ts; a plain value that
@@ -130,10 +158,6 @@ const ConfigSchema = z
 
 export type Config = z.output<typeof ConfigSchema>;
 
-// Fixed text per key. zod's own messages can quote the input, so none of them
-// is ever passed through (threat T-1-12).
-const PARTNER_TOKEN_REQUIRED = 'Partner API token is required';
-
 const MESSAGES: Readonly<
   Record<ConfigKey, { missing: string; invalid: string }>
 > = {
@@ -149,6 +173,10 @@ const MESSAGES: Readonly<
   ALTEGIO_API_TOKEN: {
     missing: PARTNER_TOKEN_REQUIRED,
     invalid: PARTNER_TOKEN_REQUIRED,
+  },
+  ALTEGIO_API_TOKEN_FILE: {
+    missing: PARTNER_TOKEN_REQUIRED,
+    invalid: 'must be an absolute file path',
   },
   PUBLIC_BASE_URL: {
     missing: 'is required (see .env.example)',

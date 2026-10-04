@@ -6,7 +6,10 @@ import express, {
   type Response,
 } from 'express';
 import type { Logger } from 'pino';
-import { createMcpRequestHandler } from './mcp/stateless-handler.js';
+import {
+  createMcpRequestHandler,
+  type SecretList,
+} from './mcp/stateless-handler.js';
 import { createCallLogMiddleware } from './observability/call-log.js';
 import { createProxyAuthMiddleware } from './security/proxy-auth.js';
 import type { DefinedTool } from './tools/factory.js';
@@ -21,7 +24,7 @@ export interface AppDeps<D> {
   logger: Logger;
   // Every secret to scrub from tool results; a function is evaluated once per
   // request, so a rotated token is covered without a restart (OPS-04, SEC-03).
-  secrets: readonly string[] | (() => readonly string[]);
+  secrets: SecretList;
   allowedOrigins: readonly string[];
   allowLoopbackOrigins: boolean;
   // Verifies the platform proxy's signature on POST /mcp (OPS-03, D-04). Absent
