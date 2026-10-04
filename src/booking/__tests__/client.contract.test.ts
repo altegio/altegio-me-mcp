@@ -131,6 +131,44 @@ describe('company request', () => {
   });
 });
 
+describe('company utc offset (IN-05)', () => {
+  function companyWithTimezone(timezone: unknown): FixtureResponse {
+    const fixture = loadFixture('company', 'default');
+    const body = structuredClone(fixture.body) as {
+      data: { timezone: unknown };
+    };
+    body.data.timezone = timezone;
+    return { ...fixture, body };
+  }
+
+  it.each<[unknown, number]>([
+    [3, 3],
+    ['3', 3],
+    ['5.5', 5.5],
+    ['-14', -14],
+    ['14', 14],
+    [-12, -12],
+  ])('reads %j as %d', async (timezone, expected) => {
+    const { client } = clientFor(companyWithTimezone(timezone));
+    expect((await client.company(LOCATION)).utcOffsetHours).toBe(expected);
+  });
+
+  it.each<[unknown]>([
+    ['0x10'],
+    ['1e3'],
+    ['15'],
+    ['-15'],
+    [''],
+    ['  '],
+    [15],
+    [-14.5],
+    [null],
+  ])('reads %j as null', async (timezone) => {
+    const { client } = clientFor(companyWithTimezone(timezone));
+    expect((await client.company(LOCATION)).utcOffsetHours).toBeNull();
+  });
+});
+
 describe('upstream status mapping (BAPI-01)', () => {
   it.each<[string, string, UpstreamErrorKind, number]>([
     ['400', 'bad_request', 'bad_request', 400],

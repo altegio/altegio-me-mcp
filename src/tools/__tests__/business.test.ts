@@ -1027,6 +1027,59 @@ describe('business_list_team_members (DISC-03)', () => {
     expect(out.pagination.has_more).toBe(false);
   });
 
+  describe('a rating is shown only when somebody rated the team member (CR-01)', () => {
+    function staffWith(member: Record<string, unknown>): FixtureResponse {
+      return {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        body: {
+          success: true,
+          data: [
+            { id: 2820042, name: 'Team member', bookable: true, ...member },
+          ],
+          meta: [],
+        },
+      };
+    }
+
+    it('returns rating null and says no rating shown for rating 0, show_rating 1, votes_count 0', async () => {
+      const { out, text } = await listTeamMembers(
+        {},
+        staffWith({ rating: 0, show_rating: 1, votes_count: 0 })
+      );
+      expect(out.items[0]?.rating).toBeNull();
+      expect(summaryPart(text)).toContain(
+        'team member 2820042: no rating shown'
+      );
+      expect(text).not.toContain('rating 0');
+    });
+
+    it('keeps a positive rating that has votes', async () => {
+      const { out, text } = await listTeamMembers(
+        {},
+        staffWith({ rating: 4.8, show_rating: 1, votes_count: 12 })
+      );
+      expect(out.items[0]?.rating).toBe(4.8);
+      expect(summaryPart(text)).toContain('team member 2820042: rating 4.8');
+    });
+
+    it('keeps a positive rating when the payload has no votes_count', async () => {
+      const { out } = await listTeamMembers(
+        {},
+        staffWith({ rating: 5, show_rating: 1 })
+      );
+      expect(out.items[0]?.rating).toBe(5);
+    });
+
+    it('keeps rating null when the business hides ratings, whatever the votes', async () => {
+      const { out } = await listTeamMembers(
+        {},
+        staffWith({ rating: 4.9, show_rating: 0, votes_count: 30 })
+      );
+      expect(out.items[0]?.rating).toBeNull();
+    });
+  });
+
   it('turns the 422 for a past datetime into a chosen-time error with a next action', async () => {
     const { invocation } = await listTeamMembers(
       { datetime: '2026-10-05T14:00:00+03:00' },
