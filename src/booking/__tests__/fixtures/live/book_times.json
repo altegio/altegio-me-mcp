@@ -1,0 +1,43 @@
+{
+  "recorded_at": "2026-10-04T05:56:08.514Z",
+  "route": "book_times",
+  "status": 200,
+  "data": [
+    {
+      "time": "10:00",
+      "seance_length": 3600,
+      "sum_length": 3600,
+      "datetime": "2026-10-06T10:00:00+02:00"
+    },
+    {
+      "time": "12:00",
+      "seance_length": 3600,
+      "sum_length": 3600,
+      "datetime": "2026-10-06T12:00:00+02:00"
+    },
+    {
+      "time": "14:00",
+      "seance_length": 3600,
+      "sum_length": 3600,
+      "datetime": "2026-10-06T14:00:00+02:00"
+    },
+    {
+      "time": "16:00",
+      "seance_length": 3600,
+      "sum_length": 3600,
+      "datetime": "2026-10-06T16:00:00+02:00"
+    },
+    {
+      "time": "18:00",
+      "seance_length": 3600,
+      "sum_length": 3600,
+      "datetime": "2026-10-06T18:00:00+02:00"
+    },
+    {
+      "time": "20:00",
+      "seance_length": 3600,
+      "sum_length": 3600,
+      "datetime": "2026-10-06T20:00:00+02:00"
+    }
+  ]
+}

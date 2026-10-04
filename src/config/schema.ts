@@ -30,20 +30,46 @@ const httpUrl = (): z.ZodURL => z.url({ protocol: /^https?$/ });
 
 // ALTEGIO_API_TOKEN is validated exactly as in Altegio.Pro MCP (D-02): any
 // non-empty string. A wrong or placeholder token shows up as a 401 on the
-// first upstream call, which starts in Phase 2.
-const ConfigSchema = z.object({
-  PORT: z
-    .string()
-    .regex(/^\d+$/)
-    .transform(Number)
-    .pipe(z.number().int().min(1).max(65535))
-    .default(8080),
-  ALTEGIO_API_BASE: httpUrl().default('https://api.alteg.io/api/v1'),
-  ALTEGIO_API_TOKEN: z.string().min(1, 'Partner API token is required'),
-  PUBLIC_BASE_URL: httpUrl(),
-  LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
-  NODE_ENV: z.enum(NODE_ENVS).default('development'),
-});
+// first upstream call, which starts in Phase 2. A token shorter than the
+// scrubber minimum is reported at startup by src/server.ts (WR-04).
+//
+// NODE_ENV defaults to production so a deployment that sets nothing runs with
+// the loopback Origin allowance off, and the partner token is only ever sent
+// to an https API base in production (WR-03).
+const ConfigSchema = z
+  .object({
+    PORT: z
+      .string()
+      .regex(/^\d+$/)
+      .transform(Number)
+      .pipe(z.number().int().min(1).max(65535))
+      .default(8080),
+    ALTEGIO_API_BASE: httpUrl().default('https://api.alteg.io/api/v1'),
+    ALTEGIO_API_TOKEN: z.string().min(1, 'Partner API token is required'),
+    PUBLIC_BASE_URL: httpUrl(),
+    LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
+    NODE_ENV: z.enum(NODE_ENVS).default('production'),
+  })
+  .superRefine(
+    (config, ctx) => {
+      // Runs even when other keys failed, so every problem is reported at
+      // once; the values may then be unvalidated, hence the defensive reads.
+      const { NODE_ENV: nodeEnv, ALTEGIO_API_BASE: base } = config as {
+        NODE_ENV?: unknown;
+        ALTEGIO_API_BASE?: unknown;
+      };
+      if (nodeEnv !== 'production') return;
+      if (typeof base !== 'string' || !URL.canParse(base)) return;
+      if (new URL(base).protocol !== 'https:') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['ALTEGIO_API_BASE'],
+          message: 'https required in production',
+        });
+      }
+    },
+    { when: () => true }
+  );
 
 export type Config = z.output<typeof ConfigSchema>;
 
@@ -60,7 +86,8 @@ const MESSAGES: Readonly<
   },
   ALTEGIO_API_BASE: {
     missing: 'is required (see .env.example)',
-    invalid: 'must be an http(s) URL',
+    invalid:
+      'must be an https URL (http is accepted only when NODE_ENV is development or test)',
   },
   ALTEGIO_API_TOKEN: {
     missing: PARTNER_TOKEN_REQUIRED,

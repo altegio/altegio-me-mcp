@@ -38,6 +38,9 @@ const KNOWN_METHODS: ReadonlySet<string> = new Set([
 const MCP_CLIENT_MAX_CHARS = 100;
 const PROTOCOL_VERSION_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const NON_PRINTABLE_ASCII = /[^\x20-\x7E]/g;
+// Enough for any JSON-RPC error body; a larger body is a result, not an error.
+const BODY_COPY_LIMIT = 64 * 1024;
+const JSON_CONTENT_TYPE = /^application\/([a-z0-9.+-]+\+)?json\s*(;|$)/i;
 
 function newRecord(): CallRecord {
   return { tool: null, outcome: null, error_type: null };
@@ -110,14 +113,130 @@ function protocolVersionOf(req: Request): string | null {
     : null;
 }
 
+// A bounded copy of the response body, used only to tell a JSON-RPC error from
+// a result. It is never logged and never stored on the call record (WR-05).
+interface BodyCopy {
+  chunks: Buffer[];
+  size: number;
+  truncated: boolean;
+  headContentType: string | null;
+}
+
+function chunkBuffer(chunk: unknown, encoding: unknown): Buffer | null {
+  if (typeof chunk === 'string') {
+    return Buffer.from(
+      chunk,
+      typeof encoding === 'string' && Buffer.isEncoding(encoding)
+        ? encoding
+        : 'utf8'
+    );
+  }
+  if (chunk instanceof Uint8Array) {
+    return Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+  }
+  return null;
+}
+
+function keepChunk(copy: BodyCopy, chunk: unknown, encoding: unknown): void {
+  if (copy.truncated) return;
+  const buffer = chunkBuffer(chunk, encoding);
+  if (buffer === null || buffer.length === 0) return;
+  const room = BODY_COPY_LIMIT - copy.size;
+  if (buffer.length > room) {
+    copy.chunks.push(Buffer.from(buffer.subarray(0, room)));
+    copy.size += room;
+    copy.truncated = true;
+    return;
+  }
+  copy.chunks.push(Buffer.from(buffer));
+  copy.size += buffer.length;
+}
+
+// writeHead(status, [message], headers) takes an object or a flat array.
+function contentTypeOfHeadArgs(args: readonly unknown[]): string | null {
+  for (const arg of args) {
+    if (Array.isArray(arg)) {
+      for (let index = 0; index + 1 < arg.length; index += 2) {
+        const key: unknown = arg[index];
+        const value: unknown = arg[index + 1];
+        if (
+          typeof key === 'string' &&
+          key.toLowerCase() === 'content-type' &&
+          typeof value === 'string'
+        ) {
+          return value;
+        }
+      }
+    } else if (isPlainObject(arg)) {
+      for (const [key, value] of Object.entries(arg)) {
+        if (key.toLowerCase() === 'content-type' && typeof value === 'string') {
+          return value;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function captureBody(res: Response): BodyCopy {
+  const copy: BodyCopy = {
+    chunks: [],
+    size: 0,
+    truncated: false,
+    headContentType: null,
+  };
+  const originalWriteHead = res.writeHead.bind(res) as (
+    ...args: unknown[]
+  ) => Response;
+  const originalWrite = res.write.bind(res) as (...args: unknown[]) => boolean;
+  const originalEnd = res.end.bind(res) as (...args: unknown[]) => Response;
+  res.writeHead = ((...args: unknown[]) => {
+    copy.headContentType = contentTypeOfHeadArgs(args.slice(1));
+    return originalWriteHead(...args);
+  }) as Response['writeHead'];
+  res.write = ((...args: unknown[]) => {
+    keepChunk(copy, args[0], args[1]);
+    return originalWrite(...args);
+  }) as Response['write'];
+  res.end = ((...args: unknown[]) => {
+    keepChunk(copy, args[0], args[1]);
+    return originalEnd(...args);
+  }) as Response['end'];
+  return copy;
+}
+
+function hasErrorMember(value: unknown): boolean {
+  return isPlainObject(value) && Object.hasOwn(value, 'error');
+}
+
+function bodyHasRpcError(res: Response, copy: BodyCopy): boolean {
+  if (copy.truncated || copy.size === 0) return false;
+  const header = res.getHeader('content-type');
+  const contentType =
+    typeof header === 'string' ? header : copy.headContentType;
+  if (contentType === null || !JSON_CONTENT_TYPE.test(contentType)) {
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.concat(copy.chunks).toString('utf8'));
+  } catch {
+    return false;
+  }
+  return Array.isArray(parsed)
+    ? parsed.some(hasErrorMember)
+    : hasErrorMember(parsed);
+}
+
 function outcomeOf(
   record: CallRecord,
   aborted: boolean,
-  status: number
+  status: number,
+  rpcError: () => boolean
 ): CallOutcome {
   if (aborted) return 'aborted';
   if (record.outcome !== null) return record.outcome;
-  if (status < 300) return 'ok';
+  if (status < 300) return rpcError() ? 'protocol_error' : 'ok';
   return status === 400 ? 'protocol_error' : 'http_error';
 }
 
@@ -129,6 +248,7 @@ export function createCallLogMiddleware(
     const record = newRecord();
     res.locals.callRecord = record;
     const startedAt = performance.now();
+    const copy = captureBody(res);
     let written = false;
 
     const write = (): void => {
@@ -137,7 +257,9 @@ export function createCallLogMiddleware(
       const body: unknown = req.body;
       const method = rpcMethodOf(body);
       const status = res.statusCode;
-      const outcome = outcomeOf(record, !res.writableFinished, status);
+      const outcome = outcomeOf(record, !res.writableFinished, status, () =>
+        bodyHasRpcError(res, copy)
+      );
       const line = {
         event: 'mcp_call',
         rpc_method: method,

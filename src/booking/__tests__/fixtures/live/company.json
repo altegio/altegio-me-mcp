@@ -1,0 +1,377 @@
+{
+  "recorded_at": "2026-10-04T05:56:06.176Z",
+  "route": "company",
+  "status": 200,
+  "data": {
+    "id": 722227,
+    "title": "Business Example - Beauty",
+    "public_title": "Business Example - Beauty",
+    "short_descr": "Косметология",
+    "logo": "https://example.invalid/image.png",
+    "country_id": 21,
+    "country": "Armenia",
+    "city_id": 2433,
+    "city": "Armavir",
+    "active": 0,
+    "phone": "",
+    "phones": [],
+    "email": "",
+    "timezone": 2,
+    "timezone_name": "Europe/Warsaw",
+    "schedule": "пн.-вс.: 10:00 - 22:00",
+    "address": "",
+    "coordinate_lat": 0,
+    "coordinate_lon": 0,
+    "app_ios": "",
+    "app_android": "",
+    "phone_confirmation": false,
+    "currency_short_title": "դր",
+    "reminds_sms_disabled": false,
+    "reminds_sms_default": 24,
+    "group_priority": 0,
+    "bookform_group_priority": 0,
+    "description": "[removed]",
+    "photos": [],
+    "company_photos": [],
+    "seance_delay_step": 0,
+    "show_any_master": false,
+    "allow_delete_record": true,
+    "allow_change_record": true,
+    "allow_change_prepaid_record": false,
+    "allow_delete_prepaid_record": false,
+    "prepayment_waiting_duration_ms": 3600000,
+    "allow_change_record_delay_step": 7200,
+    "allow_delete_record_delay_step": 7200,
+    "timetable_off": true,
+    "site": "https://example.invalid/",
+    "zip": "",
+    "business_group_id": 2,
+    "business_type_id": 103,
+    "is_charge_active": false,
+    "is_charge_optional": false,
+    "payment_policy": {
+      "type": "none"
+    },
+    "is_abonement_restriction_enabled": false,
+    "print_bill_on": 0,
+    "print_bill_type": "",
+    "record_type_id": 1,
+    "split_records_by_resources": 1,
+    "auto_pay_account_id": 1466613,
+    "auto_pay_bank_account_id": 1466614,
+    "is_admin_app": 0,
+    "push_notification_phone_confirm": 1,
+    "switched_to_tariff": true,
+    "sms_enabled": false,
+    "is_offline_record_notification_enabled": true,
+    "activity_record_clients_count_max": 1,
+    "activity_online_record_clients_count_max": 1,
+    "is_individual": false,
+    "is_tips_enabled": true,
+    "email_hours_default": 12,
+    "is_show_privacy_policy": true,
+    "is_surname_field_enabled": true,
+    "is_patronymic_field_enabled": true,
+    "master_name": "",
+    "is_client_search_by_loyalty_enabled": true,
+    "is_show_timetable_record_master_resources": true,
+    "datetime_format": "EU",
+    "map": null,
+    "social": {
+      "facebook": "",
+      "instagram": "",
+      "telegram": "https://example.invalid/",
+      "whatsapp": "",
+      "viber": ""
+    },
+    "main_group_id": 707838,
+    "main_group": {
+      "id": 707838,
+      "title": "Business Example"
+    },
+    "salon_group_settings": {
+      "id": 477,
+      "salonGroupId": 707838,
+      "isActiveAutofillMaster": false,
+      "isActiveAddMasterOnlyPhone": false,
+      "isActiveSettings": true
+    },
+    "active_staff_count": 1,
+    "next_slot": "2026-10-06T10:00:00+0200",
+    "bookforms": [
+      {
+        "id": 768566,
+        "title": "Форма компании",
+        "is_default": 0,
+        "url": "https://n768566.alteg.io/"
+      },
+      {
+        "id": 1239791,
+        "title": "ОФЕР",
+        "is_default": 0,
+        "url": "https://n1239791.alteg.io/"
+      },
+      {
+        "id": 1245081,
+        "title": "insta",
+        "is_default": 0,
+        "url": "https://n1245081.alteg.io/"
+      },
+      {
+        "id": 1246518,
+        "title": "Наружная реклама 1111",
+        "is_default": 0,
+        "url": "https://n1246518.alteg.io/"
+      },
+      {
+        "id": 1276280,
+        "title": "Какие-нибудь.Карты",
+        "is_default": 0,
+        "url": "https://n1276280.alteg.io/"
+      },
+      {
+        "id": 1320291,
+        "title": "пример",
+        "is_default": 0,
+        "url": "https://n1320291.alteg.io/"
+      },
+      {
+        "id": 1329017,
+        "title": "test",
+        "is_default": 0,
+        "url": "https://n1329017.alteg.io/"
+      },
+      {
+        "id": 1329060,
+        "title": "СсылкиСемен",
+        "is_default": 0,
+        "url": "https://n1329060.alteg.io/"
+      },
+      {
+        "id": 1331600,
+        "title": "тест",
+        "is_default": 0,
+        "url": "https://n1331600.alteg.io/"
+      },
+      {
+        "id": 1335266,
+        "title": "КЗ",
+        "is_default": 0,
+        "url": "https://n1335266.alteg.io/"
+      },
+      {
+        "id": 1337488,
+        "title": "инста",
+        "is_default": 0,
+        "url": "https://n1337488.alteg.io/"
+      },
+      {
+        "id": 1340612,
+        "title": "Для Диего",
+        "is_default": 0,
+        "url": "https://n1340612.alteg.io/"
+      },
+      {
+        "id": 1340833,
+        "title": "Тест на арабском",
+        "is_default": 0,
+        "url": "https://n1340833.alteg.io/"
+      },
+      {
+        "id": 1357649,
+        "title": "Креатив 123",
+        "is_default": 0,
+        "url": "https://n1357649.alteg.io/"
+      },
+      {
+        "id": 1357676,
+        "title": "КРЕАТИВПРОФИ ДОКТОР",
+        "is_default": 0,
+        "url": "https://n1357676.alteg.io/"
+      },
+      {
+        "id": 1364931,
+        "title": "Реклама по бартеру от Айжан",
+        "is_default": 0,
+        "url": "https://n1364931.alteg.io/"
+      },
+      {
+        "id": 1377292,
+        "title": "КРЕАТИВ 1",
+        "is_default": 0,
+        "url": "https://n1377292.alteg.io/"
+      },
+      {
+        "id": 1377984,
+        "title": "КРЕАТИВ1",
+        "is_default": 0,
+        "url": "https://n1377984.alteg.io/"
+      },
+      {
+        "id": 1378614,
+        "title": "google.maps",
+        "is_default": 0,
+        "url": "https://n1378614.alteg.io/"
+      },
+      {
+        "id": 1380394,
+        "title": "Yoga Lessons Online Schedule",
+        "is_default": 0,
+        "url": "https://n1380394.alteg.io/"
+      },
+      {
+        "id": 1380467,
+        "title": "Запись на групповые",
+        "is_default": 0,
+        "url": "https://n1380467.alteg.io/"
+      },
+      {
+        "id": 1382507,
+        "title": "Креатив трендовая ситрижка",
+        "is_default": 0,
+        "url": "https://n1382507.alteg.io/"
+      },
+      {
+        "id": 1388336,
+        "title": "Реклама от Таисии",
+        "is_default": 0,
+        "url": "https://n1388336.alteg.io/"
+      },
+      {
+        "id": 1389194,
+        "title": "Групповые записи",
+        "is_default": 0,
+        "url": "https://n1389194.alteg.io/"
+      },
+      {
+        "id": 1392449,
+        "title": "Для 2ГИС",
+        "is_default": 0,
+        "url": "https://n1392449.alteg.io/"
+      },
+      {
+        "id": 1392491,
+        "title": "Запись к марии",
+        "is_default": 0,
+        "url": "https://n1392491.alteg.io/"
+      },
+      {
+        "id": 1401296,
+        "title": "Реклама с Наргизой",
+        "is_default": 0,
+        "url": "https://n1401296.alteg.io/"
+      },
+      {
+        "id": 1402498,
+        "title": "Запись на Семёна",
+        "is_default": 0,
+        "url": "https://n1402498.alteg.io/"
+      },
+      {
+        "id": 1406375,
+        "title": "test_auto",
+        "is_default": 1,
+        "url": "https://n1406375.alteg.io/"
+      },
+      {
+        "id": 1406428,
+        "title": "Автошкола_Ереван",
+        "is_default": 0,
+        "url": "https://n1406428.alteg.io/"
+      },
+      {
+        "id": 1406432,
+        "title": "Автошкола_Гюмри",
+        "is_default": 0,
+        "url": "https://n1406432.alteg.io/"
+      },
+      {
+        "id": 1420557,
+        "title": "Основа",
+        "is_default": 0,
+        "url": "https://n1420557.alteg.io/"
+      },
+      {
+        "id": 1420558,
+        "title": "Тестт",
+        "is_default": 0,
+        "url": "https://n1420558.alteg.io/"
+      },
+      {
+        "id": 1420559,
+        "title": "Тесттт",
+        "is_default": 0,
+        "url": "https://n1420559.alteg.io/"
+      },
+      {
+        "id": 1420975,
+        "title": "Персональная ссылка Максима",
+        "is_default": 0,
+        "url": "https://n1420975.alteg.io/"
+      },
+      {
+        "id": 1423426,
+        "title": "Запись к Кристине",
+        "is_default": 0,
+        "url": "https://n1423426.alteg.io/"
+      },
+      {
+        "id": 1423427,
+        "title": "Общая",
+        "is_default": 0,
+        "url": "https://n1423427.alteg.io/"
+      },
+      {
+        "id": 1428025,
+        "title": "запись к Семёну инстаграм",
+        "is_default": 0,
+        "url": "https://n1428025.alteg.io/"
+      },
+      {
+        "id": 1429603,
+        "title": "Общая",
+        "is_default": 0,
+        "url": "https://n1429603.alteg.io/"
+      },
+      {
+        "id": 1430271,
+        "title": "запись к Семёну",
+        "is_default": 0,
+        "url": "https://n1430271.alteg.io/"
+      },
+      {
+        "id": 1433842,
+        "title": "Виджет",
+        "is_default": 0,
+        "url": "https://n1433842.alteg.io/"
+      },
+      {
+        "id": 1456633,
+        "title": "Тест",
+        "is_default": 0,
+        "url": "https://n1456633.alteg.io/"
+      },
+      {
+        "id": 1462031,
+        "title": "Тест",
+        "is_default": 0,
+        "url": "https://n1462031.alteg.io/"
+      },
+      {
+        "id": 1463903,
+        "title": "Тест",
+        "is_default": 1,
+        "url": "https://n1463903.alteg.io/"
+      }
+    ],
+    "default_bookform_url": "https://n1406375.alteg.io/",
+    "booking_comment_required": false,
+    "booking_email_required": false,
+    "booking_comment_hidden": false,
+    "booking_email_hidden": false,
+    "booking_surname_required": false,
+    "booking_patronymic_required": false,
+    "booking_widget_promo": null,
+    "is_review_request_notification_enabled": false
+  }
+}

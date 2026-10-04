@@ -1,6 +1,10 @@
 import { describe, expect, it } from '@jest/globals';
 import { z } from 'zod';
-import { defineTool, TEXT_BUDGET_CHARS } from '../factory.js';
+import {
+  defineTool,
+  STRUCTURED_BUDGET_CHARS,
+  TEXT_BUDGET_CHARS,
+} from '../factory.js';
 
 const readHints = {
   readOnlyHint: true,
@@ -126,6 +130,41 @@ describe('rendered text budget', () => {
     const text = 'b'.repeat(TEXT_BUDGET_CHARS + 10);
     const { result } = await textTool(() => text).invoke({}, undefined);
     expect(result.structuredContent).toEqual({ text });
+  });
+});
+
+// Mirrors STRUCTURED_BUDGET_CHARS in factory.ts.
+const STRUCTURED_BUDGET = 100_000;
+// JSON.stringify({ text }) adds {"text":"..."} around an ASCII text: 11 characters.
+const TEXT_ENVELOPE_CHARS = JSON.stringify({ text: '' }).length;
+
+describe('structuredContent budget', () => {
+  it('uses a budget of 100000 characters', () => {
+    expect(STRUCTURED_BUDGET_CHARS).toBe(STRUCTURED_BUDGET);
+  });
+
+  it('returns an output of exactly the budget with its structuredContent', async () => {
+    const text = 'c'.repeat(STRUCTURED_BUDGET - TEXT_ENVELOPE_CHARS);
+    expect(JSON.stringify({ text })).toHaveLength(STRUCTURED_BUDGET);
+    const invocation = await textTool(() => text).invoke({}, undefined);
+    expect(invocation.outcome).toBe('ok');
+    expect(invocation.result.isError).toBeUndefined();
+    expect(invocation.result.structuredContent).toEqual({ text });
+  });
+
+  it('fails an output one character over the budget with OutputTooLarge', async () => {
+    const text = 'c'.repeat(STRUCTURED_BUDGET - TEXT_ENVELOPE_CHARS + 1);
+    expect(JSON.stringify({ text })).toHaveLength(STRUCTURED_BUDGET + 1);
+    const invocation = await textTool(() => text).invoke({}, undefined);
+    expect(invocation.outcome).toBe('tool_error');
+    expect(invocation.errorType).toBe('OutputTooLarge');
+    expect(invocation.result.isError).toBe(true);
+    expect(invocation.result).not.toHaveProperty('structuredContent');
+    const rendered = invocation.result.content[0]?.text ?? '';
+    expect(rendered).toContain('demo_text');
+    expect(rendered).toContain('Next:');
+    expect(rendered).toContain('page_size');
+    expect(rendered).not.toContain('ccccc');
   });
 });
 

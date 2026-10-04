@@ -4,11 +4,17 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { BOOKING_ROUTES } from '../../booking/client.js';
 import { createMcpServer } from '../../mcp/create-server.js';
 import { SERVER_INSTRUCTIONS } from '../../mcp/instructions.js';
 import type { ToolMeta, ToolSpec } from '../../tools/factory.js';
 import { productionTools } from '../../tools/registry.js';
-import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from '../../tools/untrusted.js';
+import {
+  INVISIBLE_RANGES,
+  UNTRUSTED_CLOSE,
+  UNTRUSTED_OPEN,
+  sanitizeUntrusted,
+} from '../../tools/untrusted.js';
 import { badFixtures, compliantListTool } from '../fixtures.js';
 import {
   READ_ONLY_POST_ROUTES,
@@ -91,12 +97,43 @@ describe('compliant tools', () => {
     expect(checkRegistry(registry, { production: true })).toEqual([]);
   });
 
-  it('keeps the production registry empty in phase 1', () => {
-    expect(productionTools).toEqual([]);
+  it('registers read-only production tools with unique names', () => {
+    expect(productionTools.length).toBeGreaterThan(0);
+    for (const tool of productionTools) {
+      expect(tool.spec.annotations.readOnlyHint).toBe(true);
+    }
+    const names = productionTools.map((tool) => tool.name);
+    expect(new Set(names).size).toBe(names.length);
   });
 
-  it('declares no read-only POST route yet', () => {
-    expect(READ_ONLY_POST_ROUTES.size).toBe(0);
+  it('declares exactly the book_check validation route as a read-only POST route (D-04)', () => {
+    expect([...READ_ONLY_POST_ROUTES]).toEqual(['/book_check/{location_id}']);
+    expect(READ_ONLY_POST_ROUTES.has(BOOKING_ROUTES.check.route)).toBe(true);
+  });
+
+  it('registers exactly the six Phase 2 tools, in booking-flow order', () => {
+    expect(productionTools.map((tool) => tool.name)).toEqual([
+      'business_get',
+      'business_list_services',
+      'business_list_team_members',
+      'business_list_dates',
+      'business_list_time_slots',
+      'book_check',
+    ]);
+  });
+
+  it('declares only BOOKING_ROUTES entries as upstream calls', () => {
+    const routes = Object.values(BOOKING_ROUTES);
+    for (const tool of productionTools) {
+      expect(tool.meta.upstream.length).toBeGreaterThan(0);
+      for (const call of tool.meta.upstream) {
+        expect(routes).toContainEqual(call);
+      }
+    }
+  });
+
+  it('reports nothing for the production registry alone', () => {
+    expect(checkRegistry(productionTools, { production: true })).toEqual([]);
   });
 });
 
@@ -157,6 +194,37 @@ describe('R8 descriptions', () => {
 
   it('reports invisible characters from textViolations', () => {
     expect(textViolations(`a${ZERO_WIDTH_SPACE}b`).length).toBeGreaterThan(0);
+  });
+
+  it('reports a Unicode Tag character from textViolations (CR-01)', () => {
+    expect(
+      textViolations(`Lists items${String.fromCodePoint(0xe0041)}`)
+    ).toContain('contains invisible or bidirectional control characters');
+  });
+
+  it.each([
+    ['Unicode Tag', 0xe0041],
+    ['variation selector', 0xfe0f],
+    ['variation selector supplement', 0xe0100],
+    ['combining grapheme joiner', 0x034f],
+    ['Hangul filler', 0x3164],
+  ])('fails R8 for a description carrying a %s character', (_label, cp) => {
+    const spec = specWith({
+      description: `Lists demo items, one page at a time.${String.fromCodePoint(cp)}`,
+    });
+    expect(rules(checkTool(spec, SINGLE))).toContain('R8');
+  });
+
+  it('flags exactly what the sanitiser removes: both ends of every shared range', () => {
+    for (const [from, to] of INVISIBLE_RANGES) {
+      for (const codePoint of [from, to]) {
+        const char = String.fromCodePoint(codePoint);
+        expect(sanitizeUntrusted(`a${char}b`)).toBe('ab');
+        expect(textViolations(`Lists items${char}`)).toContain(
+          'contains invisible or bidirectional control characters'
+        );
+      }
+    }
   });
 
   it('is case-insensitive and sees through invisible characters', () => {

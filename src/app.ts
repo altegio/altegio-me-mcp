@@ -33,6 +33,24 @@ function rpcError(code: number, message: string): JsonRpcErrorBody {
   return { jsonrpc: '2.0', error: { code, message }, id: null };
 }
 
+// body-parser and http-errors attach the HTTP status the client caused.
+function clientStatusOf(err: unknown): number | null {
+  if (typeof err !== 'object' || err === null) return null;
+  const { status, statusCode } = err as {
+    status?: unknown;
+    statusCode?: unknown;
+  };
+  const code =
+    typeof status === 'number'
+      ? status
+      : typeof statusCode === 'number'
+        ? statusCode
+        : null;
+  return code !== null && Number.isInteger(code) && code >= 400 && code < 500
+    ? code
+    : null;
+}
+
 function errorTypeOf(err: unknown): string | null {
   if (typeof err === 'object' && err !== null && 'type' in err) {
     const type = (err as { type?: unknown }).type;
@@ -97,11 +115,25 @@ export function createApp<D>(deps: AppDeps<D>): Express {
     res.status(403).json(rpcError(-32000, 'Forbidden origin'));
   };
 
+  // MCP dropped JSON-RPC batching after 2025-03-26. An array body would let one
+  // HTTP request fan out into many upstream Altegio calls (WR-01), so it is
+  // refused before the MCP handler runs.
+  const rejectBatch: RequestHandler = (req, res, next) => {
+    if (Array.isArray(req.body)) {
+      res
+        .status(400)
+        .json(rpcError(-32600, 'Batch requests are not supported'));
+      return;
+    }
+    next();
+  };
+
   app.post(
     '/mcp',
     createCallLogMiddleware(deps.logger, toolNames),
     originGuard,
     express.json({ limit: MCP_BODY_LIMIT }),
+    rejectBatch,
     mcpHandler
   );
 
@@ -135,8 +167,16 @@ export function createApp<D>(deps: AppDeps<D>): Express {
             rpcError(-32000, `Request body too large (limit ${MCP_BODY_LIMIT})`)
           );
         return;
-      default:
+      default: {
+        // A client mistake the parser reports with its own 4xx (unsupported
+        // encoding or charset, aborted body) is not a server failure (WR-02).
+        const clientStatus = clientStatusOf(err);
+        if (clientStatus !== null) {
+          res.status(clientStatus).json(rpcError(-32600, 'Invalid request'));
+          return;
+        }
         res.status(500).json(rpcError(-32603, 'Internal error'));
+      }
     }
   });
 

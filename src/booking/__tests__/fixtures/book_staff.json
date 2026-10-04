@@ -1,0 +1,127 @@
+{
+  "default": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [
+        {
+          "id": 2098145,
+          "api_id": null,
+          "name": "Anna Smith",
+          "specialization": "Senior stylist",
+          "position": {
+            "id": 11,
+            "title": "Stylist"
+          },
+          "bookable": true,
+          "weight": 10,
+          "show_rating": 1,
+          "rating": 4.8,
+          "votes_count": 12,
+          "comments_count": 4,
+          "avatar": "https://assets.alteg.io/masters/sm/a/ab/ab12cd.jpg",
+          "information": "<p>Ten years of colour work.</p><script>alert(1)</script>",
+          "seance_date": "2026-10-05",
+          "seances": []
+        },
+        {
+          "id": 2098146,
+          "api_id": null,
+          "name": "Maria Lopez",
+          "specialization": "Nail artist",
+          "position": [],
+          "bookable": true,
+          "weight": 9,
+          "show_rating": 1,
+          "rating": 5,
+          "votes_count": 3,
+          "avatar": "",
+          "information": "",
+          "seance_date": "2026-10-06"
+        },
+        {
+          "id": 2098147,
+          "api_id": null,
+          "name": "Olga Ivanova",
+          "specialization": "Massage therapist",
+          "position": {
+            "id": 12,
+            "title": "Therapist"
+          },
+          "bookable": false,
+          "weight": 8,
+          "show_rating": 1,
+          "rating": 4.9,
+          "votes_count": 30,
+          "avatar": "",
+          "information": "",
+          "seance_date": null
+        },
+        {
+          "id": 2098148,
+          "api_id": null,
+          "name": "Anna Smith",
+          "specialization": "Colourist",
+          "position": {
+            "id": 13,
+            "title": "Colourist"
+          },
+          "bookable": true,
+          "weight": 7,
+          "show_rating": 1,
+          "rating": "4.5",
+          "votes_count": 2,
+          "avatar": "",
+          "information": "",
+          "seance_date": null
+        },
+        {
+          "id": 2098149,
+          "api_id": null,
+          "name": "Ivan Petrov",
+          "specialization": "",
+          "position": {
+            "id": 11,
+            "title": "Stylist"
+          },
+          "bookable": true,
+          "weight": 6,
+          "show_rating": 0,
+          "rating": 4.1,
+          "votes_count": 7,
+          "avatar": "",
+          "information": "",
+          "seance_date": "next week"
+        }
+      ],
+      "meta": []
+    }
+  },
+  "empty": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [],
+      "meta": []
+    }
+  },
+  "past_datetime": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The datetime must be a date after now."
+      }
+    }
+  }
+}

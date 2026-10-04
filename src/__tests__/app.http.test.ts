@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { get } from 'node:http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { z } from 'zod';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { PACKAGE_VERSION } from '../util/package-metadata.js';
 import { createApp } from '../app.js';
+import { defineTool } from '../tools/factory.js';
 import {
   ALLOWED_ORIGIN,
   closeAllApps,
@@ -216,6 +218,88 @@ describe('safe error responses', () => {
     expect(res.status).toBe(413);
     expect(((await res.json()) as RpcResponse).error?.code).toBe(-32000);
   });
+});
+
+describe('JSON-RPC batch rejection (WR-01)', () => {
+  it('answers an array body with 400 / -32600, runs no tool and logs one batch line', async () => {
+    let invocations = 0;
+    const countingTool = defineTool({
+      name: 'demo_count',
+      title: 'Count',
+      description: 'Counts its invocations.',
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+      input: z.strictObject({}),
+      output: z.strictObject({ ok: z.boolean() }),
+      render: () => 'ok',
+      handler: () => {
+        invocations += 1;
+        return Promise.resolve({ ok: true });
+      },
+    });
+    const harness = await startApp({ tools: [countingTool] });
+    const res = await postMcp(harness.baseUrl, [
+      toolsListBody(1),
+      { jsonrpc: '2.0', id: 2, method: 'ping' },
+      toolCallBody('demo_count', {}, 3),
+    ]);
+    expect(res.status).toBe(400);
+    const text = await res.text();
+    expect((JSON.parse(text) as RpcResponse).error).toEqual({
+      code: -32600,
+      message: 'Batch requests are not supported',
+    });
+    expectNoLeak(text);
+    expect(invocations).toBe(0);
+    const logs = await waitForLogs(harness, 1);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]?.rpc_method).toBe('batch');
+    expect(logs[0]?.outcome).toBe('protocol_error');
+  });
+});
+
+describe('client-caused body-parser errors stay 4xx (WR-02)', () => {
+  const PING = '{"jsonrpc":"2.0","id":1,"method":"ping"}';
+  const PINO_WARN = 40;
+
+  it.each([
+    ['Content-Encoding br on a plain body', { 'content-encoding': 'br' }, null],
+    [
+      'an unsupported Content-Encoding',
+      { 'content-encoding': 'x-unknown' },
+      415,
+    ],
+    [
+      'an unsupported charset',
+      { 'content-type': 'application/json; charset=koi8-r' },
+      415,
+    ],
+  ] as const)(
+    'answers %s with a 4xx / -32600 and a WARN log line',
+    async (_label, headers, expectedStatus) => {
+      const harness = await startApp();
+      const res = await postMcp(harness.baseUrl, PING, { ...headers });
+      if (expectedStatus === null) {
+        expect(res.status).toBeGreaterThanOrEqual(400);
+        expect(res.status).toBeLessThan(500);
+      } else {
+        expect(res.status).toBe(expectedStatus);
+      }
+      const text = await res.text();
+      expect((JSON.parse(text) as RpcResponse).error).toEqual({
+        code: -32600,
+        message: 'Invalid request',
+      });
+      expectNoLeak(text);
+      const logs = await waitForLogs(harness, 1);
+      expect(logs).toHaveLength(1);
+      expect(logs[0]?.level).toBe(PINO_WARN);
+      expect(logs[0]?.http_status).toBe(res.status);
+    }
+  );
 });
 
 describe('Origin guard (DNS rebinding)', () => {

@@ -1,0 +1,174 @@
+{
+  "created_empty": {
+    "status": 201,
+    "body": ""
+  },
+  "created_json": {
+    "status": 201,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": null,
+      "meta": {
+        "message": "Created"
+      }
+    }
+  },
+  "ok_200": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": null,
+      "meta": []
+    }
+  },
+  "taken_433": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The selected time is not available.",
+        "errors": [
+          {
+            "code": 433,
+            "message": "The selected time is not available."
+          }
+        ]
+      }
+    }
+  },
+  "no_member_436": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "No team member is available at the selected time.",
+        "errors": [
+          {
+            "code": 436,
+            "message": "No team member is available at the selected time."
+          }
+        ]
+      }
+    }
+  },
+  "not_enough_time_437": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The team member does not have enough time for these services.",
+        "errors": [
+          {
+            "code": 437,
+            "message": "The team member does not have enough time for these services."
+          }
+        ]
+      }
+    }
+  },
+  "service_438": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The selected service is not available.",
+        "errors": [
+          {
+            "code": 438,
+            "message": "The selected service is not available."
+          }
+        ]
+      }
+    }
+  },
+  "taken_and_service_433_438": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The selected time is not available.",
+        "errors": [
+          {
+            "code": 433,
+            "message": "The selected time is not available."
+          },
+          {
+            "code": 438,
+            "message": "The selected service is not available."
+          }
+        ]
+      }
+    }
+  },
+  "unknown_code_422": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The booking could not be validated.",
+        "errors": [
+          {
+            "code": 499,
+            "message": "The booking could not be validated."
+          }
+        ]
+      }
+    }
+  },
+  "not_found_404": {
+    "status": 404,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "Not found."
+      }
+    }
+  },
+  "unavailable_503": {
+    "status": 503,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "Service temporarily unavailable."
+      }
+    }
+  }
+}

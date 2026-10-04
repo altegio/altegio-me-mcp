@@ -77,8 +77,12 @@ describe('loadConfig defaults and required keys', () => {
       ALTEGIO_API_TOKEN: 'partner-token-value',
       PUBLIC_BASE_URL: 'https://mcp.example.com',
       LOG_LEVEL: 'info',
-      NODE_ENV: 'development',
+      NODE_ENV: 'production',
     });
+  });
+
+  it('defaults NODE_ENV to production so an unset deployment runs closed', () => {
+    expect(loadConfig(VALID).NODE_ENV).toBe('production');
   });
 
   it('treats an empty string as unset', () => {
@@ -152,14 +156,64 @@ describe('loadConfig URLs and enums', () => {
     }
   );
 
-  it('accepts http and https URLs', () => {
+  it('accepts http and https URLs outside production', () => {
     const config = loadConfig({
       ...VALID,
+      NODE_ENV: 'development',
       PUBLIC_BASE_URL: 'http://localhost:8080',
       ALTEGIO_API_BASE: 'http://localhost:9000/api/v1',
     });
     expect(config.PUBLIC_BASE_URL).toBe('http://localhost:8080');
     expect(config.ALTEGIO_API_BASE).toBe('http://localhost:9000/api/v1');
+  });
+
+  it.each(['development', 'test'])(
+    'accepts an http ALTEGIO_API_BASE when NODE_ENV is %s',
+    (nodeEnv) => {
+      expect(
+        loadConfig({
+          ...VALID,
+          NODE_ENV: nodeEnv,
+          ALTEGIO_API_BASE: 'http://localhost:9000/api/v1',
+        }).ALTEGIO_API_BASE
+      ).toBe('http://localhost:9000/api/v1');
+    }
+  );
+
+  it.each([{ NODE_ENV: 'production' }, {}])(
+    'rejects an http ALTEGIO_API_BASE in production (%j) with a fixed message',
+    (nodeEnv) => {
+      const base = 'http://api.example.com/api/v1';
+      const error = configErrorFor({
+        ...VALID,
+        ...nodeEnv,
+        ALTEGIO_API_BASE: base,
+      });
+      expect(error.issues).toEqual([
+        {
+          key: 'ALTEGIO_API_BASE',
+          message:
+            'must be an https URL (http is accepted only when NODE_ENV is development or test)',
+        },
+      ]);
+      expect(formatConfigError(error)).not.toContain('api.example.com');
+    }
+  );
+
+  it('reports an http ALTEGIO_API_BASE in production alongside other issues', () => {
+    expect(
+      issueKeys({
+        ALTEGIO_API_TOKEN: VALID.ALTEGIO_API_TOKEN,
+        ALTEGIO_API_BASE: 'http://api.example.com/api/v1',
+        LOG_LEVEL: 'verbose',
+      })
+    ).toEqual(['ALTEGIO_API_BASE', 'PUBLIC_BASE_URL', 'LOG_LEVEL']);
+  });
+
+  it('keeps the https default for ALTEGIO_API_BASE in production', () => {
+    expect(
+      loadConfig({ ...VALID, NODE_ENV: 'production' }).ALTEGIO_API_BASE
+    ).toBe('https://api.alteg.io/api/v1');
   });
 
   it('rejects an unknown LOG_LEVEL', () => {

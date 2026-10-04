@@ -8,6 +8,14 @@ not inspected.
 
 ## I1. GCP project and billing
 
+Decision (owner, 2026-10-04, [ADR 0003](../decisions/0003-host-in-platform-project.md)): the
+service runs as its own Cloud Run service `altegio-me-mcp` in the platform's project
+`altegio-mcp`, where every Altegio MCP server lives. No project of its own and no billing link.
+It reuses the project's Artifact Registry repo `cloud-run`, its Cloud Build GitHub connection and
+its secret `ALTEGIO_API_TOKEN`. The platform team grants the rights and links the repository
+(open item I6). The proposal below is superseded; it stays for the record and is the fallback if
+the platform team declines.
+
 What exists:
 
 - The platform runs in project `altegio-mcp`, region `europe-west1`: Cloud Run services
@@ -40,6 +48,10 @@ $10 per month. Secret Manager, Artifact Registry, Cloud Build, domain mapping: u
 
 ## I2. Domain and DNS
 
+> Superseded 2026-10-04 by [ADR 0002](../decisions/0002-public-address-on-platform-proxy.md):
+> the public address is `https://mcp.alteg.io/me` on the platform proxy. This section stays as
+> the fallback if the platform team cannot add an anonymous route.
+
 What exists:
 
 - `mcp.alteg.io` and `mcp.altegio.dev` are Cloud Run domain mappings: CNAME to
@@ -65,6 +77,13 @@ We do step 2. Steps 1 and 3 need the Search Console owner and Cloudflare write a
 `altegio.me` zone; ask in `#dev-ai-coding` or `#altegio-mcp-platform`.
 
 ## I3. Partner token
+
+Decision (owner, 2026-10-03): use the partner token of the existing developer account 2630
+"Altegio AI" (it holds Altegio.Pro MCP, Knowledge MCP and Integrations Hub MCP). No new developer
+account, app or marketplace listing. Accepted trade-offs: per-partner rate limits and anti-fraud
+state are shared with Altegio.Pro MCP, and the token cannot be revoked independently. Locally the
+token lives in `.env` (never committed), in production in Secret Manager (Phase 3). The proposal
+below is superseded; it stays for the record.
 
 What exists:
 

@@ -11,6 +11,9 @@ export default tseslint.config(
       '.claude/**',
       '.cursor/**',
       '.codex/**',
+      // Isolated local package whose dependency (playwright) CI does not
+      // install; it is type-checked by its own `typecheck` script.
+      'scripts/browser-check/**',
     ],
   },
   js.configs.recommended,

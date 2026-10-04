@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
+import type { Server as HttpServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import express, { type RequestHandler } from 'express';
+import pino from 'pino';
 import { z } from 'zod';
 import {
   CANARY_SECRET,
@@ -11,8 +15,61 @@ import {
   waitForLogs,
 } from '../../__tests__/helpers/http-harness.js';
 import { defineTool } from '../../tools/factory.js';
+import { createCallLogMiddleware } from '../call-log.js';
 
-afterEach(closeAllApps);
+const rawServers: HttpServer[] = [];
+
+afterEach(async () => {
+  await closeAllApps();
+  await Promise.all(
+    rawServers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve) => {
+          server.close(() => resolve());
+          server.closeAllConnections();
+        })
+    )
+  );
+});
+
+type RawLine = Record<string, unknown>;
+
+// The call-log middleware alone in front of a fixed responder, so the outcome
+// rule can be checked against bodies the SDK never produces.
+async function startRaw(
+  responder: RequestHandler
+): Promise<{ url: string; logs: RawLine[] }> {
+  const logs: RawLine[] = [];
+  const logger = pino(
+    { base: null, timestamp: false, messageKey: 'message', level: 'info' },
+    {
+      write(chunk: string): void {
+        logs.push(JSON.parse(chunk) as RawLine);
+      },
+    }
+  );
+  const app = express();
+  app.post(
+    '/mcp',
+    createCallLogMiddleware(logger, new Set()),
+    express.json(),
+    responder
+  );
+  const server: HttpServer = await new Promise((resolve) => {
+    const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+  });
+  rawServers.push(server);
+  const { port } = server.address() as AddressInfo;
+  return { url: `http://127.0.0.1:${port}`, logs };
+}
+
+async function waitForRaw(logs: RawLine[], count: number): Promise<RawLine[]> {
+  const deadline = Date.now() + 2000;
+  while (logs.length < count && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return logs;
+}
 
 const readOnly = {
   readOnlyHint: true,
@@ -170,5 +227,110 @@ describe('call log fields', () => {
     expect(logs).toHaveLength(1);
     expect(logs[0]?.outcome).toBe('aborted');
     expect(harness.logs).toHaveLength(1);
+  });
+});
+
+describe('outcome from the JSON-RPC response body (WR-05)', () => {
+  const PINO_WARN = 40;
+
+  it('logs an unknown method answered with HTTP 200 as protocol_error at WARN', async () => {
+    const harness = await startApp();
+    const res = await postMcp(harness.baseUrl, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'nope',
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { error?: unknown }).error).toBeDefined();
+    const [line] = await waitForLogs(harness, 1);
+    expect(line?.http_status).toBe(200);
+    expect(line?.outcome).toBe('protocol_error');
+    expect(line?.level).toBe(PINO_WARN);
+  });
+
+  it('logs tools/call with params missing name as protocol_error', async () => {
+    const harness = await startApp();
+    const res = await postMcp(harness.baseUrl, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { arguments: {} },
+    });
+    expect(res.status).toBe(200);
+    const [line] = await waitForLogs(harness, 1);
+    expect(line?.rpc_method).toBe('tools/call');
+    expect(line?.outcome).toBe('protocol_error');
+  });
+
+  it('keeps tools/list, a successful tools/call and notifications/initialized ok', async () => {
+    const harness = await startApp();
+    await postMcp(harness.baseUrl, toolsListBody(1));
+    await postMcp(
+      harness.baseUrl,
+      toolCallBody('demo_echo_items', { items: ['a'] }, 2)
+    );
+    const notified = await postMcp(harness.baseUrl, {
+      jsonrpc: '2.0',
+      method: 'notifications/initialized',
+    });
+    expect(notified.status).toBe(202);
+    const logs = await waitForLogs(harness, 3);
+    expect(logs.map((line) => line.outcome)).toEqual(['ok', 'ok', 'ok']);
+  });
+
+  it('counts a JSON-RPC error and never logs its message', async () => {
+    const canary = 'canary-error-message-5e2a';
+    const raw = await startRaw((_req, res) => {
+      res.status(200).json({
+        jsonrpc: '2.0',
+        id: 1,
+        error: { code: -32000, message: canary },
+      });
+    });
+    await postMcp(raw.url, toolsListBody(1));
+    const logs = await waitForRaw(raw.logs, 1);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]?.outcome).toBe('protocol_error');
+    expect(JSON.stringify(logs)).not.toContain(canary);
+    const { level: _level, message: _message, ...fields } = logs[0] ?? {};
+    expect(Object.keys(fields)).toHaveLength(9);
+  });
+
+  it('counts an array response that contains an error member', async () => {
+    const raw = await startRaw((_req, res) => {
+      res.status(200).json([
+        { jsonrpc: '2.0', id: 1, result: {} },
+        { jsonrpc: '2.0', id: 2, error: { code: -32601, message: 'x' } },
+      ]);
+    });
+    await postMcp(raw.url, toolsListBody(1));
+    const [line] = await waitForRaw(raw.logs, 1);
+    expect(line?.outcome).toBe('protocol_error');
+  });
+
+  it('keeps ok for a body written in chunks that carries only a result', async () => {
+    const raw = await startRaw((_req, res) => {
+      res.status(200).set('content-type', 'application/json');
+      res.write('{"jsonrpc":"2.0","id":1,');
+      res.end(Buffer.from('"result":{"error":"inside result"}}'));
+    });
+    await postMcp(raw.url, toolsListBody(1));
+    const [line] = await waitForRaw(raw.logs, 1);
+    expect(line?.outcome).toBe('ok');
+  });
+
+  it('keeps ok for a non-JSON body and for a body that does not parse', async () => {
+    const plain = await startRaw((_req, res) => {
+      res.status(200).type('text/plain').send('{"error":{"code":1}}');
+    });
+    await postMcp(plain.url, toolsListBody(1));
+    const broken = await startRaw((_req, res) => {
+      res.status(200).type('application/json').send('{"error":');
+    });
+    await postMcp(broken.url, toolsListBody(1));
+    const [plainLine] = await waitForRaw(plain.logs, 1);
+    const [brokenLine] = await waitForRaw(broken.logs, 1);
+    expect(plainLine?.outcome).toBe('ok');
+    expect(brokenLine?.outcome).toBe('ok');
   });
 });

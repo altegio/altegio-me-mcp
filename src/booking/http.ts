@@ -1,0 +1,272 @@
+import { scrubSecrets } from '../observability/redact.js';
+import { UpstreamError, type UpstreamErrorKind } from './errors.js';
+import {
+  DEFAULT_RETRY_AFTER_SECONDS,
+  GateSaturatedError,
+  INLINE_RETRY_MAX_SECONDS,
+  retryAfterSeconds,
+} from './gate.js';
+
+// One HTTP exchange with the Altegio API: headers, URL building, timeout,
+// envelope parsing and status mapping. Matches Altegio.Pro MCP (D-10): the
+// v2 Accept header and the partner token as a Bearer credential. The token
+// travels only in the Authorization header, never in the URL.
+
+export const ALTEGIO_ACCEPT = 'application/vnd.api.v2+json';
+export const UPSTREAM_TIMEOUT_MS = 10_000;
+
+/** Admission control for upstream calls; the throttle implements it. */
+export interface GateLike {
+  run<T>(start: () => Promise<T>): Promise<T>;
+  pauseUntil(untilMs: number): void;
+}
+
+/** Runs every call at once and ignores pauses. */
+export const PASS_THROUGH_GATE: GateLike = Object.freeze({
+  run<T>(start: () => Promise<T>): Promise<T> {
+    return start();
+  },
+  pauseUntil(): void {
+    // Nothing to pause.
+  },
+});
+
+export interface BookingHttpOptions {
+  base: string;
+  token: string;
+  fetch?: typeof fetch;
+  gate?: GateLike;
+  timeoutMs?: number;
+  /** Clock for rate-limit pauses; defaults to Date.now. */
+  now?: () => number;
+}
+
+export interface UpstreamCallSpec {
+  method: 'GET' | 'POST';
+  /** Route template, for example '/company/{location_id}'. */
+  route: string;
+  /** Concrete path built from integers, for example '/company/722227'. */
+  path: string;
+  query?: Readonly<Record<string, string | number | undefined>>;
+  /** Sent as repeated service_ids[] entries, in this order. */
+  serviceIds?: readonly number[];
+  /** JSON body, POST only. */
+  body?: unknown;
+}
+
+export interface UpstreamReply {
+  status: number;
+  /** envelope.data, or null for an empty 2xx body. */
+  data: unknown;
+}
+
+/** BAPI-01: every non-2xx status maps to exactly one kind. */
+function kindOfStatus(status: number): UpstreamErrorKind {
+  if (status === 400) return 'bad_request';
+  if (status === 401 || status === 403) return 'unauthorized';
+  if (status === 404) return 'not_found';
+  if (status === 422) return 'rejected';
+  if (status === 429) return 'rate_limited';
+  if (status >= 500 && status <= 599) return 'unavailable';
+  return 'contract_drift';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isTimeout(error: unknown): boolean {
+  return isRecord(error) && error.name === 'TimeoutError';
+}
+
+/** envelope.data of a 2xx body; null for an empty body. */
+function parseEnvelopeData(
+  route: string,
+  status: number,
+  text: string
+): unknown {
+  if (text === '') return null;
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(text);
+  } catch (error) {
+    throw new UpstreamError('contract_drift', route, { status, cause: error });
+  }
+  if (!isRecord(envelope)) {
+    throw new UpstreamError('contract_drift', route, { status });
+  }
+  return envelope.data ?? null;
+}
+
+/**
+ * meta.message and the numeric meta.errors[].code of an error envelope. A
+ * body that is not such an envelope gives neither; the body itself is never
+ * kept.
+ */
+function readErrorMeta(text: string): {
+  message: string | null;
+  codes: number[];
+} {
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(text);
+  } catch {
+    return { message: null, codes: [] };
+  }
+  const meta = isRecord(envelope) ? envelope.meta : undefined;
+  if (!isRecord(meta)) return { message: null, codes: [] };
+  const errors = Array.isArray(meta.errors) ? (meta.errors as unknown[]) : [];
+  const codes = errors.flatMap((entry) =>
+    isRecord(entry) &&
+    typeof entry.code === 'number' &&
+    Number.isInteger(entry.code)
+      ? [entry.code]
+      : []
+  );
+  return {
+    message: typeof meta.message === 'string' ? meta.message : null,
+    codes,
+  };
+}
+
+/** One finished HTTP exchange, before status mapping. */
+interface RawReply {
+  status: number;
+  headers: Headers;
+  text: string;
+}
+
+export class BookingHttp {
+  private readonly base: string;
+  private readonly token: string;
+  private readonly fetchImpl: typeof fetch;
+  private readonly gate: GateLike;
+  private readonly timeoutMs: number;
+  private readonly now: () => number;
+
+  constructor(options: BookingHttpOptions) {
+    this.base = options.base.endsWith('/')
+      ? options.base.slice(0, -1)
+      : options.base;
+    this.token = options.token;
+    this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.gate = options.gate ?? PASS_THROUGH_GATE;
+    this.timeoutMs = options.timeoutMs ?? UPSTREAM_TIMEOUT_MS;
+    this.now = options.now ?? Date.now;
+  }
+
+  async send(call: UpstreamCallSpec): Promise<UpstreamReply> {
+    const url = new URL(`${this.base}${call.path}`);
+    for (const [key, value] of Object.entries(call.query ?? {})) {
+      if (value !== undefined) url.searchParams.append(key, String(value));
+    }
+    for (const id of call.serviceIds ?? []) {
+      url.searchParams.append('service_ids[]', String(id));
+    }
+
+    const hasBody = call.body !== undefined;
+    const headers: Record<string, string> = {
+      Accept: ALTEGIO_ACCEPT,
+      Authorization: `Bearer ${this.token}`,
+    };
+    if (hasBody) headers['Content-Type'] = 'application/json';
+    const init: RequestInit = {
+      method: call.method,
+      headers,
+      body: hasBody ? JSON.stringify(call.body) : undefined,
+      // A redirect would carry the partner token to another URL; it is
+      // reported as an unexpected status instead.
+      redirect: 'manual',
+    };
+
+    let reply = await this.attempt(call.route, url, init);
+    let retryAfter: number | null = null;
+    if (reply.status === 429) {
+      retryAfter = this.pauseFor(reply.headers);
+      // At most one retry, and only for a short advised wait. The upstream
+      // did not process a rate-limited request, so sending it again is safe,
+      // the book_check POST included. The gate holds the retry until the
+      // pause ends.
+      if (retryAfter <= INLINE_RETRY_MAX_SECONDS) {
+        reply = await this.attempt(call.route, url, init);
+        if (reply.status === 429) retryAfter = this.pauseFor(reply.headers);
+      }
+    }
+
+    if (reply.status >= 200 && reply.status < 300) {
+      return {
+        status: reply.status,
+        data: parseEnvelopeData(call.route, reply.status, reply.text),
+      };
+    }
+    throw this.statusError(call.route, reply.status, reply.text, retryAfter);
+  }
+
+  /** One fetch through the gate; failures before a status become UpstreamErrors. */
+  private async attempt(
+    route: string,
+    url: URL,
+    init: RequestInit
+  ): Promise<RawReply> {
+    try {
+      return await this.gate.run(async () => {
+        // The timeout starts when the gate admits the call, so time spent
+        // waiting in the gate does not count against it.
+        const response = await this.fetchImpl(url, {
+          ...init,
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
+        return {
+          status: response.status,
+          headers: response.headers,
+          text: await response.text(),
+        };
+      });
+    } catch (error) {
+      if (error instanceof UpstreamError) throw error;
+      if (error instanceof GateSaturatedError) {
+        // Nothing was sent: the gate turned the call away to keep it inside
+        // the host timeout and the shared partner budget.
+        throw new UpstreamError('rate_limited', route, {
+          status: null,
+          retryAfterSeconds: error.retryAfterSeconds,
+          cause: error,
+        });
+      }
+      throw new UpstreamError('unavailable', route, {
+        cause: isTimeout(error)
+          ? new Error(`Altegio API call timed out after ${this.timeoutMs} ms`, {
+              cause: error,
+            })
+          : error,
+      });
+    }
+  }
+
+  /** Pauses the shared gate for the advised wait of a 429 and returns it in seconds. */
+  private pauseFor(headers: Headers): number {
+    const now = this.now();
+    const wait = retryAfterSeconds(headers, now) ?? DEFAULT_RETRY_AFTER_SECONDS;
+    this.gate.pauseUntil(now + wait * 1000);
+    return wait;
+  }
+
+  private statusError(
+    route: string,
+    status: number,
+    text: string,
+    retryAfter: number | null
+  ): UpstreamError {
+    const meta = readErrorMeta(text);
+    const kind = kindOfStatus(status);
+    return new UpstreamError(kind, route, {
+      status,
+      codes: kind === 'rejected' ? meta.codes : [],
+      retryAfterSeconds: kind === 'rate_limited' ? retryAfter : null,
+      // Scrubbed before anything else touches it (WR-04): later sanitising
+      // or truncation could otherwise split the token past the scrubber.
+      upstreamMessage:
+        meta.message === null ? null : scrubSecrets(meta.message, [this.token]),
+    });
+  }
+}

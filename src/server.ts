@@ -1,6 +1,8 @@
 import type { Server } from 'node:http';
 import type { Logger } from 'pino';
 import { createApp } from './app.js';
+import { BookingClient } from './booking/client.js';
+import { RequestGate } from './booking/gate.js';
 import {
   ConfigError,
   formatConfigError,
@@ -8,7 +10,7 @@ import {
   type Config,
 } from './config/schema.js';
 import { createLogger } from './observability/logger.js';
-import { scrubSecrets } from './observability/redact.js';
+import { MIN_SECRET_LENGTH, scrubSecrets } from './observability/redact.js';
 import { productionTools } from './tools/registry.js';
 import { PACKAGE_NAME, PACKAGE_VERSION } from './util/package-metadata.js';
 
@@ -43,6 +45,15 @@ function main(): void {
   const logger = createLogger({ level: config.LOG_LEVEL });
   const secrets = [config.ALTEGIO_API_TOKEN];
 
+  // The token rule stays as in Altegio.Pro MCP (any non-empty string), so a
+  // token too short to scrub is reported here by name, never by value (WR-04).
+  if (config.ALTEGIO_API_TOKEN.length < MIN_SECRET_LENGTH) {
+    logger.warn(
+      { event: 'config_warning', setting: 'ALTEGIO_API_TOKEN' },
+      'partner token is shorter than the secret scrubber minimum, so it cannot be redacted from output'
+    );
+  }
+
   const reportFatal = (error: unknown): void => {
     logger.fatal(
       {
@@ -61,7 +72,16 @@ function main(): void {
     name: PACKAGE_NAME,
     version: PACKAGE_VERSION,
     tools: productionTools,
-    toolDeps: {},
+    // No upstream call at startup: /health stays free of Altegio API calls.
+    toolDeps: {
+      booking: new BookingClient({
+        base: config.ALTEGIO_API_BASE,
+        token: config.ALTEGIO_API_TOKEN,
+        // One gate per process, shared by every request and session: all
+        // upstream calls stay below the API limits together (BAPI-02).
+        gate: new RequestGate(),
+      }),
+    },
     logger,
     secrets,
     allowedOrigins: [new URL(config.PUBLIC_BASE_URL).origin],
