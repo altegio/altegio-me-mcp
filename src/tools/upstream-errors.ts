@@ -1,4 +1,5 @@
 import { UpstreamError, type UpstreamErrorKind } from '../booking/errors.js';
+import { DEFAULT_RETRY_AFTER_SECONDS } from '../booking/gate.js';
 import { ToolError } from './errors.js';
 
 // The one mapping from a failed Altegio API call to an in-band tool error
@@ -19,9 +20,6 @@ export type UpstreamErrorOverrides = Partial<
   >
 >;
 
-/** Wait advised on a 429 when the upstream gives none, in seconds. */
-const DEFAULT_WAIT_SECONDS = 2;
-
 const TEMPORARILY_UNAVAILABLE =
   'tell the user the booking service is temporarily unavailable and try again later.';
 
@@ -33,7 +31,7 @@ const REJECTED_REQUEST: UpstreamErrorText = {
 function waitSeconds(error: UpstreamError): number {
   const advised = error.retryAfterSeconds;
   if (advised === null || !Number.isFinite(advised) || advised <= 0) {
-    return DEFAULT_WAIT_SECONDS;
+    return DEFAULT_RETRY_AFTER_SECONDS;
   }
   return Math.ceil(advised);
 }

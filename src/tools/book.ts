@@ -84,7 +84,9 @@ type BookCheckInput = z.infer<typeof bookCheckInput>;
 
 const selectedServiceSchema = z.strictObject({
   id: z.number().int().describe('Service id.'),
-  title: untrustedText('Service title, or null when it could not be loaded.'),
+  title: untrustedText(
+    'Service title, an empty string when the business gave none, or null when it could not be loaded.'
+  ),
   price: z
     .strictObject({
       min: z.number().describe('Lowest price.'),
@@ -259,7 +261,10 @@ function selectedServices(
     }
     return {
       id,
-      title: sanitizeUntrusted(service.title, { maxChars: LABEL_MAX_CHARS }),
+      // null means "not loaded" (see servicePriceText), so a service the
+      // catalog does carry keeps an empty title when its title cleans to nothing.
+      title:
+        sanitizeUntrusted(service.title, { maxChars: LABEL_MAX_CHARS }) ?? '',
       // 0 and 0 is no price set (price on request); prices stay unrounded.
       price:
         service.priceMin === 0 && service.priceMax === 0
@@ -340,11 +345,15 @@ async function verified(
       : Promise.resolve(null),
   ]);
   if (cardResult.status === 'rejected') {
-    throw new ToolError(
-      'The slot is free, but the booking link could not be prepared.',
-      'call book_check again in a few seconds.',
-      { cause: cardResult.reason }
-    );
+    // The kind decides the advice: a 429 keeps its advised wait, a 404 says the
+    // business was not found. Only a transient failure asks for a quick repeat.
+    throw toToolError(cardResult.reason, {
+      unavailable: {
+        message:
+          'The slot check passed, but the booking link could not be prepared.',
+        nextAction: 'call book_check again in a few seconds.',
+      },
+    });
   }
   const card = cardResult.value;
   requireBookingWidget(card);
@@ -421,6 +430,7 @@ async function unverified(
 
 function servicePriceText(service: SelectedService): string {
   if (service.price !== null) return priceText(service.price);
+  // A null title is only ever a service that was not read from the catalog.
   return service.title === null ? 'price not loaded' : 'price on request';
 }
 
@@ -470,7 +480,8 @@ export const bookCheck = defineTool<
   description:
     "Checks with the business that the chosen services, team member and time can still be booked, without booking anything, and returns a link to the business's booking widget with that selection already made. The client completes the booking in the widget.",
   // D-04: the validation route creates no record and no hold, so the tool is
-  // read-only although its first call is a POST (plan 02-09 confirms live).
+  // read-only although its first call is a POST. Confirmed live by the "D-04"
+  // test in src/booking/__tests__/client.live.test.ts (plan 02-09).
   annotations: {
     readOnlyHint: true,
     destructiveHint: false,

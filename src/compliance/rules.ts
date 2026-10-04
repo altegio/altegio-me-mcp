@@ -45,8 +45,8 @@ export interface CheckOptions {
  * '/book_check/{location_id}' (D-04): the route validates the appointments it
  * is sent and nothing else. An empty 201 means bookable, a 422 lists why not,
  * and it creates no record and no hold (backend code read in full in
- * 02-RESEARCH, "book_check is validation only"; to be confirmed live by plan
- * 02-09 before book_check ships).
+ * 02-RESEARCH, "book_check is validation only"; confirmed live by the "D-04"
+ * test in src/booking/__tests__/client.live.test.ts, plan 02-09).
  */
 export const READ_ONLY_POST_ROUTES: ReadonlySet<string> = new Set<string>([
   '/book_check/{location_id}',
