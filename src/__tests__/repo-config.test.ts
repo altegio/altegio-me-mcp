@@ -25,12 +25,22 @@ describe('Dockerfile', () => {
     (line) => line !== '' && !line.startsWith('#')
   );
 
-  it('has exactly two stages, both node:22-alpine (D-08)', () => {
+  it('has exactly two stages, both node:22-alpine pinned to one digest (D-08, IN-03)', () => {
     const from = instructions.filter((line) => line.startsWith('FROM '));
-    expect(from).toEqual([
-      'FROM node:22-alpine AS build',
-      'FROM node:22-alpine AS runtime',
-    ]);
+    expect(from).toHaveLength(2);
+    const digests: string[] = [];
+    const stages: string[] = [];
+    for (const line of from) {
+      const match =
+        /^FROM node:22-alpine@(sha256:[0-9a-f]{64}) AS (build|runtime)$/.exec(
+          line
+        );
+      expect(match).not.toBeNull();
+      digests.push(match?.[1] ?? '');
+      stages.push(match?.[2] ?? '');
+    }
+    expect(stages).toEqual(['build', 'runtime']);
+    expect(new Set(digests).size).toBe(1);
   });
 
   it('configures the runtime stage as a non-root production server', () => {
@@ -148,6 +158,12 @@ describe('scripts/smoke.sh', () => {
   it('has its executable bit set', () => {
     expect(() =>
       accessSync(join(ROOT, 'scripts/smoke.sh'), constants.X_OK)
+    ).not.toThrow();
+  });
+
+  it('has the URL smoke script next to it, executable as well', () => {
+    expect(() =>
+      accessSync(join(ROOT, 'scripts/smoke-url.sh'), constants.X_OK)
     ).not.toThrow();
   });
 });
