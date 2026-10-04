@@ -1,0 +1,16 @@
+{
+  "name": "altegio-me-mcp-browser-check",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local real-browser check of the booking widget deep link (BOOK-04); not part of the server",
+  "license": "UNLICENSED",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "cases": "node --import tsx check.ts --list-cases",
+    "start": "node --env-file=../../.env --import tsx check.ts"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

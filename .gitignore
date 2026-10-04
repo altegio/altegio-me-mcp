@@ -9,6 +9,10 @@ dist/
 coverage/
 *.tsbuildinfo
 
+# Browser check results and screenshots (scripts/browser-check, BOOK-04).
+# Root file on purpose: prettier --check reads only the root ignore files.
+scripts/browser-check/output/
+
 # Runtime
 logs/
 uploads/
