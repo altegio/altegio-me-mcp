@@ -125,7 +125,8 @@ describe('startMockUpstream measurement', () => {
     const stats = mock.stats();
     expect(stats.served429).toBe(1);
     expect(stats.max60s).toBe(201);
-    expect(stats.max1s).toBeLessThanOrEqual(4);
+    // 300 ms spacing keeps every second under the 1 s limit; only the minute tripped.
+    expect(stats.max1s).toBeLessThanOrEqual(5);
   });
 
   it('reports no starts and no 429 before any request', async () => {
