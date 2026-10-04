@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { UpstreamErrorKind } from '../booking/errors.js';
+import { UpstreamError, type UpstreamErrorKind } from '../booking/errors.js';
 import { NO_TOOL_CONTEXT, isDeadline, type ToolContext } from './context.js';
 import { textResult, toolErrorResult } from './result.js';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from './untrusted.js';
@@ -44,6 +44,47 @@ export interface ToolInvocation {
   upstreamKind: UpstreamErrorKind | null;
   /** True when our own request gate turned the call away, nothing was sent upstream. */
   gateLimited: boolean;
+}
+
+/** How many errors down a cause chain is searched for the UpstreamError. */
+const CAUSE_CHAIN_LIMIT = 5;
+
+/**
+ * The Altegio API failure behind a handler error: toToolError keeps the
+ * UpstreamError as the ToolError's cause, so it is found by walking the chain,
+ * never by matching text.
+ */
+function upstreamErrorOf(error: unknown): UpstreamError | null {
+  let current: unknown = error;
+  for (
+    let depth = 0;
+    depth < CAUSE_CHAIN_LIMIT && current instanceof Error;
+    depth += 1
+  ) {
+    if (current instanceof UpstreamError) return current;
+    current = current.cause;
+  }
+  return null;
+}
+
+/**
+ * Splits an API failure for the call log (OPS-05, Pitfall 17): status null with
+ * kind rate_limited is our own gate turning the call away, so it is never read
+ * as upstream throttling. A call that was dropped or ran out of time did not
+ * fail because of the API, and its error_type already says why.
+ */
+function upstreamFields(
+  error: unknown,
+  signal: AbortSignal
+): Pick<ToolInvocation, 'upstreamKind' | 'gateLimited'> {
+  const none = { upstreamKind: null, gateLimited: false } as const;
+  if (signal.aborted) return none;
+  const found = upstreamErrorOf(error);
+  if (found === null) return none;
+  if (found.kind === 'rate_limited' && found.status === null) {
+    return { upstreamKind: null, gateLimited: true };
+  }
+  return { upstreamKind: found.kind, gateLimited: false };
 }
 
 /** Rendered text per call is capped here (research Pitfall 16, A11). */
@@ -199,7 +240,10 @@ export function defineTool<
           ctx,
         });
       } catch (error) {
-        const failed = toolErrorResult(def.name, error, 'handler');
+        const failed = {
+          ...toolErrorResult(def.name, error, 'handler'),
+          ...upstreamFields(error, ctx.signal),
+        };
         // The call log names why the call ended early; the text stays the one
         // the error mapping produced.
         return ctx.signal.aborted

@@ -61,6 +61,10 @@ export function createMcpServer<D>(options: CreateMcpServerOptions<D>): Server {
       );
       record.outcome = invocation.outcome;
       record.error_type = invocation.errorType;
+      // Log-based alerts (OPS-05) read these two: an API failure by kind, and
+      // our own gate turning a call away, which is not upstream throttling.
+      record.upstream_kind = invocation.upstreamKind;
+      if (invocation.gateLimited) record.limited_by = 'gate';
       return { ...scrubSecrets(invocation.result, secrets) };
     }
   );
