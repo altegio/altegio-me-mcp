@@ -892,6 +892,15 @@ describe('business_list_services (DISC-02)', () => {
     expect(upstream.calls).toHaveLength(0);
   });
 
+  it.each(['2026-13-45T99:99:99+99:99', '2026-02-31T10:00:00+03:00'])(
+    'rejects the datetime %s as invalid input before any request (WR-01)',
+    async (datetime) => {
+      const { invocation, upstream } = await listServices({ datetime });
+      expect(invocation.outcome).toBe('invalid_params');
+      expect(upstream.calls).toHaveLength(0);
+    }
+  );
+
   it('keeps forged markup in a service title out of its own text', async () => {
     const fixture = structuredClone(loadFixture('book_services', 'default'));
     const data = (fixture.body as { data: { services: { title: string }[] } })
@@ -1010,6 +1019,15 @@ describe('business_list_team_members (DISC-03)', () => {
     ).toBe(true);
     expect(upstream.calls).toHaveLength(0);
   });
+
+  it.each(['2026-13-45T99:99:99+99:99', '2026-02-31T10:00:00+03:00'])(
+    'rejects the datetime %s as invalid input before any request (WR-01)',
+    async (datetime) => {
+      const { invocation, upstream } = await listTeamMembers({ datetime });
+      expect(invocation.outcome).toBe('invalid_params');
+      expect(upstream.calls).toHaveLength(0);
+    }
+  );
 
   it('says no team member can be booked for this selection when the list is empty (edge empty)', async () => {
     const { out, text } = await listTeamMembers(

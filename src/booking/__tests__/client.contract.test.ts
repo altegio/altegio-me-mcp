@@ -916,6 +916,36 @@ describe('dates request (book_dates)', () => {
   );
 });
 
+describe('datetime filters are calendar-checked before any request (WR-01)', () => {
+  it.each(['2026-13-45T99:99:99+99:99', '2026-02-31T10:00:00+03:00'])(
+    'services and teamMembers reject %s with a TypeError and make no call',
+    async (datetime) => {
+      const { client, upstream } = clientWith([
+        {
+          path: SERVICES_PATH,
+          reply: loadFixture('book_services', 'default'),
+        },
+        { path: STAFF_PATH, reply: loadFixture('book_staff', 'default') },
+      ]);
+      await expect(client.services(LOCATION, { datetime })).rejects.toThrow(
+        TypeError
+      );
+      await expect(client.teamMembers(LOCATION, { datetime })).rejects.toThrow(
+        TypeError
+      );
+      expect(upstream.calls).toHaveLength(0);
+    }
+  );
+
+  it('still sends a real slot datetime unchanged', async () => {
+    const { client, upstream } = servicesClient('default');
+    await client.services(LOCATION, { datetime: '2028-02-29T10:00:00+03:00' });
+    expect(upstream.calls[0]?.url.searchParams.get('datetime')).toBe(
+      '2028-02-29T10:00:00+03:00'
+    );
+  });
+});
+
 describe('time slots request (book_times)', () => {
   it('sends GET /book_times/{location_id}/0/{date} for any team member, with service_ids[]', async () => {
     const { client, upstream } = timesClient('any_member');
@@ -1266,6 +1296,14 @@ describe('check request (book_check, the validation route)', () => {
     ['location id 0', 0, [1], 0, SLOT],
     ["the datetime '2026-10-05 14:00'", LOCATION, [1], 0, '2026-10-05 14:00'],
     ['an empty datetime', LOCATION, [1], 0, ''],
+    [
+      'a day that does not exist',
+      LOCATION,
+      [1],
+      0,
+      '2026-02-31T10:00:00+03:00',
+    ],
+    ['an out-of-range datetime', LOCATION, [1], 0, '2026-13-45T99:99:99+99:99'],
   ])(
     'rejects %s with a TypeError before any request',
     async (_case, location, serviceIds, teamMemberId, datetime) => {

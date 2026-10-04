@@ -204,6 +204,28 @@ describe('parseSlotDatetime', () => {
   ])('returns null for %p', (value) => {
     expect(parseSlotDatetime(value)).toBeNull();
   });
+
+  describe('a day that does not exist in its month is not a slot (WR-01)', () => {
+    it.each([
+      '2026-02-31T10:00:00+03:00',
+      '2026-02-29T10:00:00+03:00',
+      '2026-04-31T10:00:00+03:00',
+      '0000-04-31T10:00:00+14:00',
+    ])('returns null for %s', (value) => {
+      expect(parseSlotDatetime(value)).toBeNull();
+    });
+
+    it('accepts 29 February of a leap year', () => {
+      expect(parseSlotDatetime('2028-02-29T10:00:00+03:00')).not.toBeNull();
+    });
+
+    it('is the calendar check, not the pattern, that rejects an impossible day', () => {
+      expect(SLOT_DATETIME_PATTERN.test('2026-02-31T10:00:00+03:00')).toBe(
+        true
+      );
+      expect(parseSlotDatetime('2026-02-31T10:00:00+03:00')).toBeNull();
+    });
+  });
 });
 
 describe('formatUtcOffset', () => {
