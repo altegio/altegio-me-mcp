@@ -501,3 +501,62 @@ describe('known-business flow from a location id to a pre-selected link (ROADMAP
     expect(check?.annotations?.destructiveHint).toBe(false);
   });
 });
+
+// WR-04 (D-01): a client that drops a tools/call stops the work behind it. The
+// fake upstream never answers; once the HTTP request is aborted, the fetch of
+// that tool call must see its signal abort and nothing else may be sent.
+
+async function until(done: () => boolean, limitMs: number): Promise<boolean> {
+  const stop = Date.now() + limitMs;
+  while (!done()) {
+    if (Date.now() > stop) return false;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return true;
+}
+
+describe('a client that disconnects mid tools/call (WR-04)', () => {
+  it('aborts the upstream fetch of that call and sends nothing further', async () => {
+    const stalled = fakeFetch([
+      {
+        method: 'GET',
+        path: `/company/${LOCATION_ID}`,
+        // fakeFetch rejects with the signal's reason when init.signal aborts.
+        reply: () => new Promise<never>(() => undefined),
+      },
+    ]);
+    const signals: AbortSignal[] = [];
+    const recording: typeof fetch = (input, init) => {
+      if (init?.signal) signals.push(init.signal);
+      return stalled.fetch(input, init);
+    };
+    const harness = await startApp({
+      tools: productionTools,
+      toolDeps: {
+        booking: new BookingClient({
+          base: API_BASE,
+          token: CANARY_SECRET,
+          fetch: recording,
+        }),
+      },
+    });
+
+    const hangUp = new AbortController();
+    const request = postMcp(
+      harness.baseUrl,
+      toolCallBody('business_get', { location_id: LOCATION_ID }),
+      {},
+      hangUp.signal
+    ).catch(() => null);
+    expect(await until(() => stalled.calls.length === 1, 2000)).toBe(true);
+
+    setTimeout(() => hangUp.abort(), 100);
+    await request;
+
+    expect(await until(() => signals[0]?.aborted === true, 2000)).toBe(true);
+    // Time for any wrongly started follow-up call to show up.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(stalled.calls).toHaveLength(1);
+    expect(signals).toHaveLength(1);
+  });
+});

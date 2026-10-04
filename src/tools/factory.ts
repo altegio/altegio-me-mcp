@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { NO_TOOL_CONTEXT, type ToolContext } from './context.js';
 import { textResult, toolErrorResult } from './result.js';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from './untrusted.js';
 
@@ -88,14 +89,18 @@ export interface ToolDefinition<
   input: I;
   output: O;
   render: (out: z.infer<O>) => string;
-  handler: (ctx: { input: z.infer<I>; deps: D }) => Promise<z.infer<O>>;
+  handler: (ctx: {
+    input: z.infer<I>;
+    deps: D;
+    ctx: ToolContext;
+  }) => Promise<z.infer<O>>;
 }
 
 export interface DefinedTool<D> {
   readonly name: string;
   readonly meta: ToolMeta;
   readonly spec: ToolSpec;
-  invoke(args: unknown, deps: D): Promise<ToolInvocation>;
+  invoke(args: unknown, deps: D, ctx?: ToolContext): Promise<ToolInvocation>;
 }
 
 function withoutSchemaKey(
@@ -171,7 +176,11 @@ export function defineTool<
     name: def.name,
     meta,
     spec,
-    async invoke(args: unknown, deps: D): Promise<ToolInvocation> {
+    async invoke(
+      args: unknown,
+      deps: D,
+      ctx: ToolContext = NO_TOOL_CONTEXT
+    ): Promise<ToolInvocation> {
       const parsedInput = def.input.safeParse(args ?? {});
       if (!parsedInput.success) {
         return toolErrorResult(def.name, parsedInput.error, 'input');
@@ -182,6 +191,7 @@ export function defineTool<
         output = await def.handler({
           input: parsedInput.data,
           deps,
+          ctx,
         });
       } catch (error) {
         return toolErrorResult(def.name, error, 'handler');

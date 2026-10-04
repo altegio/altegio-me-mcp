@@ -53,7 +53,7 @@ export interface BookingHttpOptions {
   now?: () => number;
 }
 
-export interface UpstreamCallSpec {
+export interface UpstreamCallSpec extends UpstreamCallOptions {
   method: 'GET' | 'POST';
   /** Route template, for example '/company/{location_id}'. */
   route: string;

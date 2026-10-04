@@ -5,6 +5,7 @@ import { UpstreamError } from './errors.js';
 import {
   BookingHttp,
   type BookingHttpOptions,
+  type UpstreamCallOptions,
   type UpstreamCallSpec,
 } from './http.js';
 import {
@@ -348,7 +349,10 @@ export class BookingClient {
   }
 
   /** The business card of one location (DISC-01). */
-  async company(locationId: number): Promise<BusinessCard> {
+  async company(
+    locationId: number,
+    call?: UpstreamCallOptions
+  ): Promise<BusinessCard> {
     assertLocationId(locationId);
     const { route, method } = BOOKING_ROUTES.company;
     const data = await this.read(
@@ -357,6 +361,7 @@ export class BookingClient {
         route,
         path: `/company/${locationId}`,
         query: { forBooking: 1, showBookforms: 1 },
+        ...call,
       },
       companyDataSchema
     );
@@ -370,7 +375,8 @@ export class BookingClient {
    */
   async services(
     locationId: number,
-    filter: ServicesFilter = {}
+    filter: ServicesFilter = {},
+    call?: UpstreamCallOptions
   ): Promise<ServiceCatalog> {
     assertLocationId(locationId);
     if (filter.teamMemberId !== undefined) {
@@ -387,6 +393,7 @@ export class BookingClient {
         // Key order on the wire: staff_id, datetime, then service_ids[].
         query: { staff_id: filter.teamMemberId, datetime },
         serviceIds,
+        ...call,
       },
       servicesDataSchema
     );
@@ -400,7 +407,8 @@ export class BookingClient {
    */
   async teamMembers(
     locationId: number,
-    filter: TeamMembersFilter = {}
+    filter: TeamMembersFilter = {},
+    call?: UpstreamCallOptions
   ): Promise<TeamMember[]> {
     assertLocationId(locationId);
     const datetime = checkedDatetime(filter.datetime);
@@ -413,6 +421,7 @@ export class BookingClient {
         path: `/book_staff/${locationId}`,
         query: { datetime },
         serviceIds,
+        ...call,
       },
       teamMembersDataSchema
     );
@@ -425,7 +434,11 @@ export class BookingClient {
    * booking window applies; date_to is inclusive. Team member 0 or none means
    * any team member, so no staff_id is sent.
    */
-  async dates(locationId: number, filter: DatesFilter = {}): Promise<string[]> {
+  async dates(
+    locationId: number,
+    filter: DatesFilter = {},
+    call?: UpstreamCallOptions
+  ): Promise<string[]> {
     assertLocationId(locationId);
     if (filter.teamMemberId !== undefined) {
       assertTeamMemberOrAny(filter.teamMemberId);
@@ -446,6 +459,7 @@ export class BookingClient {
         // Key order on the wire: staff_id, date_from, date_to, then service_ids[].
         query: { staff_id: staffId, date_from: dateFrom, date_to: dateTo },
         serviceIds,
+        ...call,
       },
       datesDataSchema
     );
@@ -461,7 +475,8 @@ export class BookingClient {
     locationId: number,
     teamMemberId: number,
     date: string,
-    serviceIds: readonly number[]
+    serviceIds: readonly number[],
+    call?: UpstreamCallOptions
   ): Promise<TimeSlot[]> {
     assertLocationId(locationId);
     assertTeamMemberOrAny(teamMemberId);
@@ -477,6 +492,7 @@ export class BookingClient {
         route,
         path: `/book_times/${locationId}/${teamMemberId}/${day}`,
         serviceIds: ids,
+        ...call,
       },
       timeSlotsDataSchema
     );
@@ -496,7 +512,11 @@ export class BookingClient {
    * unchanged (rejected with the 422 codes, not_found, rate_limited after the
    * one inline retry, unavailable). The datetime is sent exactly as given.
    */
-  async check(locationId: number, selection: CheckSelection): Promise<void> {
+  async check(
+    locationId: number,
+    selection: CheckSelection,
+    call?: UpstreamCallOptions
+  ): Promise<void> {
     assertLocationId(locationId);
     const serviceIds = checkedServiceIds(selection.serviceIds);
     if (serviceIds.length === 0) {
@@ -521,6 +541,7 @@ export class BookingClient {
           },
         ],
       },
+      ...call,
     });
     if (reply.status !== 201) {
       throw new UpstreamError('contract_drift', route, {

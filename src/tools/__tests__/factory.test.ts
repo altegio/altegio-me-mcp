@@ -1,5 +1,13 @@
 import { describe, expect, it } from '@jest/globals';
 import { z } from 'zod';
+import { BookingClient } from '../../booking/client.js';
+import {
+  fakeFetch,
+  loadFixture,
+} from '../../booking/__tests__/helpers/fake-fetch.js';
+import { businessGet } from '../business.js';
+import { createToolContext } from '../context.js';
+import type { ToolDeps } from '../registry.js';
 import {
   defineTool,
   STRUCTURED_BUDGET_CHARS,
@@ -327,5 +335,114 @@ describe('compile-time contract', () => {
     expect(() =>
       defineTool({ ...base, title: 'Types', annotations: readHints })
     ).not.toThrow();
+  });
+});
+
+describe('tool context (WR-04, D-01)', () => {
+  const stalledDeps = (): ToolDeps => ({
+    booking: new BookingClient({
+      base: 'https://api.alteg.io/api/v1',
+      token: 'partner-token-0123456789abcdef',
+      // A reply that never comes; fakeFetch rejects when init.signal aborts.
+      fetch: fakeFetch([
+        {
+          method: 'GET',
+          path: '/company/722227',
+          reply: () => new Promise<never>(() => undefined),
+        },
+      ]).fetch,
+    }),
+  });
+
+  it('returns DeadlineExceeded when the deadline passes while the handler awaits an upstream that never answers', async () => {
+    const invocation = await businessGet.invoke(
+      { location_id: 722227 },
+      stalledDeps(),
+      createToolContext(undefined, null, 50)
+    );
+    expect(invocation.outcome).toBe('tool_error');
+    expect(invocation.errorType).toBe('DeadlineExceeded');
+    expect(invocation.result.isError).toBe(true);
+    expect(invocation.result.structuredContent).toBeUndefined();
+    expect(invocation.result.content[0]?.text).toContain('Next:');
+  });
+
+  it('returns ClientGone when the parent signal aborts', async () => {
+    const parent = new AbortController();
+    const pending = businessGet.invoke(
+      { location_id: 722227 },
+      stalledDeps(),
+      createToolContext(parent.signal, null, 60_000)
+    );
+    parent.abort(new Error('transport closed'));
+
+    const invocation = await pending;
+    expect(invocation.outcome).toBe('tool_error');
+    expect(invocation.errorType).toBe('ClientGone');
+  });
+
+  it('keeps the error type of an ordinary failure when the signal never aborted', async () => {
+    const deps: ToolDeps = {
+      booking: new BookingClient({
+        base: 'https://api.alteg.io/api/v1',
+        token: 'partner-token-0123456789abcdef',
+        fetch: fakeFetch([
+          {
+            method: 'GET',
+            path: '/company/722227',
+            reply: { status: 404, body: { success: false, data: null } },
+          },
+        ]).fetch,
+      }),
+    };
+    const invocation = await businessGet.invoke(
+      { location_id: 722227 },
+      deps,
+      createToolContext(undefined, null, 60_000)
+    );
+    expect(invocation.errorType).toBe('ToolError');
+  });
+
+  it('succeeds under a live context', async () => {
+    const deps: ToolDeps = {
+      booking: new BookingClient({
+        base: 'https://api.alteg.io/api/v1',
+        token: 'partner-token-0123456789abcdef',
+        fetch: fakeFetch([
+          {
+            method: 'GET',
+            path: '/company/722227',
+            reply: loadFixture('company', 'default'),
+          },
+        ]).fetch,
+      }),
+    };
+    const invocation = await businessGet.invoke(
+      { location_id: 722227 },
+      deps,
+      createToolContext(undefined, null)
+    );
+    expect(invocation.outcome).toBe('ok');
+    expect(invocation.errorType).toBeNull();
+  });
+
+  it('hands the context to the handler', async () => {
+    const seen: (string | null)[] = [];
+    const tool = defineTool({
+      name: 'demo_ctx',
+      title: 'Context demo',
+      description: 'Records the caller key.',
+      annotations: readHints,
+      input: z.strictObject({}),
+      output: z.strictObject({ ok: z.boolean() }),
+      render: () => 'ok',
+      handler: ({ ctx }) => {
+        seen.push(ctx.clientKey);
+        return Promise.resolve({ ok: true });
+      },
+    });
+    await tool.invoke({}, undefined, createToolContext(undefined, 'client-9'));
+    await tool.invoke({}, undefined);
+    expect(seen).toEqual(['client-9', null]);
   });
 });
