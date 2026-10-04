@@ -224,16 +224,20 @@ function dayExpectation(day: string): Expectation {
   };
 }
 
+/**
+ * True when the URL carries a non-empty o= value. The widget writes its own
+ * order state back into the URL, and an empty o= means nothing is selected.
+ */
 function hasOrderParameter(url: string): boolean {
   try {
-    return new URL(url).searchParams.has('o');
+    return (new URL(url).searchParams.get('o') ?? '') !== '';
   } catch {
     return false;
   }
 }
 
 const NO_ORDER_IN_URL: Expectation = {
-  label: 'final URL carries no o= pre-selection',
+  label: 'final URL carries no o= pre-selection (empty o= allowed)',
   holds: (view) => !hasOrderParameter(view.url),
 };
 
@@ -369,6 +373,27 @@ function positiveIntFromEnv(name: string): number | null {
 
 // -------------------------------------------------------------- discovery
 
+/** null when book_check accepts the slot, otherwise the rejection codes. */
+async function rejection(
+  client: BookingClient,
+  locationId: number,
+  serviceIds: readonly number[],
+  teamMemberId: number,
+  datetime: string
+): Promise<string | null> {
+  try {
+    await client.check(locationId, { serviceIds, teamMemberId, datetime });
+    return null;
+  } catch (error) {
+    if (error instanceof UpstreamError && error.kind === 'rejected') {
+      return error.codes.length > 0
+        ? `rejected ${error.codes.join(',')}`
+        : 'rejected';
+    }
+    throw error;
+  }
+}
+
 async function isFree(
   client: BookingClient,
   locationId: number,
@@ -376,14 +401,15 @@ async function isFree(
   teamMemberId: number,
   datetime: string
 ): Promise<boolean> {
-  try {
-    await client.check(locationId, { serviceIds, teamMemberId, datetime });
-    return true;
-  } catch (error) {
-    if (error instanceof UpstreamError && error.kind === 'rejected')
-      return false;
-    throw error;
-  }
+  return (
+    (await rejection(
+      client,
+      locationId,
+      serviceIds,
+      teamMemberId,
+      datetime
+    )) === null
+  );
 }
 
 interface Candidate {
@@ -396,19 +422,29 @@ async function candidates(
   client: BookingClient,
   card: BusinessCard,
   mode: 'named' | 'any',
-  serviceCount: number
+  serviceCount: number,
+  trace: string[]
 ): Promise<Candidate[]> {
   const locationId = card.locationId;
   const found: Candidate[] = [];
   if (mode === 'named') {
-    const members = (await client.teamMembers(locationId))
+    const all = await client.teamMembers(locationId);
+    const members = all
       .filter((member) => member.bookable)
       .slice(0, MAX_TEAM_MEMBERS);
+    trace.push(
+      `${all.length} team member(s), ${all.filter((member) => member.bookable).length} bookable`
+    );
     for (const member of members) {
       const catalog = await client.services(locationId, {
         teamMemberId: member.id,
       });
-      if (catalog.services.length < serviceCount) continue;
+      if (catalog.services.length < serviceCount) {
+        trace.push(
+          `m${member.id}: ${catalog.services.length} service(s), fewer than ${serviceCount}`
+        );
+        continue;
+      }
       found.push({
         teamMemberId: member.id,
         teamMemberName: member.name,
@@ -418,6 +454,7 @@ async function candidates(
     return found;
   }
   const catalog = await client.services(locationId);
+  trace.push(`${catalog.services.length} service(s) for any team member`);
   for (
     let start = 0;
     start + serviceCount <= catalog.services.length &&
@@ -440,13 +477,16 @@ async function findSelection(
   mode: 'named' | 'any',
   serviceCount: number
 ): Promise<Selection | string> {
+  // What discovery saw, so a "no verified free slot" reason says why.
+  const trace: string[] = [];
   try {
     const locationId = card.locationId;
     for (const candidate of await candidates(
       client,
       card,
       mode,
-      serviceCount
+      serviceCount,
+      trace
     )) {
       const ids = candidate.services.map((service) => service.id);
       const dates = [
@@ -457,6 +497,8 @@ async function findSelection(
           })
         ),
       ].sort();
+      const who = `m${candidate.teamMemberId === 0 ? '-1' : candidate.teamMemberId} s${ids.join('s')}`;
+      trace.push(`${who}: ${dates.length} date(s)`);
       for (const date of dates.slice(0, MAX_DATES)) {
         const slots = await client.timeSlots(
           locationId,
@@ -464,16 +506,18 @@ async function findSelection(
           date,
           ids
         );
+        trace.push(`${who} ${date}: ${slots.length} slot(s)`);
         for (const slot of slots.slice(0, MAX_CHECKS_PER_DATE)) {
-          if (
-            await isFree(
-              client,
-              locationId,
-              ids,
-              candidate.teamMemberId,
-              slot.datetime
-            )
-          ) {
+          const refused = await rejection(
+            client,
+            locationId,
+            ids,
+            candidate.teamMemberId,
+            slot.datetime
+          );
+          if (refused !== null) {
+            trace.push(`${who} ${slot.datetime}: ${refused}`);
+          } else {
             return {
               card,
               teamMemberId: candidate.teamMemberId,
@@ -488,9 +532,9 @@ async function findSelection(
       }
     }
     const who = mode === 'named' ? 'a named team member' : 'any team member';
-    return `no verified free slot for ${serviceCount} service(s) with ${who} at location ${card.locationId}`;
+    return `no verified free slot for ${serviceCount} service(s) with ${who} at location ${card.locationId} (${trace.join('; ') || 'no candidate'})`;
   } catch (error) {
-    return `discovery failed: ${describeError(error)}`;
+    return `discovery failed: ${describeError(error)}${trace.length > 0 ? ` (${trace.join('; ')})` : ''}`;
   }
 }
 
