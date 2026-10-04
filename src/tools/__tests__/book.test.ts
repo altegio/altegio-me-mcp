@@ -761,21 +761,60 @@ describe('book_check errors without a link (BOOK-01, D-06)', () => {
     expect(paths(upstream)).toEqual([`POST ${CHECK_PATH}`]);
   });
 
-  it('a card read failing after a 201 asks to repeat the call', async () => {
-    const { invoke } = setup({ company: serverError() });
-    const text = expectNoLinkError(
-      await invoke({
-        location_id: LOCATION_ID,
-        service_ids: [10303530],
-        datetime: SLOT,
-      })
-    );
-    expect(
-      text.startsWith(
-        'The slot is free, but the booking link could not be prepared.'
-      )
-    ).toBe(true);
-    expect(text).toContain('Next: call book_check again in a few seconds.');
+  describe('a card read failing after a 201 gets the advice that fits the failure (WR-03)', () => {
+    const CARD_NOT_PREPARED =
+      'The slot check passed, but the booking link could not be prepared.';
+
+    async function failedCardRead(company: FixtureResponse | FakeReply) {
+      const { invoke } = setup({ company }, { timeoutMs: 20 });
+      return expectNoLinkError(
+        await invoke({
+          location_id: LOCATION_ID,
+          service_ids: [10303530],
+          datetime: SLOT,
+        })
+      );
+    }
+
+    it('a 5xx asks to repeat the call, without claiming the slot is free', async () => {
+      const text = await failedCardRead(serverError());
+      expect(text.startsWith(CARD_NOT_PREPARED)).toBe(true);
+      expect(text).toContain('Next: call book_check again in a few seconds.');
+      expect(text).not.toContain('The slot is free');
+    });
+
+    it('a timeout asks to repeat the call', async () => {
+      const text = await failedCardRead(
+        () => new Promise<FixtureResponse>(() => undefined)
+      );
+      expect(text.startsWith(CARD_NOT_PREPARED)).toBe(true);
+      expect(text).toContain('Next: call book_check again in a few seconds.');
+    });
+
+    it('a 429 with a 30-second reset says to wait 30 seconds, not a few', async () => {
+      const text = await failedCardRead({
+        status: 429,
+        headers: {
+          'content-type': 'application/json',
+          'x-rate-limit-reset': '30',
+        },
+        body: { success: false, data: null, meta: { message: 'Too many' } },
+      });
+      expect(text.startsWith('The booking service is busy right now.')).toBe(
+        true
+      );
+      expect(text).toContain('wait 30 seconds');
+      expect(text).not.toContain('a few seconds');
+      expect(text).not.toContain('The slot is free');
+    });
+
+    it('a 404 says no business was found for this location id', async () => {
+      const text = await failedCardRead(loadFixture('company', 'not_found'));
+      expect(
+        text.startsWith('No business was found for this location id.')
+      ).toBe(true);
+      expect(text).not.toContain('a few seconds');
+    });
   });
 
   it('a services read failing after a 201 still returns the link, with names marked unavailable', async () => {
@@ -796,6 +835,55 @@ describe('book_check errors without a link (BOOK-01, D-06)', () => {
     const text = textOf(result);
     expect(text).toContain('- service 10303531: price not loaded');
     expect(text).not.toContain('price on request');
+  });
+
+  describe('price wording for a selected service (IN-04)', () => {
+    function servicesWith(extra: Record<string, unknown>): FixtureResponse {
+      const fixture = loadFixture('book_services', 'default');
+      const body = structuredClone(fixture.body) as {
+        data: { services: Record<string, unknown>[] };
+      };
+      body.data.services.push({
+        id: 10303599,
+        category_id: 7,
+        price_min: 0,
+        price_max: 0,
+        active: 1,
+        prepaid: null,
+        seance_length: null,
+        ...extra,
+      });
+      return { ...fixture, body };
+    }
+
+    it('a service in the catalog without a price and with a title that cleans to nothing is price on request', async () => {
+      const { invoke } = setup({ services: servicesWith({ title: '' }) });
+      const result = await invoke({
+        location_id: LOCATION_ID,
+        service_ids: [10303599],
+        datetime: SLOT,
+      });
+      const out = okOutput(result);
+      expect(out.selection.services[0]?.price).toBeNull();
+      expect(out.notes).not.toContain(NOTE_NAMES_UNAVAILABLE);
+      const text = textOf(result);
+      expect(text).toContain('- service 10303599: price on request');
+      expect(text).not.toContain('price not loaded');
+    });
+
+    it('a service missing from a catalog that did load is price not loaded', async () => {
+      const { invoke } = setup();
+      const result = await invoke({
+        location_id: LOCATION_ID,
+        service_ids: [99999999],
+        datetime: SLOT,
+      });
+      const out = okOutput(result);
+      expect(out.notes).toContain(NOTE_NAMES_UNAVAILABLE);
+      const text = textOf(result);
+      expect(text).toContain('- service 99999999: price not loaded');
+      expect(text).not.toContain('price on request');
+    });
   });
 
   it('a team members read failing after a 201 keeps the id and marks the name unavailable', async () => {
