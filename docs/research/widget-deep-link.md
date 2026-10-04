@@ -254,19 +254,22 @@ Run 2, for context (06:41 UTC, `output/2026-10-04T06-41-30-024Z/`): the business
 Asia/Bangkok (+07:00), and discovery took the nearest slot, 2026-10-04 14:00 local, 16 to 19 min
 ahead. `single-named` and `personal-or-group` showed the time, but `multi-services`, `any-member`
 and `menu-and-steps` (the same link as `single-named`) kept the team member and services and left
-the time unselected. The theory was that the slot fell inside the widget's minimum lead time. The
-control run does not support it: a 16-minute lead kept its time. Between run 2 (last load 06:44
-UTC) and the 07:07 run the location's time zone changed from Asia/Bangkok to Europe/Warsaw, on
-the day the owner was configuring the location, so the run 2 drops may come from that setup
-rather than from the link. Their cause is not established. An earlier run at 06:13 UTC, before the setup, found no bookable service and no free
-time, so only `plain-fallback` could run then. `src/booking/deep-link.ts` was not changed.
+the time unselected. The owner confirmed on review (2026-10-04) that they changed the time zone of
+location 726120 from Asia/Bangkok to Europe/Warsaw during run 2, at about 06:41 to 06:44 UTC.
+The links of run 2 were built from slots discovered under the old zone and opened while the zone
+was being changed. The run 2 drops come from that change, not from a widget defect and not from
+the near slot: the 07:13 UTC control run linked a slot only 16 min ahead and the widget still
+applied its time. An earlier run at 06:13 UTC, before the setup, found no bookable service and no
+free time, so only `plain-fallback` could run then. `src/booking/deep-link.ts` was not changed.
 
 B4 status: confirmed in browser on 2026-10-04 (location 726120, form 1472304, Europe/Warsaw) for
 single-named (service, team member and time pre-selected, and 3 of 3 repeated loads), multi-services,
 any-member, menu-and-steps (menu style only), personal-or-group, plain-fallback (BOOK-05, nothing
 pre-selected) and taken-slot (a non-free time is dropped); a slot after a daylight-saving change
 does not keep its time (dst-boundary probe), which the builder already handles by returning the
-plain booking-form link; half-hour-zone, any-member-disabled and slug-host were not run, and the
-time drops of the earlier run 2 did not recur in 24 later loads but remain unexplained.
+plain booking-form link; half-hour-zone, any-member-disabled and slug-host were not run; the
+time drops of the earlier run 2 came from the owner's time-zone change of the location during
+that run and did not recur in 24 later loads.
 
-Owner review: pending
+Owner review: 2026-10-04, approved with corrections (no change to the case rows; the run 2 note
+now names the owner's time-zone change as the cause of its time drops)

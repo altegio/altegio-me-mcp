@@ -187,6 +187,17 @@ also refreshes the sanitised recordings in `src/booking/__tests__/fixtures/live/
 e-mail addresses, no phone numbers, no names); the required test run parses them with the route
 schemas. Without `ALTEGIO_E2E=1`, which only `test:live` sets, every live test is skipped.
 
+The real-browser check of the widget link lives in `scripts/browser-check`, an isolated package
+with its own pinned Playwright. It runs only locally and is never part of CI or the Docker image:
+
+```bash
+npm --prefix scripts/browser-check ci --ignore-scripts
+npm --prefix scripts/browser-check start
+```
+
+It needs the same two variables as the live suite and an installed Google Chrome. Its results
+are recorded in `docs/research/widget-deep-link.md` ("Browser check results").
+
 ## Docker
 
 ```bash
