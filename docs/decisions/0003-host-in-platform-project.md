@@ -56,8 +56,6 @@ What the shared project gives us:
   secret crosses projects.
 - **Build pipeline.** The Artifact Registry repo `cloud-run` and the Cloud Build GitHub
   connection already exist. Our repository is linked to that connection.
-- **Proxy-side monitoring.** The platform's metric on upstream errors (`mcp_proxy_upstream_502`)
-  counts the `/me` route too.
 
 Resource names:
 
@@ -78,12 +76,31 @@ Resource names:
 - Our IAM in `altegio-mcp` stays narrow. The runtime account reads only its two secrets. The
   build account deploys only our service. The setup script never changes project-wide settings
   or other services' IAM, so a mistake on our side cannot reach the proxy or the VMs.
+- Neither the trigger nor the service ever runs as a default account of the project. The
+  default Compute Engine account in `altegio-mcp` has been granted secret access by the platform,
+  so a build or service running as it could read the platform's secrets. The trigger runs as our
+  build account, and every deploy passes `--service-account` with our runtime account.
+- The platform's autoheal must not react to our errors. Its log-based metric
+  `mcp_proxy_upstream_502` counts 502–504 answers on proxied `/<route>/mcp` paths, and alert
+  policies on it reset the platform's VMs. Our service is not on a VM, so its errors say nothing
+  about them: the `/me` route is to be excluded from that metric, as `/giorgio-notion` and
+  `/giorgio-github` are for the same reason (asked with the route, I5). Our own uptime checks and
+  alerts cover our service.
+- A rotation of `ALTEGIO_API_TOKEN` must reach us. The platform's VM refreshes its copy from
+  Secret Manager on every deploy tick (`ops/secret-env-sync.sh`). A Cloud Run instance reads the
+  secret when it starts, so if the platform disables the
+  old version, our tools fail until the service restarts. Phase 3 picks the fix (re-read the
+  secret, or the platform's rotation steps include a redeploy of our service); the alert on
+  upstream 401/403 catches a miss.
 - We follow the platform's conventions in its project. One-time setup is an idempotent `gcloud`
   script, as the platform does (no Terraform). The monitoring objects we create (uptime checks,
   alert policies, log-based metrics) are added to the platform's `ops/MONITORING.md`.
 - Log retention is a project-wide setting owned by the platform. We do not change the `_Default`
   log bucket. The README documents the retention the project has, and the privacy policy (L2)
-  cites it.
+  cites it. Two more readers of what we log: the platform's logs MCP (`/gcp-logs`) lets staff
+  read the project's logs, and the proxy's own request lines for `/me` (route, tool, method) go
+  to the platform's BigQuery dataset `mcp_requests` with 90-day partitions. Our logs keep no
+  personal data, and the client IP the proxy forwards is never logged in plain form.
 - Cost is the same as in the README (about $10–25 a month at the expected load). It is billed to
   `altegio-mcp` and shows up under the label `app=altegio-me-mcp`.
 - Being in one project with the proxy makes it possible to close the `run.app` address to
