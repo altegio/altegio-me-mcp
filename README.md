@@ -5,9 +5,10 @@ business card (`business_get`), services (`business_list_services`), team member
 (`business_list_team_members`), dates with free time (`business_list_dates`), free time slots
 (`business_list_time_slots`) and a slot check that hands off a pre-selected booking widget link
 (`book_check`). They call the Altegio public booking API through a throttled client
-(`src/booking`), and a live suite has checked that client against a real business. Hosting, the
-catalog of bookable businesses and search come next. Decisions and research are in
-[`docs/`](docs/).
+(`src/booking`), and a live suite has checked that client against a real business. The hosting
+setup (a Cloud Run pipeline behind the platform proxy, edge limits, secrets as files, alerts) is
+in the repository and nothing is deployed yet, see [Deploy](#deploy). The catalog of bookable
+businesses and search come next. Decisions and research are in [`docs/`](docs/).
 
 A remote [MCP](https://modelcontextprotocol.io) server that lets clients of businesses using
 Altegio (salons, barbershops, studios and similar) find a business, browse its services, team
@@ -261,31 +262,126 @@ the pull request title.
 
 ## Deploy
 
-Deploys go only through git: a Cloud Build trigger on merge to `main` deploys the Cloud Run
-service `altegio-me-mcp` in the platform's GCP project `altegio-mcp`, region `europe-west1`
-(ADR 0003). No manual `gcloud run deploy`. The service reads the partner token from the
-project's existing Secret Manager secret `ALTEGIO_API_TOKEN`, the one Altegio.Pro MCP uses.
-Clients reach the service at `https://mcp.alteg.io/me`, a route on the platform proxy that
-forwards to the service's `/mcp` (ADR 0002). The trigger, the service and the route are not set
-up yet; until then the server runs locally and in CI only.
+Status: nothing is deployed yet. The pipeline (`cloudbuild.yaml`), the one-time setup script
+(`scripts/gcp/bootstrap.sh`), the alerts and the runbook are in the repository and tested against
+stubs. The first deploy waits for the platform team's access in project `altegio-mcp` (open
+question I6) and for the anonymous `/me` route on their proxy (I5). Both were asked on 2026-10-05
+in one Slack message in `#dev-ai-coding`, addressed to Yri Petrou. This line changes at the first
+deploy; what ran live, with dates and revisions, goes into the deployment record in
+[`docs/runbooks/gcp-hosting.md`](docs/runbooks/gcp-hosting.md).
+
+Deploys go only through git: a merge to `main` starts the Cloud Build trigger
+`altegio-me-mcp-deploy` in the platform's GCP project `altegio-mcp` (ADR 0003), which deploys the
+Cloud Run service `altegio-me-mcp` in `europe-west1`. The values below are the ones in
+`cloudbuild.yaml` (the trigger name is the one `scripts/gcp/bootstrap.sh` creates), and a test
+fails when this table and the pipeline differ.
+
+### Deployed settings
+
+| Setting | Value | Note |
+|---|---|---|
+| Region | `europe-west1` | Belgium |
+| Service | `altegio-me-mcp` | its own Cloud Run service, not a container on a platform VM |
+| Minimum instances | `1` | no cold start in the middle of a chat |
+| Maximum instances | `1` | the request gate and the edge limiter live in one process, so their limits are exact |
+| CPU | `1` | vCPU, with startup boost; billed per request (CPU throttling on) |
+| Memory | `512Mi` | |
+| Concurrency | `80` | requests per instance; our own cap of 60 in flight answers 429 before Google does |
+| Request timeout | `60` | seconds |
+| Ingress | `all` | the `run.app` address cannot be closed to the proxy, see below |
+| Runtime account | `altegio-me-mcp-runtime@altegio-mcp.iam.gserviceaccount.com` | reads only the two secrets |
+| Trigger | `altegio-me-mcp-deploy` | region `europe-west1`, runs `/cloudbuild.yaml` on a merge to `main` |
+
+**How a deploy goes.** The trigger builds the image and pushes only the commit tag (the
+repository `cloud-run` is shared with the platform's images, so no moving tag). It deploys a
+revision that takes no traffic, under a tag, and smoke-tests that tag URL with
+`scripts/smoke-url.sh`: `/health` must report this commit and an unsigned `POST /mcp` must be
+refused with 401. Only then does it move traffic, and only if the revision is still the latest
+created one; a revision that fails the smoke test never takes traffic. Rollback is a revert pull
+request through the same trigger. Moving traffic by hand in an emergency needs the owner's
+approval. There is no manual `gcloud run deploy`, with one exception: `scripts/gcp/bootstrap.sh`
+creates the service once, from Google's placeholder image, when it is missing (the build account
+cannot turn the invoker check off, and the trigger's deploy needs a service to update). That is
+the only deploy outside the trigger; our image reaches Cloud Run only through the trigger. Steps,
+failure handling and the alert drill are in the runbook.
+
+**Public address and access.** Clients reach the service at `https://mcp.alteg.io/me`, a route on
+the platform proxy (ADR 0002) that forwards to `/mcp`. `GET /health` is readable only on the
+service's own `run.app` address; through the proxy only `/mcp` is reachable. Every `POST /mcp`
+needs a valid proxy signature (`x-mcp-proxy-auth`) and gets HTTP 401 without it, before the body
+is read. The `run.app` address stays open to the internet, because Cloud Run's internal ingress
+admits only callers inside the project's network and the proxy comes in over public egress, so
+the signature is the access control there. The edge limits in the table above (in flight, per
+address, shared pool) apply per client address as the proxy signs it.
+
+**Secrets.** No secret is in the image, in git or in an environment variable. The partner token
+(the platform's existing secret `ALTEGIO_API_TOKEN`, shared with Altegio.Pro MCP) and the proxy
+key (`MCP_PROXY_BACKEND_KEY`) are mounted as Secret Manager volumes, the `latest` version of each.
+The server re-reads them within 60 seconds, so a rotation needs no restart, and an Altegio 401 or
+403 forces one re-read (at most once per 60 seconds).
+
+**Service accounts.** Two accounts of our own. The runtime account above reads only the two
+secrets. The build account `altegio-me-mcp-build` deploys only this service and pushes to the
+repository `cloud-run`. Neither the trigger nor the service ever runs as the project's default
+Compute Engine account, because the platform has granted that account access to its secrets.
+
+**Logs and who reads them.** One structured line per `POST /mcp` goes to Cloud Logging, bucket
+`_Default` of `altegio-mcp`: tool name, outcome, timings and counters, no tool arguments, no token
+and no client address. Retention is a project-wide setting owned by the platform: 30 days is the
+Google default for that bucket, and it is not confirmed for this project until the platform
+answers (I6). Staff can read the project's logs through the platform's logs MCP, and the proxy
+writes its own request line for `/me` (route, tool, method) to the platform's BigQuery dataset
+`mcp_requests`, which keeps 90-day partitions. Our logs hold no personal data.
+
+**Labels.** `app=altegio-me-mcp` is set only on the Cloud Run service, the uptime checks and the
+alert policies; accounts, the trigger, the secrets and the log-based metrics cannot carry it, so
+cost by label covers Cloud Run only and everything else is found by name (runbook, "Resources").
+
+**Timeouts.** One tool call is cut at 25 seconds by the server, below the 60 seconds of Cloud
+Run, below the 120 seconds the proxy waits for response headers, below the 240 seconds Claude
+allows for a tool call (per the connector documentation at
+[claude.com/docs/connectors/building](https://claude.com/docs/connectors/building)).
+
+**MCP SDK.** `@modelcontextprotocol/sdk` stays on 1.x, as in Altegio.Pro MCP.
 
 ## Cost estimate
 
-Rough, refined per phase. Assumptions: Cloud Run in `europe-west1`, 1 vCPU / 512 MiB, one minimum instance (cold
-starts hurt chat latency). The server calls no LLM: the model runs on the AI host's side. The
-service runs in the platform's project `altegio-mcp` (ADR 0003), and every resource carries the
-label `app=altegio-me-mcp`, so this cost shows up there as a separate line. The platform proxy in
-front of the service (`mcp.alteg.io`, ADR 0002) is the platform's cost and is not counted here.
+Monthly cost of the hosting in the platform's project `altegio-mcp`, in US dollars. Assumptions:
+Cloud Run in `europe-west1` (price tier 1) with 1 vCPU and 512 MiB, billed per request, one
+minimum instance kept warm; about 3.5 `POST /mcp` requests per tool call at about 0.5 seconds
+each; the instance is busy for 175,000 seconds a month at the expected load and for about half of
+the month at the peak; about 10 KB of answer per tool call; 20 deploys a month. The server calls
+no LLM: the model runs on the AI host's side. The platform proxy in front of the service
+(`mcp.alteg.io`, ADR 0002) is the platform's cost and is not counted here. Free allotments are not
+subtracted, except for the uptime checks (see below).
 
 | Item | Expected (≈100k tool calls / month) | Peak (≈1M tool calls / month) |
 |---|---|---|
-| Cloud Run service | $10–15 | $30–50 |
-| Catalog refresh job, Scheduler, storage | $1–5 | $1–5 |
-| Secret Manager, logging, egress | $1–3 | $3–10 |
-| **Phase 1 total** | **≈ $10–25** | **≈ $35–65** |
-| Phase 2: OAuth state store (Firestore), unless the platform proxy holds it (ADR 0002) | $1–5 | $5–15 |
-| Phase 2: SMS sign-in codes, $0.02–0.10 each | ≈ $20–100 per 1,000 sign-ins | scales with sign-ins |
-| Optional: nightly evals via Anthropic API | $10–30 | $10–30 |
+| Cloud Run: one idle minimum instance, 2,592,000 s at $0.00000375 per second | $9.72 | $9.72 |
+| Cloud Run: busy time above the idle rate ($0.0000215 per second) and requests ($0.40 per million) | $3.90 | $29.26 |
+| Uptime checks: two, every 5 minutes, three regions, 51,840 executions at $0.30 per 1,000 | $3.30 | $3.30 |
+| Secret Manager: at most 86,400 secret reads at $0.03 per 10,000 | $0.30 | $0.30 |
+| Cloud Logging: 50 GiB a month free, then $0.50 per GiB | $0 | $1 |
+| Network egress: first GiB free, then $0.12 per GiB | $0 | $1 |
+| Cloud Build: about 6 minutes a deploy at $0.003 per minute, normally inside 2,500 free minutes | $0.40 | $0.40 |
+| Artifact Registry: about 4 GiB of images kept, $0.10 per GiB-month after 0.5 GiB | $0.40 | $0.40 |
+| **Hosting total** | **≈ $18** | **≈ $45** |
+| Product, later: OAuth state store (Firestore), unless the platform proxy holds it (ADR 0002) | $1–5 | $5–15 |
+| Product, later: SMS sign-in codes, $0.02–0.10 each | ≈ $20–100 per 1,000 sign-ins | scales with sign-ins |
+| Product, later: catalog refresh job, Scheduler, storage | $1–5 | $1–5 |
+| Product, later: nightly evals via Anthropic API (optional) | $10–30 | $10–30 |
+
+Uptime checks cost about $3 a month at 5 minutes because the platform's own checks leave about
+41,000 of the 1,000,000 free monthly executions; at 1 minute they would cost about $140, which is
+why the period is 5 minutes. Without any free allotment the two checks would cost about $16. Alert
+policies are not charged before September 2027 at the earliest.
+
+Prices read on 2026-10-05 from https://cloud.google.com/run/pricing,
+https://cloud.google.com/monitoring/pricing, https://cloud.google.com/logging/pricing,
+https://cloud.google.com/secret-manager/pricing, https://cloud.google.com/build/pricing,
+https://cloud.google.com/artifact-registry/pricing and
+https://cloud.google.com/vpc/network-pricing. They are list prices and change; the figures are not
+re-read automatically.
 
 Who pays for SMS (Altegio or the business) is an open question; see
 [`docs/open-questions.md`](docs/open-questions.md).
