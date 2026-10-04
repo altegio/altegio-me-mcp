@@ -11,18 +11,17 @@ export default tseslint.config(
       '.claude/**',
       '.cursor/**',
       '.codex/**',
-      // Isolated local package whose dependency (playwright) CI does not
-      // install; it is type-checked by its own `typecheck` script.
-      'scripts/browser-check/**',
     ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked.map((config) => ({
     ...config,
     files: ['**/*.ts'],
+    ignores: ['scripts/browser-check/**'],
   })),
   {
     files: ['**/*.ts'],
+    ignores: ['scripts/browser-check/**'],
     languageOptions: {
       parserOptions: {
         projectService: true,
@@ -49,6 +48,19 @@ export default tseslint.config(
           ],
         },
       ],
+    },
+  },
+  // The local browser check (not part of the server) gets the plain
+  // typescript-eslint recommended set: not type-aware (its Playwright types are
+  // only a CI stub) and console output is its interface.
+  ...tseslint.configs.recommended.map((config) => ({
+    ...config,
+    files: ['scripts/browser-check/**/*.ts'],
+  })),
+  {
+    files: ['scripts/browser-check/**/*.ts'],
+    rules: {
+      'no-console': 'off',
     },
   },
   {

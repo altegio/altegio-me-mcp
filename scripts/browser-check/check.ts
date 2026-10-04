@@ -461,6 +461,17 @@ function positiveIntFromEnv(name: string, what = 'location id'): number | null {
   return value;
 }
 
+/** Like positiveIntFromEnv, but 0 is a valid value (for settings that default to 0). */
+function nonNegativeIntFromEnv(name: string, what: string): number | null {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return null;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative integer ${what}`);
+  }
+  return value;
+}
+
 // -------------------------------------------------------------- discovery
 
 /** null when book_check accepts the slot, otherwise the rejection codes. */
@@ -1054,7 +1065,7 @@ function groupEventOrder(): PlannedCase {
 // ------------------------------------------------------------- the browser
 
 async function readView(page: Page): Promise<PageView> {
-  let text = '';
+  let text: string;
   try {
     text = await page.innerText('body', { timeout: POLL_INTERVAL_MS * 5 });
   } catch {
@@ -1387,9 +1398,10 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 
   const minLeadHours =
-    positiveIntFromEnv('BROWSER_CHECK_MIN_LEAD_HOURS', 'number of hours') ?? 0;
+    nonNegativeIntFromEnv('BROWSER_CHECK_MIN_LEAD_HOURS', 'number of hours') ??
+    0;
   const repeatCount =
-    positiveIntFromEnv('BROWSER_CHECK_REPEAT_LOADS', 'number of loads') ??
+    nonNegativeIntFromEnv('BROWSER_CHECK_REPEAT_LOADS', 'number of loads') ??
     DEFAULT_REPEAT_LOADS;
 
   const client = new BookingClient({

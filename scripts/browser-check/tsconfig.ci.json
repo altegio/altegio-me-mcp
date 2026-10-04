@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "playwright": ["./types/playwright.d.ts"]
+    }
+  },
+  "include": ["check.ts", "types/playwright.d.ts"]
+}
