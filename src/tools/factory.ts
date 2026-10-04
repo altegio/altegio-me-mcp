@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { textResult, toolErrorResult } from './result.js';
+import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from './untrusted.js';
 
 // Tool factory. SDK-free on purpose: tools return plain objects, and only
 // src/mcp translates them to the MCP SDK (D-04, ADR-0001-D6).
@@ -104,18 +105,44 @@ function withoutSchemaKey(
   return json;
 }
 
+// The first `end` UTF-16 units, without leaving half of a surrogate pair.
+function headUnits(text: string, end: number): string {
+  const last = text.charCodeAt(end - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? end - 1 : end);
+}
+
 // Keeps at most TEXT_BUDGET_CHARS UTF-16 units without leaving half of a
-// surrogate pair at the cut.
+// surrogate pair at the cut. The cut is fence-aware (WR-05): the business
+// controls how long its fields are, so a cut that lands inside an untrusted
+// block must not drop UNTRUSTED_CLOSE, or the note would read as part of the
+// block. The block body is cut instead, then the fence is closed, then the note
+// follows. A block whose opening marker does not fit is dropped whole.
 function capText(text: string): string {
   if (text.length <= TEXT_BUDGET_CHARS) {
     return text;
   }
-  let end = TEXT_BUDGET_CHARS;
-  const last = text.charCodeAt(end - 1);
-  if (last >= 0xd800 && last <= 0xdbff) {
-    end -= 1;
+
+  const openAt = text.lastIndexOf(UNTRUSTED_OPEN, TEXT_BUDGET_CHARS - 1);
+  if (openAt !== -1) {
+    const closeAt = text.indexOf(
+      UNTRUSTED_CLOSE,
+      openAt + UNTRUSTED_OPEN.length
+    );
+    const closedBeforeCut =
+      closeAt !== -1 && closeAt + UNTRUSTED_CLOSE.length <= TEXT_BUDGET_CHARS;
+    if (!closedBeforeCut) {
+      const bodyStart = openAt + UNTRUSTED_OPEN.length;
+      // Room for the body: the budget minus a line break and the closing fence.
+      const bodyEnd = TEXT_BUDGET_CHARS - UNTRUSTED_CLOSE.length - 1;
+      if (bodyEnd <= bodyStart) {
+        return `${text.slice(0, openAt).trimEnd()}${TRUNCATION_NOTE}`;
+      }
+      const body = headUnits(text, bodyEnd).trimEnd();
+      return `${body}\n${UNTRUSTED_CLOSE}${TRUNCATION_NOTE}`;
+    }
   }
-  return `${text.slice(0, end)}${TRUNCATION_NOTE}`;
+
+  return `${headUnits(text, TEXT_BUDGET_CHARS)}${TRUNCATION_NOTE}`;
 }
 
 export function defineTool<
