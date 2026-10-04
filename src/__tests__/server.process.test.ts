@@ -1,9 +1,20 @@
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from '@jest/globals';
+import { PROXY_AUTH_HEADER } from '../security/proxy-auth.js';
 import { PACKAGE_VERSION } from '../util/package-metadata.js';
+import { signProxyRequest } from './helpers/sign-request.js';
 
 const ROOT = process.cwd();
 const DIST = join(ROOT, 'dist');
@@ -25,6 +36,7 @@ interface RunningServer {
 }
 
 const children: ChildProcess[] = [];
+const tempDirs: string[] = [];
 
 function parseDotenv(text: string): Record<string, string> {
   const values: Record<string, string> = {};
@@ -145,7 +157,8 @@ async function validEnv(): Promise<Record<string, string>> {
     PORT: String(await freePort()),
     ALTEGIO_API_TOKEN: CANARY,
     // Explicit, so no case relies on the check being off by default (it is
-    // required by default). The fail-closed startup cases are plan 03-18's.
+    // required by default). The fail-closed startup cases build their own
+    // environment with productionEnv().
     PROXY_AUTH: 'off',
   };
 }
@@ -190,6 +203,9 @@ afterEach(() => {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill('SIGKILL');
     }
+  }
+  for (const directory of tempDirs.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
@@ -390,6 +406,281 @@ describe('node dist/server.js', () => {
       expect(status.code).toBe(1);
       expect(server.stderr()).toContain('  - PORT:');
       expect(server.stderr()).not.toContain('abc');
+    },
+    TEST_TIMEOUT_MS
+  );
+});
+
+// A production-like environment: the check is on by its default, no key
+// setting is present, so every case names the key source it gives the server.
+async function productionEnv(): Promise<Record<string, string>> {
+  const env = await validEnv();
+  env.NODE_ENV = 'production';
+  delete env.PROXY_AUTH;
+  delete env.MCP_PROXY_BACKEND_KEY;
+  delete env.MCP_PROXY_BACKEND_KEY_FILE;
+  return env;
+}
+
+function newKey(): string {
+  return randomBytes(32).toString('hex');
+}
+
+function keyFile(content: string): string {
+  const directory = mkdtempSync(join(tmpdir(), 'proxy-key-'));
+  tempDirs.push(directory);
+  const path = join(directory, 'key');
+  writeFileSync(path, content, { mode: 0o600 });
+  return path;
+}
+
+const MCP_HEADERS = {
+  'content-type': 'application/json',
+  accept: 'application/json, text/event-stream',
+};
+
+function postMcp(base: string, key: string | null): Promise<Response> {
+  const headers: Record<string, string> = { ...MCP_HEADERS };
+  if (key !== null) {
+    headers[PROXY_AUTH_HEADER] = signProxyRequest({
+      key,
+      method: 'POST',
+      path: '/mcp',
+    });
+  }
+  return fetch(`${base}/mcp`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+  });
+}
+
+describe('node dist/server.js: the proxy check fails closed (OPS-03, OPS-04)', () => {
+  it.each([
+    ['PROXY_AUTH unset', undefined],
+    ['PROXY_AUTH=required', 'required'],
+  ])(
+    'exits 1 in production with no key setting (%s), names MCP_PROXY_BACKEND_KEY and starts nothing',
+    async (_label, mode) => {
+      const env = await productionEnv();
+      if (mode !== undefined) env.PROXY_AUTH = mode;
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain('Invalid configuration:');
+      expect(server.stderr()).toContain('MCP_PROXY_BACKEND_KEY');
+      expect(server.stdout()).toBe('');
+      expect(server.stderr()).not.toContain(CANARY);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'exits 1 for a key file that holds a 20-character key, names the setting and prints no value',
+    async () => {
+      const shortKey = 'k7q2m9x4b1n8v5c3z6w0';
+      expect(shortKey).toHaveLength(20);
+      const env: Record<string, string> = {
+        ...(await productionEnv()),
+        MCP_PROXY_BACKEND_KEY_FILE: keyFile(`${shortKey}\n`),
+      };
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain('MCP_PROXY_BACKEND_KEY_FILE');
+      expect(server.stdout()).toBe('');
+      expect(server.stdout()).not.toContain(shortKey);
+      expect(server.stderr()).not.toContain(shortKey);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'exits 1 for a key file that does not exist, naming the setting',
+    async () => {
+      const env: Record<string, string> = {
+        ...(await productionEnv()),
+        MCP_PROXY_BACKEND_KEY_FILE: join(tmpdir(), 'no-such-dir', 'key'),
+      };
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain('MCP_PROXY_BACKEND_KEY_FILE');
+      expect(server.stdout()).toBe('');
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'exits 1 for an empty key file',
+    async () => {
+      const env: Record<string, string> = {
+        ...(await productionEnv()),
+        MCP_PROXY_BACKEND_KEY_FILE: keyFile('\n'),
+      };
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain('MCP_PROXY_BACKEND_KEY_FILE');
+      expect(server.stdout()).toBe('');
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'exits 1 for a plain MCP_PROXY_BACKEND_KEY of 20 characters, without printing it',
+    async () => {
+      const shortKey = 'p3d8r1y6t4u9e2w7s5a0';
+      const env: Record<string, string> = {
+        ...(await productionEnv()),
+        MCP_PROXY_BACKEND_KEY: shortKey,
+      };
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain('  - MCP_PROXY_BACKEND_KEY:');
+      expect(server.stderr()).not.toContain(shortKey);
+      expect(server.stdout()).toBe('');
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'starts with a readable 64-character key file, answers /health unsigned and /mcp only when signed',
+    async () => {
+      const key = newKey();
+      expect(key).toHaveLength(64);
+      const env: Record<string, string> = {
+        ...(await productionEnv()),
+        MCP_PROXY_BACKEND_KEY_FILE: keyFile(`${key}\n`),
+      };
+      const server = startServer(env);
+      await within(server.firstStdoutLine(), 10_000);
+      const base = `http://127.0.0.1:${env.PORT ?? ''}`;
+
+      expect((await fetch(`${base}/health`)).status).toBe(200);
+
+      const unsigned = await postMcp(base, null);
+      expect(unsigned.status).toBe(401);
+      expect(await unsigned.json()).toEqual({
+        error: 'proxy_auth_required',
+        error_description: 'requests must come through mcp-proxy',
+      });
+      const wrongKey = await postMcp(base, newKey());
+      expect(wrongKey.status).toBe(401);
+      const signed = await postMcp(base, key);
+      expect(signed.status).toBe(200);
+
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(server.stdout()).not.toContain(key);
+      expect(server.stderr()).not.toContain(key);
+      expect(
+        stdoutRecords(server).filter(
+          (record) =>
+            record.event === 'config_warning' && record.setting === 'PROXY_AUTH'
+        )
+      ).toEqual([]);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'verifies requests signed with either key of an old,new rotation payload',
+    async () => {
+      const oldKey = newKey();
+      const newerKey = newKey();
+      const env: Record<string, string> = {
+        ...(await productionEnv()),
+        MCP_PROXY_BACKEND_KEY_FILE: keyFile(`${oldKey},${newerKey}\n`),
+      };
+      const server = startServer(env);
+      await within(server.firstStdoutLine(), 10_000);
+      const base = `http://127.0.0.1:${env.PORT ?? ''}`;
+
+      expect((await postMcp(base, oldKey)).status).toBe(200);
+      expect((await postMcp(base, newerKey)).status).toBe(200);
+      expect((await postMcp(base, newKey())).status).toBe(401);
+
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(server.stdout()).not.toContain(oldKey);
+      expect(server.stdout()).not.toContain(newerKey);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'starts with PROXY_AUTH=off, logs one config_warning naming PROXY_AUTH and serves /mcp unsigned',
+    async () => {
+      const env = await validEnv();
+      const server = startServer(env);
+      await waitForStdout(server, '"event":"config_warning"', 10_000);
+      const base = `http://127.0.0.1:${env.PORT ?? ''}`;
+      expect((await postMcp(base, null)).status).toBe(200);
+
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+      const warnings = stdoutRecords(server).filter(
+        (record) =>
+          record.event === 'config_warning' && record.setting === 'PROXY_AUTH'
+      );
+      expect(warnings).toHaveLength(1);
+      expect(JSON.stringify(warnings[0])).not.toContain(CANARY);
+    },
+    TEST_TIMEOUT_MS
+  );
+});
+
+describe('node dist/server.js: GET /health commit (OPS-02)', () => {
+  it(
+    'reports the COMMIT_SHA the process was given',
+    async () => {
+      const env: Record<string, string> = {
+        ...(await validEnv()),
+        COMMIT_SHA: '0123abc4567def',
+      };
+      const server = startServer(env);
+      await within(server.firstStdoutLine(), 10_000);
+      const health = await fetch(`http://127.0.0.1:${env.PORT ?? ''}/health`);
+      expect(await health.json()).toEqual({
+        status: 'ok',
+        version: PACKAGE_VERSION,
+        commit: '0123abc4567def',
+      });
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'reports null when no COMMIT_SHA is given',
+    async () => {
+      const env = await validEnv();
+      env.COMMIT_SHA = '';
+      const server = startServer(env);
+      await within(server.firstStdoutLine(), 10_000);
+      const health = await fetch(`http://127.0.0.1:${env.PORT ?? ''}/health`);
+      expect(((await health.json()) as { commit: unknown }).commit).toBeNull();
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'exits 1 for a COMMIT_SHA that is not 7 to 40 lowercase hex characters, without printing it',
+    async () => {
+      const env: Record<string, string> = {
+        ...(await validEnv()),
+        COMMIT_SHA: 'Not-A-Commit',
+      };
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain('  - COMMIT_SHA:');
+      expect(server.stderr()).not.toContain('Not-A-Commit');
     },
     TEST_TIMEOUT_MS
   );

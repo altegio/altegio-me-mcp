@@ -425,3 +425,109 @@ describe('loadConfig proxy signature settings (OPS-03, D-04)', () => {
     expect(loadConfig({ ...VALID, COMMIT_SHA: '' }).COMMIT_SHA).toBeUndefined();
   });
 });
+
+describe('loadConfig proxy settings: closed value sets and fixed messages', () => {
+  const WITH_KEY: Record<string, string> = {
+    ALTEGIO_API_TOKEN: VALID.ALTEGIO_API_TOKEN ?? '',
+    PUBLIC_BASE_URL: VALID.PUBLIC_BASE_URL ?? '',
+    MCP_PROXY_BACKEND_KEY: PROXY_KEY,
+  };
+
+  it.each(['required', 'off'])('accepts PROXY_AUTH %j', (mode) => {
+    expect(loadConfig({ ...WITH_KEY, PROXY_AUTH: mode }).PROXY_AUTH).toBe(mode);
+  });
+
+  it.each(['on', 'true', 'false', '0', '1', 'OFF', 'Required', 'disabled'])(
+    'rejects PROXY_AUTH %j instead of reading it as off, with a fixed message',
+    (mode) => {
+      const error = configErrorFor({ ...WITH_KEY, PROXY_AUTH: mode });
+      expect(error.issues).toEqual([
+        { key: 'PROXY_AUTH', message: 'must be one of required, off' },
+      ]);
+    }
+  );
+
+  it.each(['/secrets/proxy-key/key', '/run/secrets/k'])(
+    'accepts the absolute MCP_PROXY_BACKEND_KEY_FILE %j',
+    (path) => {
+      expect(
+        loadConfig({
+          ALTEGIO_API_TOKEN: VALID.ALTEGIO_API_TOKEN ?? '',
+          PUBLIC_BASE_URL: VALID.PUBLIC_BASE_URL ?? '',
+          MCP_PROXY_BACKEND_KEY_FILE: path,
+        }).MCP_PROXY_BACKEND_KEY_FILE
+      ).toBe(path);
+    }
+  );
+
+  it.each(['key', './key', '../key', '~/key', 'secrets/proxy-key/key'])(
+    'rejects the relative MCP_PROXY_BACKEND_KEY_FILE %j with a fixed message',
+    (path) => {
+      const error = configErrorFor({
+        ...VALID,
+        MCP_PROXY_BACKEND_KEY_FILE: path,
+      });
+      expect(error.issues).toEqual([
+        {
+          key: 'MCP_PROXY_BACKEND_KEY_FILE',
+          message: 'must be an absolute file path',
+        },
+      ]);
+      expect(formatConfigError(error)).not.toContain(path);
+    }
+  );
+
+  it('rejects a key list that holds only keys shorter than 32 characters', () => {
+    const shortList = `${'a'.repeat(31)},${'b'.repeat(10)}`;
+    const error = configErrorFor({
+      ...VALID,
+      PROXY_AUTH: 'required',
+      MCP_PROXY_BACKEND_KEY: shortList,
+    });
+    expect(error.issues).toEqual([
+      {
+        key: 'MCP_PROXY_BACKEND_KEY',
+        message: 'must hold at least one key of 32 or more characters',
+      },
+    ]);
+    expect(formatConfigError(error)).not.toContain('aaaa');
+  });
+
+  it('accepts a key of exactly 32 characters', () => {
+    expect(
+      loadConfig({
+        ...VALID,
+        PROXY_AUTH: 'required',
+        MCP_PROXY_BACKEND_KEY: 'k'.repeat(32),
+      }).MCP_PROXY_BACKEND_KEY
+    ).toBe('k'.repeat(32));
+  });
+
+  it('rejects COMMIT_SHA with a fixed message that never echoes it', () => {
+    const sha = 'NOT-A-HEX-VALUE';
+    const error = configErrorFor({ ...VALID, COMMIT_SHA: sha });
+    expect(error.issues).toEqual([
+      {
+        key: 'COMMIT_SHA',
+        message: 'must be 7 to 40 lowercase hexadecimal characters',
+      },
+    ]);
+    expect(formatConfigError(error)).not.toContain(sha);
+  });
+
+  it('never echoes a key, a path or a commit through any message of one failing run', () => {
+    const canary = 'canary-key-9d4e71c2b8a6-do-not-print';
+    const error = configErrorFor({
+      ...VALID,
+      PROXY_AUTH: 'required',
+      MCP_PROXY_BACKEND_KEY: canary.slice(0, 20),
+      MCP_PROXY_BACKEND_KEY_FILE: `relative/${canary}`,
+      COMMIT_SHA: canary,
+    });
+    const text = `${formatConfigError(error)}\n${error.message}\n${JSON.stringify(
+      error.issues
+    )}`;
+    expect(text).not.toContain('canary');
+    expect(text).not.toContain('do-not-print');
+  });
+});
