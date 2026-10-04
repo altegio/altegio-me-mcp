@@ -1,6 +1,7 @@
 import { scrubSecrets } from '../observability/redact.js';
 import { UpstreamError, type UpstreamErrorKind } from './errors.js';
 import {
+  abortReason,
   DEFAULT_RETRY_AFTER_SECONDS,
   GateSaturatedError,
   INLINE_RETRY_MAX_SECONDS,
@@ -31,7 +32,10 @@ export interface GateLike {
 
 /** Runs every call at once and ignores pauses. */
 export const PASS_THROUGH_GATE: GateLike = Object.freeze({
-  run<T>(start: () => Promise<T>, _opts?: UpstreamCallOptions): Promise<T> {
+  run<T>(start: () => Promise<T>, opts?: UpstreamCallOptions): Promise<T> {
+    if (opts?.signal?.aborted === true) {
+      return Promise.reject(abortReason(opts.signal));
+    }
     return start();
   },
   pauseUntil(): void {
