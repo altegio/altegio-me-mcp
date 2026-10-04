@@ -2,6 +2,7 @@ import { describe, expect, it } from '@jest/globals';
 import pino from 'pino';
 import { createFakeClock } from '../../booking/__tests__/helpers/fake-clock.js';
 import { signProxyRequest } from '../../__tests__/helpers/sign-request.js';
+import { scrubSecrets } from '../../observability/redact.js';
 import {
   PROXY_AUTH_HEADER,
   parseProxyKeys,
@@ -11,6 +12,7 @@ import {
   SECRET_TTL_MS,
   createFileSecretSource,
   createStaticSecretSource,
+  knownValues,
   type SecretSource,
 } from '../secret-source.js';
 
@@ -317,5 +319,42 @@ describe('key rotation through the file (edge OPS-03, concurrency)', () => {
     await h.advance(SECRET_TTL_MS);
     expect(accepts(h.source, OLD_KEY, h.clock.now())).toBe(true);
     expect(accepts(h.source, NEW_KEY, h.clock.now())).toBe(true);
+  });
+});
+
+// Plan 03-18 left known() as whole payloads: for a proxy key list 'old,new' the
+// scrub list would hold the comma string, never the single keys, so a rotated
+// out key quoted on its own was not redacted. knownValues splits them.
+describe('knownValues: individual values for the scrub list (SEC-03)', () => {
+  it('splits the current and the previous payload into single keys', async () => {
+    const h = await harness(`${OLD_KEY},${NEW_KEY}`);
+    h.file.payload = NEW_KEY;
+    await h.advance(SECRET_TTL_MS);
+
+    const values = knownValues(h.source, parseProxyKeys);
+
+    expect([...values].sort()).toEqual([NEW_KEY, OLD_KEY].sort());
+    expect(h.source.known()).toEqual([NEW_KEY, `${OLD_KEY},${NEW_KEY}`]);
+  });
+
+  it('lets the scrubber redact a rotated-out key that is quoted on its own', async () => {
+    const h = await harness(`${OLD_KEY},${NEW_KEY}`);
+    h.file.payload = NEW_KEY;
+    await h.advance(SECRET_TTL_MS);
+
+    const text = `seen ${OLD_KEY} and ${NEW_KEY}`;
+    expect(scrubSecrets(text, h.source.known())).toContain(OLD_KEY);
+    expect(scrubSecrets(text, knownValues(h.source, parseProxyKeys))).toBe(
+      'seen [redacted] and [redacted]'
+    );
+  });
+
+  it('returns each value once and treats a payload as one value without a splitter', async () => {
+    const source = createStaticSecretSource(OLD_KEY);
+    expect(knownValues(source)).toEqual([OLD_KEY]);
+    const h = await harness(OLD_KEY);
+    h.file.payload = `${OLD_KEY}\n`;
+    await h.advance(SECRET_TTL_MS);
+    expect(knownValues(h.source, parseProxyKeys)).toEqual([OLD_KEY]);
   });
 });

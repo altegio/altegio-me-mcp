@@ -651,3 +651,53 @@ describe('proxy-origin signature on POST /mcp (OPS-03, D-04)', () => {
     });
   });
 });
+
+describe('secrets as a function, evaluated once per request (OPS-04, SEC-03)', () => {
+  const OLD_SECRET = 'rotated-out-partner-token-0001';
+  const NEW_SECRET = 'rotated-in-partner-token-0002';
+
+  async function echoed(baseUrl: string, item: string): Promise<string> {
+    const response = await postMcp(
+      baseUrl,
+      toolCallBody('demo_echo_items', { items: [item] })
+    );
+    expect(response.status).toBe(200);
+    return response.text();
+  }
+
+  it('redacts what the list holds at the time of each request', async () => {
+    let current: readonly string[] = [OLD_SECRET];
+    const app = await startApp({ secrets: () => current });
+
+    const first = await echoed(app.baseUrl, OLD_SECRET);
+    expect(first).not.toContain(OLD_SECRET);
+    expect(first).toContain('[redacted]');
+
+    // A rotation: the new token is not known yet, then it is, with the old one.
+    expect(await echoed(app.baseUrl, NEW_SECRET)).toContain(NEW_SECRET);
+    current = [NEW_SECRET, OLD_SECRET];
+    const rotated = await echoed(
+      app.baseUrl,
+      `${NEW_SECRET} then ${OLD_SECRET}`
+    );
+    expect(rotated).not.toContain(NEW_SECRET);
+    expect(rotated).not.toContain(OLD_SECRET);
+  });
+
+  it('evaluates the function once per POST, not once at startup', async () => {
+    const secrets = jest.fn((): readonly string[] => [OLD_SECRET]);
+    const app = await startApp({ secrets });
+    expect(secrets).not.toHaveBeenCalled();
+
+    await postMcp(app.baseUrl, toolsListBody());
+    await postMcp(app.baseUrl, toolCallBody('demo_echo_items', { items: [] }));
+
+    expect(secrets).toHaveBeenCalledTimes(2);
+  });
+
+  it('still takes a plain array', async () => {
+    const app = await startApp({ secrets: [OLD_SECRET] });
+    const body = await echoed(app.baseUrl, OLD_SECRET);
+    expect(body).not.toContain(OLD_SECRET);
+  });
+});

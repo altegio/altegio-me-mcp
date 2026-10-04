@@ -18,6 +18,10 @@ const VALID: Record<string, string> = {
 
 const PROXY_KEY = 'proxy-key-0123456789abcdef0123456789abcdef';
 
+// One fixed message names both settings and no value (OPS-04, D-05).
+const TOKEN_REQUIRED =
+  'Partner API token is required (ALTEGIO_API_TOKEN or ALTEGIO_API_TOKEN_FILE)';
+
 function parseDotenv(text: string): Record<string, string> {
   const values: Record<string, string> = {};
   for (const rawLine of text.split('\n')) {
@@ -95,14 +99,14 @@ describe('loadConfig defaults and required keys', () => {
     expect(loadConfig({ ...VALID, PORT: '' }).PORT).toBe(8080);
     const missingToken = configErrorFor({ ...VALID, ALTEGIO_API_TOKEN: '' });
     expect(missingToken.issues).toEqual([
-      { key: 'ALTEGIO_API_TOKEN', message: 'Partner API token is required' },
+      { key: 'ALTEGIO_API_TOKEN', message: TOKEN_REQUIRED },
     ]);
   });
 
   it('treats a whitespace-only token as missing', () => {
     const error = configErrorFor({ ...VALID, ALTEGIO_API_TOKEN: '   ' });
     expect(error.issues).toEqual([
-      { key: 'ALTEGIO_API_TOKEN', message: 'Partner API token is required' },
+      { key: 'ALTEGIO_API_TOKEN', message: TOKEN_REQUIRED },
     ]);
   });
 
@@ -112,7 +116,7 @@ describe('loadConfig defaults and required keys', () => {
       PROXY_AUTH: 'off',
     });
     expect(error.issues).toEqual([
-      { key: 'ALTEGIO_API_TOKEN', message: 'Partner API token is required' },
+      { key: 'ALTEGIO_API_TOKEN', message: TOKEN_REQUIRED },
     ]);
   });
 
@@ -253,6 +257,7 @@ describe('ConfigError reporting', () => {
       LOG_LEVEL: 'verbose',
       PUBLIC_BASE_URL: 'nope',
       ALTEGIO_API_TOKEN: '',
+      ALTEGIO_API_TOKEN_FILE: 'relative/token',
       ALTEGIO_API_BASE: 'nope',
       PORT: 'abc',
       PROXY_AUTH: 'maybe',
@@ -291,6 +296,7 @@ describe('ConfigError reporting', () => {
       LOG_LEVEL: `${canary}-level`,
       NODE_ENV: `${canary}-env`,
       ALTEGIO_API_BASE: `${canary}-base`,
+      ALTEGIO_API_TOKEN_FILE: `${canary}-token-file`,
       PROXY_AUTH: `${canary}-auth`,
       MCP_PROXY_BACKEND_KEY: `${canary}`,
       MCP_PROXY_BACKEND_KEY_FILE: `${canary}-file`,
@@ -529,5 +535,79 @@ describe('loadConfig proxy settings: closed value sets and fixed messages', () =
     )}`;
     expect(text).not.toContain('canary');
     expect(text).not.toContain('do-not-print');
+  });
+});
+
+describe('loadConfig partner token settings (OPS-04, D-05)', () => {
+  const WITHOUT_TOKEN: Record<string, string> = {
+    PUBLIC_BASE_URL: VALID.PUBLIC_BASE_URL ?? '',
+    PROXY_AUTH: 'off',
+  };
+  const TOKEN_FILE = '/secrets/altegio-api/token';
+
+  it('accepts ALTEGIO_API_TOKEN_FILE without ALTEGIO_API_TOKEN', () => {
+    const config = loadConfig({
+      ...WITHOUT_TOKEN,
+      ALTEGIO_API_TOKEN_FILE: TOKEN_FILE,
+    });
+    expect(config.ALTEGIO_API_TOKEN_FILE).toBe(TOKEN_FILE);
+    expect(config.ALTEGIO_API_TOKEN).toBeUndefined();
+  });
+
+  it('accepts both settings and keeps both values (the file wins in src/server.ts)', () => {
+    const config = loadConfig({
+      ...VALID,
+      ALTEGIO_API_TOKEN_FILE: TOKEN_FILE,
+    });
+    expect(config.ALTEGIO_API_TOKEN).toBe('partner-token-value');
+    expect(config.ALTEGIO_API_TOKEN_FILE).toBe(TOKEN_FILE);
+  });
+
+  it('fails with neither setting, one issue that names both settings and no value', () => {
+    const error = configErrorFor(WITHOUT_TOKEN);
+    expect(error.issues).toEqual([
+      { key: 'ALTEGIO_API_TOKEN', message: TOKEN_REQUIRED },
+    ]);
+    expect(formatConfigError(error)).toContain(
+      '  - ALTEGIO_API_TOKEN: Partner API token is required (ALTEGIO_API_TOKEN or ALTEGIO_API_TOKEN_FILE)'
+    );
+  });
+
+  it('treats an empty or blank file path as not set', () => {
+    for (const blank of ['', '   ']) {
+      expect(
+        configErrorFor({ ...WITHOUT_TOKEN, ALTEGIO_API_TOKEN_FILE: blank })
+          .issues
+      ).toEqual([{ key: 'ALTEGIO_API_TOKEN', message: TOKEN_REQUIRED }]);
+      expect(
+        loadConfig({ ...VALID, ALTEGIO_API_TOKEN_FILE: blank })
+          .ALTEGIO_API_TOKEN_FILE
+      ).toBeUndefined();
+    }
+  });
+
+  it.each(['token', './token', '../token', '~/token', 'secrets/token'])(
+    'rejects the relative path %s with a fixed message, whether or not a plain token is set',
+    (path) => {
+      const expected = [
+        {
+          key: 'ALTEGIO_API_TOKEN_FILE',
+          message: 'must be an absolute file path',
+        },
+      ];
+      expect(
+        configErrorFor({ ...VALID, ALTEGIO_API_TOKEN_FILE: path }).issues
+      ).toEqual(expected);
+      expect(
+        configErrorFor({ ...WITHOUT_TOKEN, ALTEGIO_API_TOKEN_FILE: path })
+          .issues
+      ).toEqual(expected);
+    }
+  );
+
+  it('keeps the rule for ALTEGIO_API_TOKEN: any non-empty string, as in Altegio.Pro MCP', () => {
+    expect(
+      loadConfig({ ...WITHOUT_TOKEN, ALTEGIO_API_TOKEN: 'x' })
+    ).toMatchObject({ ALTEGIO_API_TOKEN: 'x' });
   });
 });

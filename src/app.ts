@@ -19,7 +19,9 @@ export interface AppDeps<D> {
   tools: readonly DefinedTool<D>[];
   toolDeps: D;
   logger: Logger;
-  secrets: readonly string[];
+  // Every secret to scrub from tool results; a function is evaluated once per
+  // request, so a rotated token is covered without a restart (OPS-04, SEC-03).
+  secrets: readonly string[] | (() => readonly string[]);
   allowedOrigins: readonly string[];
   allowLoopbackOrigins: boolean;
   // Verifies the platform proxy's signature on POST /mcp (OPS-03, D-04). Absent

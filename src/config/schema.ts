@@ -61,6 +61,7 @@ const ConfigSchema = z
       .default(8080),
     ALTEGIO_API_BASE: httpUrl().default('https://api.alteg.io/api/v1'),
     ALTEGIO_API_TOKEN: z.string().min(1, 'Partner API token is required'),
+    ALTEGIO_API_TOKEN_FILE: z.string().optional(),
     PUBLIC_BASE_URL: httpUrl(),
     LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
     NODE_ENV: z.enum(NODE_ENVS).default('production'),

@@ -126,3 +126,11 @@ export function createStaticSecretSource(secret: string): SecretSource {
     refresh: () => Promise.resolve(false),
   };
 }
+
+/** Every individual value a source holds or held (current and previous), payloads split by `split`. */
+export function knownValues(
+  _source: SecretSource,
+  _split: (payload: string) => readonly string[] = (payload) => [payload]
+): string[] {
+  return [];
+}

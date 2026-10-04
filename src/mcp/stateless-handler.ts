@@ -9,7 +9,7 @@ export interface McpRequestHandlerOptions<D> {
   version: string;
   tools: readonly DefinedTool<D>[];
   toolDeps: D;
-  secrets: readonly string[];
+  secrets: readonly string[] | (() => readonly string[]);
 }
 
 const swallow = (): undefined => undefined;
@@ -38,7 +38,7 @@ export function createMcpRequestHandler<D>(
       specs,
       toolsByName,
       toolDeps: opts.toolDeps,
-      secrets: opts.secrets,
+      secrets: opts.secrets as readonly string[],
       record: getCallRecord(res),
     });
     const transport = new StreamableHTTPServerTransport({

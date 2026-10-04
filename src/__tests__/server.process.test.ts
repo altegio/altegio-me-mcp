@@ -8,10 +8,12 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { createServer as createHttpServer, type Server } from 'node:http';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from '@jest/globals';
+import { loadFixture } from '../booking/__tests__/helpers/fake-fetch.js';
 import { PROXY_AUTH_HEADER } from '../security/proxy-auth.js';
 import { PACKAGE_VERSION } from '../util/package-metadata.js';
 import { signProxyRequest } from './helpers/sign-request.js';
@@ -681,6 +683,253 @@ describe('node dist/server.js: GET /health commit (OPS-02)', () => {
       expect(status.code).toBe(1);
       expect(server.stderr()).toContain('  - COMMIT_SHA:');
       expect(server.stderr()).not.toContain('Not-A-Commit');
+    },
+    TEST_TIMEOUT_MS
+  );
+});
+
+// OPS-04: production mounts the shared partner token as a file. The process
+// reads it at startup (fail closed), prefers it over a plain value, and a
+// rotation reaches the running process through the forced re-read on a 401.
+const TOKEN_A = 'file-partner-token-AAAA-1f3e5d7c9b';
+const TOKEN_B = 'file-partner-token-BBBB-2a4c6e8d0f';
+const LOCATION = 722227;
+
+interface FakeUpstream {
+  base: string;
+  /** The Authorization header of every request, in order. */
+  sent: string[];
+  close: () => Promise<void>;
+}
+
+// The Altegio API as the process sees it: only the tokens in `accepts()` get
+// the company fixture. Any other token gets `rejection(presented)`.
+async function startUpstream(
+  accepts: () => readonly string[],
+  rejection: (presented: string) => { status: number; body: unknown }
+): Promise<FakeUpstream> {
+  const sent: string[] = [];
+  const server: Server = createHttpServer((req, res) => {
+    const header = req.headers.authorization ?? '';
+    sent.push(header);
+    const presented = header.replace(/^Bearer /, '');
+    const ok = accepts().includes(presented);
+    const reply = ok
+      ? { status: 200, body: loadFixture('company', 'default').body }
+      : rejection(presented);
+    res.writeHead(reply.status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(reply.body));
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address !== 'object') {
+    throw new Error('fake upstream has no port');
+  }
+  return {
+    base: `http://127.0.0.1:${String(address.port)}/api/v1`,
+    sent,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+        server.closeAllConnections();
+      }),
+  };
+}
+
+function callBusinessGet(base: string): Promise<Response> {
+  return fetch(`${base}/mcp`, {
+    method: 'POST',
+    headers: MCP_HEADERS,
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 7,
+      method: 'tools/call',
+      params: { name: 'business_get', arguments: { location_id: LOCATION } },
+    }),
+  });
+}
+
+async function tokenFileEnv(
+  token: string
+): Promise<{ env: Record<string, string>; path: string }> {
+  const env = await validEnv();
+  delete env.ALTEGIO_API_TOKEN;
+  const path = keyFile(`${token}\n`);
+  env.ALTEGIO_API_TOKEN_FILE = path;
+  return { env, path };
+}
+
+describe('node dist/server.js: the partner token from ALTEGIO_API_TOKEN_FILE (OPS-04)', () => {
+  it(
+    'starts from a readable token file with no ALTEGIO_API_TOKEN, answers /health and never prints the token',
+    async () => {
+      const { env } = await tokenFileEnv(TOKEN_A);
+      const server = startServer(env);
+      await within(server.firstStdoutLine(), 10_000);
+      const health = await fetch(`http://127.0.0.1:${env.PORT ?? ''}/health`);
+      expect(health.status).toBe(200);
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(server.stdout()).not.toContain(TOKEN_A);
+      expect(server.stderr()).not.toContain(TOKEN_A);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it.each([
+    [
+      'a path that does not exist',
+      (): string => join(tmpdir(), 'no-such-dir', 'token'),
+    ],
+    ['an empty file', (): string => keyFile('\n')],
+  ])(
+    'exits 1 for %s, names ALTEGIO_API_TOKEN_FILE and prints no value, even with a plain ALTEGIO_API_TOKEN set',
+    async (_label, path) => {
+      const env = {
+        ...(await validEnv()),
+        ALTEGIO_API_TOKEN_FILE: path(),
+      };
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain('ALTEGIO_API_TOKEN_FILE');
+      expect(server.stdout()).toBe('');
+      // The plain value is never a fallback for an unusable file (T-03-22).
+      expect(server.stderr()).not.toContain(CANARY);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'exits 1 and names both settings when neither is set',
+    async () => {
+      const env = await validEnv();
+      delete env.ALTEGIO_API_TOKEN;
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain(
+        'Partner API token is required (ALTEGIO_API_TOKEN or ALTEGIO_API_TOKEN_FILE)'
+      );
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'sends the file token, not the plain ALTEGIO_API_TOKEN, to the Altegio API',
+    async () => {
+      const upstream = await startUpstream(
+        () => [TOKEN_A],
+        () => ({ status: 401, body: { success: false, meta: {} } })
+      );
+      try {
+        const { env } = await tokenFileEnv(TOKEN_A);
+        env.ALTEGIO_API_TOKEN = CANARY;
+        env.ALTEGIO_API_BASE = upstream.base;
+        const server = startServer(env);
+        await within(server.firstStdoutLine(), 10_000);
+
+        const response = await callBusinessGet(
+          `http://127.0.0.1:${env.PORT ?? ''}`
+        );
+        const body = (await response.json()) as {
+          result?: { isError?: boolean };
+        };
+
+        expect(body.result?.isError).not.toBe(true);
+        expect(upstream.sent).toEqual([`Bearer ${TOKEN_A}`]);
+        server.child.kill('SIGTERM');
+        await within(server.exited, SHUTDOWN_WINDOW_MS);
+      } finally {
+        await upstream.close();
+      }
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'picks up a rotated token without a restart: the 401 forces a re-read and the call succeeds with the new token',
+    async () => {
+      const upstream = await startUpstream(
+        () => [TOKEN_B],
+        () => ({ status: 401, body: { success: false, meta: {} } })
+      );
+      try {
+        const { env, path } = await tokenFileEnv(TOKEN_A);
+        env.ALTEGIO_API_BASE = upstream.base;
+        const server = startServer(env);
+        await within(server.firstStdoutLine(), 10_000);
+
+        // The platform rotates the secret while the process runs.
+        writeFileSync(path, `${TOKEN_B}\n`);
+        const response = await callBusinessGet(
+          `http://127.0.0.1:${env.PORT ?? ''}`
+        );
+        const body = (await response.json()) as {
+          result?: { isError?: boolean };
+        };
+
+        expect(body.result?.isError).not.toBe(true);
+        expect(upstream.sent).toEqual([
+          `Bearer ${TOKEN_A}`,
+          `Bearer ${TOKEN_B}`,
+        ]);
+        server.child.kill('SIGTERM');
+        await within(server.exited, SHUTDOWN_WINDOW_MS);
+        expect(server.stdout()).not.toContain(TOKEN_A);
+        expect(server.stdout()).not.toContain(TOKEN_B);
+        expect(server.stderr()).not.toContain(TOKEN_B);
+      } finally {
+        await upstream.close();
+      }
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'redacts both the rotated-out and the current token from a tool result that an upstream message quotes',
+    async () => {
+      const upstream = await startUpstream(
+        () => [],
+        (presented) =>
+          presented === TOKEN_A
+            ? { status: 401, body: { success: false, meta: {} } }
+            : {
+                status: 400,
+                body: {
+                  success: false,
+                  meta: { message: `was ${TOKEN_A}, now ${TOKEN_B}, rejected` },
+                },
+              }
+      );
+      try {
+        const { env, path } = await tokenFileEnv(TOKEN_A);
+        env.ALTEGIO_API_BASE = upstream.base;
+        const server = startServer(env);
+        await within(server.firstStdoutLine(), 10_000);
+
+        writeFileSync(path, `${TOKEN_B}\n`);
+        const response = await callBusinessGet(
+          `http://127.0.0.1:${env.PORT ?? ''}`
+        );
+        const text = await response.text();
+
+        expect(upstream.sent).toEqual([
+          `Bearer ${TOKEN_A}`,
+          `Bearer ${TOKEN_B}`,
+        ]);
+        expect(text).toContain('[redacted]');
+        expect(text).not.toContain(TOKEN_A);
+        expect(text).not.toContain(TOKEN_B);
+        server.child.kill('SIGTERM');
+        await within(server.exited, SHUTDOWN_WINDOW_MS);
+      } finally {
+        await upstream.close();
+      }
     },
     TEST_TIMEOUT_MS
   );
