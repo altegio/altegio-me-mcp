@@ -34,6 +34,7 @@ export interface CallRecord {
 }
 
 export interface CallLogOptions {
+  /** Clock for the rejection-line throttle only; tests inject one. */
   now?: () => number;
 }
 
@@ -51,6 +52,9 @@ const PROTOCOL_VERSION_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const NON_PRINTABLE_ASCII = /[^\x20-\x7E]/g;
 // Enough for any JSON-RPC error body; a larger body is a result, not an error.
 const BODY_COPY_LIMIT = 64 * 1024;
+// Anyone can send unsigned requests to the public run.app address, so a line
+// that carries an auth_reason is written at most once per interval (T-03-14).
+const REJECTION_LINE_INTERVAL_MS = 1000;
 const JSON_CONTENT_TYPE = /^application\/([a-z0-9.+-]+\+)?json\s*(;|$)/i;
 
 // Exported so a test that needs a record does not list every field.
@@ -264,8 +268,14 @@ function outcomeOf(
 export function createCallLogMiddleware(
   logger: Logger,
   toolNames: ReadonlySet<string>,
-  _options?: CallLogOptions
+  options?: CallLogOptions
 ): RequestHandler {
+  const now = options?.now ?? Date.now;
+  // One stream for every rejection reason: a flood is a flood whatever the
+  // reason. The count rides on the next rejection line that is written.
+  let lastRejectionLineAt: number | null = null;
+  let suppressedRejections = 0;
+
   return (req, res, next) => {
     const record = createCallRecord();
     res.locals.callRecord = record;
@@ -276,6 +286,23 @@ export function createCallLogMiddleware(
     const write = (): void => {
       if (written) return;
       written = true;
+
+      let suppressed: number | null = null;
+      if (record.auth_reason !== null) {
+        const at = now();
+        // A clock that steps backwards must not silence the log: only a
+        // non-negative gap inside the interval counts as "too soon".
+        const gap =
+          lastRejectionLineAt === null ? null : at - lastRejectionLineAt;
+        if (gap !== null && gap >= 0 && gap < REJECTION_LINE_INTERVAL_MS) {
+          suppressedRejections += 1;
+          return;
+        }
+        lastRejectionLineAt = at;
+        suppressed = suppressedRejections;
+        suppressedRejections = 0;
+      }
+
       const body: unknown = req.body;
       const method = rpcMethodOf(body);
       const status = res.statusCode;
@@ -292,6 +319,12 @@ export function createCallLogMiddleware(
         latency_ms: Math.round(performance.now() - startedAt),
         outcome,
         error_type: record.error_type,
+        auth_reason: record.auth_reason,
+        limited_by: record.limited_by,
+        upstream_kind: record.upstream_kind,
+        origin_host: record.origin_host,
+        forwarded_for_count: record.forwarded_for_count,
+        suppressed,
       };
       if (outcome === 'ok') {
         logger.info(line, 'mcp_call');

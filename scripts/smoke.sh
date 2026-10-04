@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Container smoke test: scripts/smoke.sh IMAGE
-# Runs the image with a canary token and a proxy key file, and checks /health,
-# the stateless /mcp endpoint with requests signed the way the platform proxy
-# signs them, the 401 for an unsigned request, the log contents, the container
-# user and the SIGTERM shutdown.
+# Runs the image with a canary token and a proxy key file, and checks /health
+# (version and the COMMIT_SHA the container was given), the stateless /mcp
+# endpoint with requests signed the way the platform proxy signs them, the 401
+# for an unsigned request, that no secret reaches the logs or the image config,
+# the container user and the SIGTERM shutdown.
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
@@ -75,6 +76,15 @@ post_mcp_unsigned() {
 }
 
 EXPECTED_VERSION="$(jq -r .version "$ROOT/package.json")"
+
+# The image declares no variable whose name suggests a secret: secrets reach a
+# container at run time only (SEC-03, OPS-04). Names only, never values.
+SECRET_NAME_PATTERN='TOKEN|SECRET|KEY|PASSWORD'
+image_env_names="$(docker inspect --format '{{json .Config.Env}}' "$IMAGE" |
+  jq -r '.[]? | split("=")[0]')"
+if secret_named="$(grep -Ei "$SECRET_NAME_PATTERN" <<<"$image_env_names")"; then
+  fail "the image config declares a secret-named variable: $(tr '\n' ' ' <<<"$secret_named")"
+fi
 
 # The key file is copied into the container instead of bind-mounted: a bind
 # mount of a macOS temp directory is not visible under Colima. Mode 0644 so the
@@ -157,16 +167,22 @@ stop_seconds=$((stop_finished - stop_started))
 exit_code="$(docker inspect --format '{{.State.ExitCode}}' "$NAME")"
 [ "$exit_code" = "0" ] || fail "container exit code is $exit_code, expected 0"
 
-# Logs: exactly one mcp_call line per POST (three signed, one unsigned), no
-# canary token, no canary argument.
+# Logs: exactly one mcp_call line per POST (three signed, one unsigned), the
+# unsigned one with its auth_reason, no canary token, no canary key, no canary
+# argument.
 docker logs "$NAME" >"$WORK_DIR/container.log" 2>&1
 call_lines="$(grep -c '"event":"mcp_call"' "$WORK_DIR/container.log" || true)"
 [ "$call_lines" = "4" ] || fail "expected 4 mcp_call log lines, found $call_lines"
+refusal_lines="$(grep -c '"auth_reason":"missing"' "$WORK_DIR/container.log" || true)"
+[ "$refusal_lines" = "1" ] || fail "expected 1 log line with auth_reason missing, found $refusal_lines"
 if grep -qF "$CANARY_TOKEN" "$WORK_DIR/container.log"; then
   fail "the canary token appears in the container logs"
+fi
+if grep -qF "$PROXY_KEY" "$WORK_DIR/container.log"; then
+  fail "the canary proxy key appears in the container logs"
 fi
 if grep -qF "$CANARY_ARG" "$WORK_DIR/container.log"; then
   fail "the canary tool argument appears in the container logs"
 fi
 
-echo "PASS smoke: image=$IMAGE version=$EXPECTED_VERSION mcp_call_lines=$call_lines user=$configured_user stop=${stop_seconds}s exit=$exit_code"
+echo "PASS smoke: image=$IMAGE version=$EXPECTED_VERSION mcp_call_lines=$call_lines refusal_lines=$refusal_lines user=$configured_user stop=${stop_seconds}s exit=$exit_code"

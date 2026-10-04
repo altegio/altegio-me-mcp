@@ -509,8 +509,10 @@ describe('throttled proxy-auth rejection lines (T-03-14)', () => {
     time.advance(1000);
     await postMcp(raw.url, toolsListBody(5));
     await raw.settled(5);
+    // The fifth request starts the cycle again, so it is 'missing' once more;
+    // the three suppressed ones were malformed, stale and bad_signature.
     expect(raw.logs[1]).toMatchObject({
-      auth_reason: 'malformed',
+      auth_reason: 'missing',
       suppressed: 3,
     });
   });

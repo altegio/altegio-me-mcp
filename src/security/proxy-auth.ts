@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { IncomingHttpHeaders } from 'node:http';
 import type { RequestHandler } from 'express';
+import { getCallRecord } from '../observability/call-log.js';
 
 // Proxy-origin check for POST /mcp (OPS-03, D-04). The public run.app address
 // cannot be closed to the platform proxy, so this signature is the gate that
@@ -122,6 +123,9 @@ export function createProxyAuthMiddleware(opts: {
       next();
       return;
     }
+    // The reason, never the header, goes on the call record (the call log
+    // writes it, throttled).
+    getCallRecord(res).auth_reason = result.reason;
     res.status(401).json(PROXY_AUTH_REFUSAL);
   };
 }
