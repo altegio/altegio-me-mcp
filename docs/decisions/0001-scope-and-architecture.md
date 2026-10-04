@@ -39,6 +39,8 @@ matches the brand (candidate `mcp.altegio.me`). Reasons: the shared proxy would 
 lane and a phone identity provider owned by another team; Claude's reviewers expect the server
 domain to match the service; the stateless MCP transport fits Cloud Run. Request logging,
 rate limits and abuse protection are ours to build.
+*Amended 2026-10-04 by [ADR 0002](0002-public-address-on-platform-proxy.md): the public address
+is `https://mcp.alteg.io/me` through the platform proxy; `mcp.altegio.me` is dropped.*
 
 **D4. Catalog covers every business with online booking enabled, with opt-out.** We build our own
 searchable index (name, location, category) and refresh it on a schedule. Needs sign-off from the
@@ -71,4 +73,6 @@ Google / Actions Center integration; consumer Gemini has no public submission.
 - A dedicated partner type is needed before launch: all traffic comes from our IPs, and the
   per-IP limit (200 requests/min) and anti-fraud checks would otherwise block us.
 - Phase 2 requires an OAuth authorization server of our own, with CIMD and DCR, PKCE S256 and a
-  phone + SMS login page.
+  phone + SMS login page. *Reopened by [ADR 0002](0002-public-address-on-platform-proxy.md): on
+  `mcp.alteg.io` the platform proxy is the authorization server, so Phase 2 sign-in is designed
+  with the platform team.*

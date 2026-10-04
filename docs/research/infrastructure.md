@@ -40,6 +40,10 @@ $10 per month. Secret Manager, Artifact Registry, Cloud Build, domain mapping: u
 
 ## I2. Domain and DNS
 
+> Superseded 2026-10-04 by [ADR 0002](../decisions/0002-public-address-on-platform-proxy.md):
+> the public address is `https://mcp.alteg.io/me` on the platform proxy. This section stays as
+> the fallback if the platform team cannot add an anonymous route.
+
 What exists:
 
 - `mcp.alteg.io` and `mcp.altegio.dev` are Cloud Run domain mappings: CNAME to

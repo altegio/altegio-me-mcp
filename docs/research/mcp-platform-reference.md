@@ -4,6 +4,14 @@ Research date: 2026-10-02. Source: `altegio/altegio-mcp-platform` (private).
 
 ## Summary
 
+> Update 2026-10-04: [ADR 0002](../decisions/0002-public-address-on-platform-proxy.md) publishes
+> this server at `https://mcp.alteg.io/me` on the customer proxy. The service stays on our own
+> Cloud Run; the anonymous lane below is requested from the platform team. Route mechanics that
+> matter for us (from `mcp-proxy/README.md`): a route can forward to an external https target
+> (`target_host`, `target_https`, `target_path`); with `endpoint: "/mcp"` the short address maps
+> to the backend `/mcp`, and backend paths outside it, such as `/health`, are not reachable through
+> the proxy; routes are probed with `POST /mcp tools/list` unless they declare a `probe_path`.
+
 A new route on `mcp.alteg.io` is a config entry plus a container, but the customer proxy admits
 only Altegio account holders (email + password through its login page, or a raw user token). It
 has no anonymous lane and no phone/SMS sign-in. A consumer server would need new proxy code owned

@@ -52,11 +52,14 @@ D1-D4 are decided by the owner, Mike Kondakov, before Phase 5, not by a design o
 | # | Question | Blocks | Status |
 |---|---|---|---|
 | I1 | GCP project and billing account for the service | First deploy | not asked: answered from Altegio.Pro MCP setup 2026-10-03 |
-| I2 | Domain: `mcp.altegio.me` or another; DNS owner | First deploy | not asked: answered from Altegio.Pro MCP setup 2026-10-03 |
+| I2 | Domain: `mcp.altegio.me` or another; DNS owner | First deploy | superseded 2026-10-04 by ADR 0002 (address `https://mcp.alteg.io/me`); see I5 |
+| I5 | Anonymous `/me` route on the `mcp.alteg.io` customer proxy: forward to our Cloud Run over https, pass the client IP, sign proxied requests (platform team, ADR 0002) | First public deploy (OPS-03, OPS-08) | draft ready 2026-10-04 in Slack `#altegio-mcp-platform`, not sent yet |
 | I3 | Developer account and partner token for the Altegio.me MCP | Local run against the real API | not asked: owner decision 2026-10-03 (account 2630) |
 | I4 | Organization admin on standby to apply the main-branch ruleset if GitHub refuses the OrganizationAdmin bypass actor to a repo admin | Phase 1 CI gate (CI-02) | not asked: ask only if applying the ruleset fails (plan 01-08) |
 
 I1 answer (from the Altegio.Pro MCP and mcp.alteg.io platform setup, 2026-10-03): a new GCP project `altegio-me-mcp` in europe-west1. Creating the project, linking billing and connecting the GitHub organization to Cloud Build need organization or infrastructure rights. Details in [research/infrastructure.md](research/infrastructure.md).
+
+I2 superseded (owner decision, 2026-10-04, [ADR 0002](decisions/0002-public-address-on-platform-proxy.md)): the public address is `https://mcp.alteg.io/me`, a route on the platform proxy's customer stack. No domain of our own, no Search Console or Cloudflare work. The open item moves to the platform team: an anonymous `/me` route that forwards to our Cloud Run service over https, passes the client IP and signs proxied requests. The earlier answer below stays for the record and is the fallback if the platform declines.
 
 I2 answer (from the Altegio.Pro MCP and mcp.alteg.io platform setup, 2026-10-03): `mcp.altegio.me` as a Cloud Run domain mapping with a non-proxied Cloudflare CNAME to `ghs.googlehosted.com`. It needs a Search Console owner of `altegio.me` and Cloudflare write access to that zone; the `altegio.me` registration expires 2026-11-22. Details in [research/infrastructure.md](research/infrastructure.md).
 

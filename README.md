@@ -84,15 +84,18 @@ Other notes:
 - TypeScript, Express, zod, pino. Patterns reused from Altegio.Pro MCP: tool factory with zod
   schemas, annotations on every tool, untrusted-text fencing, pagination, actionable errors,
   CI layout.
-- Target hosting: its own Cloud Run service in its own GCP project, on a domain that matches
-  the brand (for example `mcp.altegio.me`, to be confirmed). It does not sit behind the
-  `mcp.alteg.io` proxy, which only admits Altegio account holders.
+- Target hosting: its own Cloud Run service in its own GCP project, published at
+  `https://mcp.alteg.io/me` as a route on the platform's `mcp.alteg.io` proxy, next to
+  `https://mcp.alteg.io/pro` (ADR 0002). The proxy admits only Altegio account holders today;
+  the anonymous `/me` route is requested from the platform team.
 - The booking client calls the Altegio public API (`api.alteg.io/api/v1`) with the partner
   token and never creates, holds or changes a booking: `book_check` is a validation-only call,
   and a live run confirmed that it leaves the slot free. Later phases add a catalog index of
-  bookable businesses refreshed by a scheduled job, and an OAuth 2.1 authorization server with
-  phone + SMS sign-in.
-- Decisions and their reasons: [`docs/decisions/0001-scope-and-architecture.md`](docs/decisions/0001-scope-and-architecture.md).
+  bookable businesses refreshed by a scheduled job, and phone + SMS sign-in over OAuth 2.1,
+  designed together with the platform proxy, which is the authorization server on
+  `mcp.alteg.io` (ADR 0002).
+- Decisions and their reasons: [`docs/decisions/0001-scope-and-architecture.md`](docs/decisions/0001-scope-and-architecture.md),
+  [`docs/decisions/0002-public-address-on-platform-proxy.md`](docs/decisions/0002-public-address-on-platform-proxy.md).
 - What other teams must answer before or during the build: [`docs/open-questions.md`](docs/open-questions.md).
 
 ## Research
@@ -102,7 +105,7 @@ Other notes:
 | Altegio public booking API, discovery, deep links, limits | [`docs/research/altegio-booking-api.md`](docs/research/altegio-booking-api.md) |
 | Distribution on AI platforms and their requirements | [`docs/research/ai-platforms-distribution.md`](docs/research/ai-platforms-distribution.md) |
 | How Altegio.Pro MCP is built, what to reuse | [`docs/research/altegio-pro-mcp-reference.md`](docs/research/altegio-pro-mcp-reference.md) |
-| The `mcp.alteg.io` platform and why we don't use it | [`docs/research/mcp-platform-reference.md`](docs/research/mcp-platform-reference.md) |
+| The `mcp.alteg.io` platform, whose proxy publishes this server at `/me` | [`docs/research/mcp-platform-reference.md`](docs/research/mcp-platform-reference.md) |
 
 ## Environment variables
 
@@ -234,14 +237,17 @@ the pull request title.
 ## Deploy
 
 Deploys go only through git: a Cloud Build trigger on merge to `main` deploys to the service's
-own Cloud Run project and domain. No manual `gcloud run deploy`. The trigger, the service and
-the domain are not set up yet; until then the server runs locally and in CI only.
+own Cloud Run project. No manual `gcloud run deploy`. Clients reach the service at
+`https://mcp.alteg.io/me`, a route on the platform proxy that forwards to the service's `/mcp`
+(ADR 0002). The trigger, the service and the route are not set up yet; until then the server
+runs locally and in CI only.
 
 ## Cost estimate
 
-Rough, refined per phase. Assumptions: Cloud Run in `europe-west1`, 1 vCPU / 512 MiB, one minimum instance (OAuth
-endpoints must answer within 10 s for Claude, and cold starts hurt chat latency). The server
-calls no LLM: the model runs on the AI host's side.
+Rough, refined per phase. Assumptions: Cloud Run in `europe-west1`, 1 vCPU / 512 MiB, one minimum instance (cold
+starts hurt chat latency). The server calls no LLM: the model runs on the AI host's side. The
+platform proxy in front of the service (`mcp.alteg.io`, ADR 0002) runs in the platform's own
+project and is not counted here.
 
 | Item | Expected (≈100k tool calls / month) | Peak (≈1M tool calls / month) |
 |---|---|---|
@@ -249,7 +255,7 @@ calls no LLM: the model runs on the AI host's side.
 | Catalog refresh job, Scheduler, storage | $1–5 | $1–5 |
 | Secret Manager, logging, egress | $1–3 | $3–10 |
 | **Phase 1 total** | **≈ $10–25** | **≈ $35–65** |
-| Phase 2: OAuth state store (Firestore) | $1–5 | $5–15 |
+| Phase 2: OAuth state store (Firestore), unless the platform proxy holds it (ADR 0002) | $1–5 | $5–15 |
 | Phase 2: SMS sign-in codes, $0.02–0.10 each | ≈ $20–100 per 1,000 sign-ins | scales with sign-ins |
 | Optional: nightly evals via Anthropic API | $10–30 | $10–30 |
 
