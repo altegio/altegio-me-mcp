@@ -13,7 +13,10 @@ import {
   createRecordingFetch,
   RECORDED_ROUTES,
   sanitizeRecording,
+  SANITIZED_COORDINATE,
+  SANITIZED_ID,
   SANITIZED_IMAGE,
+  SANITIZED_KEYS,
   SANITIZED_PHONE,
   SANITIZED_TEXT,
   SANITIZED_URL,
@@ -84,6 +87,76 @@ function unsanitizedPhones(value: unknown, path = 'data'): string[] {
   });
 }
 
+/** Every string leaf under `value` that is neither empty nor the text placeholder. */
+function realTextLeaves(value: unknown): boolean {
+  if (typeof value === 'string')
+    return value !== '' && value !== SANITIZED_TEXT;
+  if (Array.isArray(value)) return (value as unknown[]).some(realTextLeaves);
+  if (isRecord(value)) return Object.values(value).some(realTextLeaves);
+  return false;
+}
+
+function isEmptyOr(value: unknown, placeholder: unknown): boolean {
+  return value === null || value === undefined || value === placeholder;
+}
+
+/**
+ * Paths holding a real value under a key the sanitiser replaces (WR-06): the
+ * text keys, the company-only title keys, coordinates, `*_account_id` keys and
+ * the `name` of every `user` and `position` object, and a team member's own
+ * name. Walks the same key lists the sanitiser uses.
+ */
+function unsanitizedValues(
+  route: RecordedRoute,
+  value: unknown,
+  path = 'data'
+): string[] {
+  if (Array.isArray(value)) {
+    return (value as unknown[]).flatMap((item, index) =>
+      unsanitizedValues(route, item, `${path}[${index}]`)
+    );
+  }
+  if (!isRecord(value)) return [];
+  const textKeys: readonly string[] =
+    route === 'company'
+      ? [...SANITIZED_KEYS.text, ...SANITIZED_KEYS.companyText]
+      : SANITIZED_KEYS.text;
+  const containers: readonly string[] = SANITIZED_KEYS.personContainers;
+  return Object.entries(value).flatMap(([key, item]) => {
+    const here = `${path}.${key}`;
+    if (textKeys.includes(key)) return realTextLeaves(item) ? [here] : [];
+    if ((SANITIZED_KEYS.coordinate as readonly string[]).includes(key)) {
+      return isEmptyOr(item, SANITIZED_COORDINATE) ? [] : [here];
+    }
+    if (key.endsWith(SANITIZED_KEYS.idSuffix)) {
+      return isEmptyOr(item, SANITIZED_ID) ? [] : [here];
+    }
+    const nested = unsanitizedValues(route, item, here);
+    if (containers.includes(key)) {
+      const objects = Array.isArray(item) ? (item as unknown[]) : [item];
+      const names = objects.flatMap((object, index) =>
+        isRecord(object) && realTextLeaves(object.name)
+          ? [`${here}${Array.isArray(item) ? `[${index}]` : ''}.name`]
+          : []
+      );
+      return [...nested, ...names];
+    }
+    return nested;
+  });
+}
+
+/** Paths of a team member's own name when it is not the 'Team member <id>' form. */
+function unnamedTeamMembers(data: unknown): string[] {
+  if (!Array.isArray(data)) return [];
+  return (data as unknown[]).flatMap((member, index) =>
+    isRecord(member) &&
+    'name' in member &&
+    !/^Team member \d+$/.test(String(member.name))
+      ? [`data[${index}].name`]
+      : []
+  );
+}
+
 function liveFiles(): string[] {
   if (!existsSync(LIVE_DIR)) return [];
   return readdirSync(LIVE_DIR)
@@ -92,7 +165,7 @@ function liveFiles(): string[] {
 }
 
 describe('live recordings under fixtures/live (BAPI-03)', () => {
-  it('parse with their route schemas and carry no e-mail address or phone number', () => {
+  it('parse with their route schemas and carry no e-mail address, phone number, name, address or coordinates', () => {
     const files = liveFiles();
     const problems: string[] = [];
     for (const name of files) {
@@ -114,6 +187,14 @@ describe('live recordings under fixtures/live (BAPI-03)', () => {
       }
       for (const path of unsanitizedPhones(data)) {
         problems.push(`${name}: ${path} is not sanitised`);
+      }
+      for (const path of unsanitizedValues(route, data)) {
+        problems.push(`${name}: ${path} is not a placeholder`);
+      }
+      if (route === 'book_staff') {
+        for (const path of unnamedTeamMembers(data)) {
+          problems.push(`${name}: ${path} is not a placeholder`);
+        }
       }
     }
     expect(problems).toEqual([]);
@@ -231,16 +312,13 @@ describe('sanitizeRecording', () => {
     expect(result.company_photos).toEqual([SANITIZED_IMAGE]);
   });
 
-  it('keeps ids, titles, timezone fields and booking-form URLs of a company card', () => {
+  it('keeps ids, timezone fields and booking-form URLs of a company card', () => {
     const result = sanitizeRecording('company', companyData, [TOKEN]) as Record<
       string,
       unknown
     >;
     expect(result).toMatchObject({
       id: 722227,
-      title: 'Demo Beauty Studio',
-      public_title: 'Demo Beauty Studio',
-      address: '12 Example Street',
       timezone: 3,
       timezone_name: 'Asia/Nicosia',
       next_slot: '2026-10-05T09:30:00+03:00',
@@ -321,7 +399,11 @@ describe('sanitizeRecording', () => {
   it('replaces the partner token anywhere in the payload with [redacted]', () => {
     const result = sanitizeRecording(
       'company',
-      { ...companyData, title: `Studio ${TOKEN}`, extra: { [TOKEN]: TOKEN } },
+      {
+        ...companyData,
+        short_descr: `Studio ${TOKEN}`,
+        extra: { [TOKEN]: TOKEN },
+      },
       [TOKEN]
     );
     const text = JSON.stringify(result);
@@ -333,6 +415,154 @@ describe('sanitizeRecording', () => {
     const before = JSON.stringify(staffData);
     sanitizeRecording('book_staff', staffData, [TOKEN]);
     expect(JSON.stringify(staffData)).toBe(before);
+  });
+
+  it('removes every name, phone and e-mail of a staff entry, including nested ones (WR-06)', () => {
+    const probe = [
+      {
+        id: 5,
+        name: 'Jane Roe',
+        user: {
+          id: 9,
+          name: 'Jane Roe',
+          phone: '+1555',
+          email: 'a@b.co',
+        },
+        position: { id: 1, title: 'Senior', name: 'Jane Roe' },
+      },
+    ];
+    const text = JSON.stringify(
+      sanitizeRecording('book_staff', probe, [TOKEN])
+    );
+    expect(text).not.toContain('Jane Roe');
+    expect(text).not.toContain('+1555');
+    expect(text).not.toContain('a@b.co');
+    const [member] = sanitizeRecording('book_staff', probe, [TOKEN]) as Record<
+      string,
+      Record<string, unknown>
+    >[];
+    expect(member).toMatchObject({
+      name: 'Team member 5',
+      user: { id: 9, name: SANITIZED_TEXT, phone: SANITIZED_PHONE },
+      position: { id: 1, title: 'Senior', name: SANITIZED_TEXT },
+    });
+  });
+
+  it('replaces the address, coordinates, owner name, title, schedule and account ids of a company (WR-06)', () => {
+    const result = sanitizeRecording(
+      'company',
+      {
+        id: 7,
+        address: 'Main St 1',
+        zip: '12345',
+        coordinate_lat: 52.5,
+        coordinate_lon: 13.4,
+        master_name: 'Jane Roe',
+        title: 'Jane Roe Studio',
+        public_title: 'Jane Roe Studio',
+        schedule: 'Mon-Fri',
+        auto_pay_account_id: 77,
+        auto_pay_bank_account_id: 78,
+        main_group: { id: 3, title: 'Jane Roe Group' },
+        bookforms: [{ id: 1, title: 'Book Jane', url: 'https://n1.alteg.io/' }],
+      },
+      [TOKEN]
+    );
+    expect(result).toEqual({
+      id: 7,
+      address: SANITIZED_TEXT,
+      zip: SANITIZED_TEXT,
+      coordinate_lat: SANITIZED_COORDINATE,
+      coordinate_lon: SANITIZED_COORDINATE,
+      master_name: SANITIZED_TEXT,
+      title: SANITIZED_TEXT,
+      public_title: SANITIZED_TEXT,
+      schedule: SANITIZED_TEXT,
+      auto_pay_account_id: SANITIZED_ID,
+      auto_pay_bank_account_id: SANITIZED_ID,
+      main_group: { id: 3, title: SANITIZED_TEXT },
+      bookforms: [
+        { id: 1, title: SANITIZED_TEXT, url: 'https://n1.alteg.io/' },
+      ],
+    });
+  });
+
+  it('keeps empty address and null account ids empty, and service titles as written', () => {
+    const company = sanitizeRecording(
+      'company',
+      { address: '', zip: '', master_name: '', auto_pay_account_id: null },
+      [TOKEN]
+    );
+    expect(company).toEqual({
+      address: '',
+      zip: '',
+      master_name: '',
+      auto_pay_account_id: null,
+    });
+    const services = sanitizeRecording('book_services', servicesData, [
+      TOKEN,
+    ]) as typeof servicesData;
+    expect(services.services[0]?.title).toBe("Women's haircut");
+    expect(services.category).toEqual([{ id: 7, title: 'Hair' }]);
+  });
+});
+
+describe('the recordings check', () => {
+  const real = {
+    address: 'Main St 1',
+    coordinate_lat: 52.5,
+    coordinate_lon: 13.4,
+    master_name: 'Jane Roe',
+    title: 'Jane Roe Studio',
+    public_title: 'Jane Roe Studio',
+    schedule: 'Mon-Fri',
+    zip: '12345',
+    auto_pay_account_id: 77,
+    main_group: { id: 3, title: 'Jane Roe Group' },
+  };
+
+  it('flags a company recording that still holds a real value for a sanitised key', () => {
+    expect(unsanitizedValues('company', real).sort()).toEqual(
+      [
+        'data.address',
+        'data.auto_pay_account_id',
+        'data.coordinate_lat',
+        'data.coordinate_lon',
+        'data.main_group.title',
+        'data.master_name',
+        'data.public_title',
+        'data.schedule',
+        'data.title',
+        'data.zip',
+      ].sort()
+    );
+  });
+
+  it('flags the name inside user and position of a staff recording', () => {
+    const data = [
+      {
+        id: 5,
+        name: 'Team member 5',
+        user: { id: 9, name: 'Jane Roe' },
+        position: { id: 1, name: 'Jane Roe' },
+      },
+    ];
+    expect(unsanitizedValues('book_staff', data)).toEqual([
+      'data[0].user.name',
+      'data[0].position.name',
+    ]);
+    expect(unnamedTeamMembers([{ id: 5, name: 'Jane Roe' }])).toEqual([
+      'data[0].name',
+    ]);
+  });
+
+  it('passes what the sanitiser produced from the same input', () => {
+    const company = sanitizeRecording('company', real, [TOKEN]);
+    expect(unsanitizedValues('company', company)).toEqual([]);
+  });
+
+  it('does not treat a service or category title as a sanitised key', () => {
+    expect(unsanitizedValues('book_services', servicesData)).toEqual([]);
   });
 });
 

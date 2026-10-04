@@ -33,6 +33,31 @@ export const SANITIZED_PHONE = '+10000000000';
 export const SANITIZED_TEXT = '[removed]';
 export const SANITIZED_URL = 'https://example.invalid/';
 export const SANITIZED_IMAGE = 'https://example.invalid/image.png';
+export const SANITIZED_COORDINATE = 0;
+export const SANITIZED_ID = 0;
+
+/**
+ * The keys whose values the sanitiser replaces, by placeholder family. The CI
+ * test over the committed recordings (live-fixtures.test.ts) walks the same
+ * lists, so a key added here is enforced there.
+ */
+export const SANITIZED_KEYS = {
+  /** Replaced with SANITIZED_TEXT wherever they occur. */
+  text: ['address', 'zip', 'master_name', 'schedule'],
+  /**
+   * Replaced with SANITIZED_TEXT in a `company` recording only: there they name
+   * the business (for a sole proprietor, the person) and its booking forms.
+   * Elsewhere `title` is a service, category or position name that the route
+   * schemas and the deep link read, so it stays.
+   */
+  companyText: ['title', 'public_title'],
+  /** Replaced with SANITIZED_COORDINATE. */
+  coordinate: ['coordinate_lat', 'coordinate_lon'],
+  /** Every key ending in this is replaced with SANITIZED_ID. */
+  idSuffix: '_account_id',
+  /** Objects whose `name` is a person's name, replaced with SANITIZED_TEXT. */
+  personContainers: ['user', 'position'],
+} as const;
 
 const EMAIL_PATTERN = /[\w.+-]+@[\w-]+\.[\w.]+/g;
 
