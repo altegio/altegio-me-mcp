@@ -11,14 +11,22 @@ import type { Logger } from 'pino';
 // older than SECRET_TTL_MS it starts at most one background re-read whose
 // result serves the calls after it. A failed or empty re-read keeps the last
 // good value. known() returns the current and the previous value, so a
-// rotated-out secret can still be scrubbed from output.
+// rotated-out secret can still be scrubbed from output. refresh() is the
+// forced re-read for a caller that was refused with the cached value: it does
+// not depend on how recently the lazy re-read ran, only on its own pace of one
+// per TTL.
 
 export const SECRET_TTL_MS = 60_000;
 
 export interface SecretSource {
   current(): string;
   known(): readonly string[];
-  /** Forced re-read, at most once per TTL; resolves true when the value changed. */
+  /**
+   * Forced re-read for a caller the upstream refused, at most one per TTL
+   * counted from the last forced one (a lazy re-read does not use it up).
+   * Joins a re-read that is already running. Resolves true when the value
+   * changed.
+   */
   refresh(): Promise<boolean>;
 }
 
@@ -54,6 +62,7 @@ export async function createFileSecretSource(
   let readAt = now();
   let inFlight: Promise<boolean> | null = null;
   let lastFailureLogAt = Number.NEGATIVE_INFINITY;
+  let lastForcedAt = Number.NEGATIVE_INFINITY;
 
   const reportFailure = (): void => {
     const at = now();
@@ -100,7 +109,11 @@ export async function createFileSecretSource(
     },
     refresh(): Promise<boolean> {
       if (inFlight !== null) return inFlight;
-      if (now() - readAt < ttlMs) return Promise.resolve(false);
+      const at = now();
+      // As in the failure log: a clock that steps backwards never blocks it.
+      const gap = at - lastForcedAt;
+      if (gap >= 0 && gap < ttlMs) return Promise.resolve(false);
+      lastForcedAt = at;
       return reread();
     },
   };
