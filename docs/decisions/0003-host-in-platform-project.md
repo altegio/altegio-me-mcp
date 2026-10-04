@@ -47,7 +47,10 @@ VM; the ask (I6) leaves that choice to them.
 What the shared project gives us:
 
 - **Partner token.** The runtime service account reads the existing secret `ALTEGIO_API_TOKEN`,
-  the one Pro uses (account 2630, I3). No copy is made, and a rotation happens in one place.
+  the one Pro uses. No copy is made, and a rotation happens in one place. Which developer account
+  issued that token is not documented; I3 expects account 2630, and the I6 ask confirms it. The
+  owner considered a secret of our own, filled from the local token, and chose not to
+  (2026-10-04): it would be a second copy to rotate.
 - **Proxy-origin key.** The runtime service account reads the key the proxy signs with
   (`MCP_PROXY_BACKEND_KEY`, or a key the platform issues for this route) in the same project. No
   secret crosses projects.
