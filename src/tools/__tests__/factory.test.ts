@@ -5,6 +5,11 @@ import {
   STRUCTURED_BUDGET_CHARS,
   TEXT_BUDGET_CHARS,
 } from '../factory.js';
+import {
+  UNTRUSTED_CLOSE,
+  UNTRUSTED_OPEN,
+  withUntrustedBlock,
+} from '../untrusted.js';
 
 const readHints = {
   readOnlyHint: true,
@@ -130,6 +135,124 @@ describe('rendered text budget', () => {
     const text = 'b'.repeat(TEXT_BUDGET_CHARS + 10);
     const { result } = await textTool(() => text).invoke({}, undefined);
     expect(result.structuredContent).toEqual({ text });
+  });
+});
+
+function occurrences(haystack: string, needle: string): number {
+  return haystack.split(needle).length - 1;
+}
+
+describe('rendered text budget and the untrusted fence', () => {
+  const emoji200 = String.fromCodePoint(0x1f600).repeat(200);
+
+  // 50 items with three 200-code-point emoji fields each: about 63 000 UTF-16
+  // units of fenced text, which is over TEXT_BUDGET_CHARS but far below the
+  // structured budget (WR-05).
+  function emojiListTool(): ReturnType<
+    typeof defineTool<z.ZodObject, typeof textOutput>
+  > {
+    const fields: Record<string, string> = {};
+    for (let item = 0; item < 50; item += 1) {
+      for (const field of ['first', 'second', 'third']) {
+        fields[`item ${item} ${field}`] = emoji200;
+      }
+    }
+    return defineTool({
+      name: 'demo_emoji_list',
+      title: 'Emoji list demo',
+      description: 'Renders 50 items of emoji-heavy business text.',
+      annotations: readHints,
+      kind: 'list',
+      input: z.strictObject({}),
+      output: textOutput,
+      render: () => withUntrustedBlock('Found 50 items.', fields),
+      handler: () => Promise.resolve({ text: 'ok' }),
+    });
+  }
+
+  function expectClosedFenceThenNote(rendered: string): void {
+    const closeAt = rendered.lastIndexOf(UNTRUSTED_CLOSE);
+    expect(closeAt).toBeGreaterThan(-1);
+    const afterClose = rendered.slice(closeAt + UNTRUSTED_CLOSE.length);
+    expect(afterClose.startsWith('\n\n[Output truncated')).toBe(true);
+    expect(afterClose).toContain('Next:');
+    // Nothing but the note follows the closing fence, and the note is the end.
+    expect(afterClose.endsWith(']')).toBe(true);
+    expect(rendered.length).toBeLessThanOrEqual(
+      TEXT_BUDGET_CHARS + UNTRUSTED_CLOSE.length + afterClose.length
+    );
+  }
+
+  it('closes the fence of a cut list of 50 emoji-heavy items before the note', async () => {
+    const { result } = await emojiListTool().invoke({}, undefined);
+    const rendered = result.content[0]?.text ?? '';
+    expect(rendered).toContain('[Output truncated');
+    expect(occurrences(rendered, UNTRUSTED_OPEN)).toBe(1);
+    expect(occurrences(rendered, UNTRUSTED_CLOSE)).toBe(
+      occurrences(rendered, UNTRUSTED_OPEN)
+    );
+    expectClosedFenceThenNote(rendered);
+    // The cut never leaves half of a surrogate pair before the closing fence.
+    const closeAt = rendered.lastIndexOf(UNTRUSTED_CLOSE);
+    const beforeClose = rendered.slice(0, closeAt).trimEnd();
+    const lastUnit = beforeClose.charCodeAt(beforeClose.length - 1);
+    expect(lastUnit >= 0xd800 && lastUnit <= 0xdbff).toBe(false);
+  });
+
+  it('closes the fence of a plain long block body', async () => {
+    const text = `Summary.\n\n${UNTRUSTED_OPEN}\n${'x'.repeat(
+      TEXT_BUDGET_CHARS * 2
+    )}\n${UNTRUSTED_CLOSE}`;
+    const { result } = await textTool(() => text).invoke({}, undefined);
+    const rendered = result.content[0]?.text ?? '';
+    expect(occurrences(rendered, UNTRUSTED_CLOSE)).toBe(1);
+    expectClosedFenceThenNote(rendered);
+  });
+
+  it('closes the fence when the cut falls inside its closing marker', async () => {
+    const body = 'y'.repeat(100);
+    const head = `${UNTRUSTED_OPEN}\n${body}\n`;
+    // The closing marker straddles the budget: its first half is kept.
+    const pad = 'z'.repeat(TEXT_BUDGET_CHARS - head.length - 5);
+    const text = `${head}${pad}\n${UNTRUSTED_CLOSE}\nafter`;
+    const { result } = await textTool(() => text).invoke({}, undefined);
+    const rendered = result.content[0]?.text ?? '';
+    expect(occurrences(rendered, UNTRUSTED_CLOSE)).toBe(1);
+    expect(occurrences(rendered, '<<<END')).toBe(1);
+    expectClosedFenceThenNote(rendered);
+  });
+
+  it('drops a block whose opening marker does not fit before the cut', async () => {
+    const lead = 'a'.repeat(TEXT_BUDGET_CHARS - 10);
+    const text = `${lead}\n\n${UNTRUSTED_OPEN}\nsecret field\n${UNTRUSTED_CLOSE}`;
+    const { result } = await textTool(() => text).invoke({}, undefined);
+    const rendered = result.content[0]?.text ?? '';
+    expect(occurrences(rendered, UNTRUSTED_OPEN)).toBe(0);
+    expect(occurrences(rendered, UNTRUSTED_CLOSE)).toBe(0);
+    expect(rendered).not.toContain('<<<');
+    expect(rendered.startsWith(lead)).toBe(true);
+    expect(rendered).toContain('[Output truncated');
+  });
+
+  it('keeps an already closed fence as it is and cuts the text after it', async () => {
+    const text = `${UNTRUSTED_OPEN}\nfield\n${UNTRUSTED_CLOSE}\n${'t'.repeat(
+      TEXT_BUDGET_CHARS
+    )}`;
+    const { result } = await textTool(() => text).invoke({}, undefined);
+    const rendered = result.content[0]?.text ?? '';
+    expect(occurrences(rendered, UNTRUSTED_OPEN)).toBe(1);
+    expect(occurrences(rendered, UNTRUSTED_CLOSE)).toBe(1);
+    expect(rendered.startsWith(text.slice(0, TEXT_BUDGET_CHARS))).toBe(true);
+    expect(rendered).toContain('[Output truncated');
+  });
+
+  it('leaves a text over the budget without any fence cut as before', async () => {
+    const text = 'n'.repeat(TEXT_BUDGET_CHARS + 500);
+    const { result } = await textTool(() => text).invoke({}, undefined);
+    const rendered = result.content[0]?.text ?? '';
+    expect(rendered.startsWith('n'.repeat(TEXT_BUDGET_CHARS))).toBe(true);
+    expect(rendered).not.toContain(UNTRUSTED_CLOSE);
+    expect(rendered).toContain('[Output truncated');
   });
 });
 
