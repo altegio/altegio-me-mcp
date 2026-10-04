@@ -520,13 +520,24 @@ export const bookCheck = defineTool<
           teamMemberId: input.team_member_id,
           datetime: input.datetime,
         },
-        { signal: ctx.signal, key: ctx.clientKey }
+        {
+          // The check has its own budget inside the call deadline, so a slow
+          // check leaves time for the card read (WR-04, D-01).
+          signal: AbortSignal.any([
+            ctx.signal,
+            ctx.timeout(BOOK_CHECK_STEP_MS),
+          ]),
+          key: ctx.clientKey,
+        }
       );
     } catch (error) {
       if (
         error instanceof UpstreamError &&
         (error.kind === 'unavailable' || error.kind === 'contract_drift')
       ) {
+        // A call that ended (deadline or disconnect) gets its mapped error and
+        // no further upstream call; only a spent step budget degrades.
+        if (ctx.signal.aborted) throw toToolError(error);
         return unverified(input, deps, ctx, error);
       }
       // A taken or rejected slot gets no link at all (D-06).
