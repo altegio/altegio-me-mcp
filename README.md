@@ -186,9 +186,11 @@ widget reports `active: 0`) in `.env`. It parses
 every route with the same schemas as the fixture tests, checks that two identical slot checks
 are both accepted and leave the slot free, and makes at most 20 upstream calls per run, because
 the partner budget is shared with Altegio.Pro MCP. `ALTEGIO_E2E_RECORD=1 npm run test:live`
-also refreshes the sanitised recordings in `src/booking/__tests__/fixtures/live/` (no token, no
-e-mail addresses, no phone numbers, no names); the required test run parses them with the route
-schemas. Without `ALTEGIO_E2E=1`, which only `test:live` sets, every live test is skipped.
+also refreshes the sanitised recordings in `src/booking/__tests__/fixtures/live/`. The sanitiser
+removes exactly this: the token, e-mail addresses, phone numbers, team-member and contact names,
+addresses, coordinates, business titles and account ids (plus free text, links and image URLs);
+the required test run fails on any real value for those keys and parses the recordings with the
+route schemas. Without `ALTEGIO_E2E=1`, which only `test:live` sets, every live test is skipped.
 
 The real-browser check of the widget link lives in `scripts/browser-check`, an isolated package
 with its own pinned Playwright. It runs only locally and is never part of CI or the Docker image:
