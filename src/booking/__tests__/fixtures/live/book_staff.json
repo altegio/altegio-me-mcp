@@ -1,0 +1,67 @@
+{
+  "recorded_at": "2026-10-04T05:56:06.740Z",
+  "route": "book_staff",
+  "status": 200,
+  "data": [
+    {
+      "id": 2820042,
+      "api_id": null,
+      "name": "Team member 2820042",
+      "specialization": "Косметолог",
+      "rating": 0,
+      "show_rating": 1,
+      "user_id": null,
+      "has_access_timetable": true,
+      "is_paid_staff": false,
+      "avatar": "https://example.invalid/image.png",
+      "avatar_big": "https://example.invalid/image.png",
+      "comments_count": 0,
+      "votes_count": 0,
+      "bookable": true,
+      "image_group": {
+        "id": 2946189,
+        "entity": "https://example.invalid/image.png",
+        "entity_id": "https://example.invalid/image.png",
+        "images": {
+          "sm": {
+            "id": 6512856,
+            "path": "https://example.invalid/image.png",
+            "width": "https://example.invalid/image.png",
+            "height": "https://example.invalid/image.png",
+            "type": "https://example.invalid/image.png",
+            "image_group_id": 2946189,
+            "version": "https://example.invalid/image.png"
+          },
+          "norm": {
+            "id": 6512857,
+            "path": "https://example.invalid/image.png",
+            "width": "https://example.invalid/image.png",
+            "height": "https://example.invalid/image.png",
+            "type": "https://example.invalid/image.png",
+            "image_group_id": 2946189,
+            "version": "https://example.invalid/image.png"
+          },
+          "origin": {
+            "id": 6512858,
+            "path": "https://example.invalid/image.png",
+            "width": "https://example.invalid/image.png",
+            "height": "https://example.invalid/image.png",
+            "type": "https://example.invalid/image.png",
+            "image_group_id": 2946189,
+            "version": "https://example.invalid/image.png"
+          }
+        }
+      },
+      "information": "",
+      "position_id": 0,
+      "schedule_till": "2026-11-19",
+      "weight": 20,
+      "fired": 0,
+      "status": 0,
+      "hidden": 0,
+      "user": null,
+      "prepaid": "forbidden",
+      "position": []
+    }
+  ]
+}

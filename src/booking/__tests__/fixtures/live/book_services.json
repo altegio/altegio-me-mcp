@@ -1,0 +1,1089 @@
+{
+  "recorded_at": "2026-10-04T05:56:08.851Z",
+  "route": "book_services",
+  "status": 200,
+  "data": {
+    "events": [],
+    "services": [
+      {
+        "id": 10303557,
+        "title": "Оформлание бороды",
+        "category_id": 12219032,
+        "price_min": 500,
+        "price_max": 500,
+        "discount": 0,
+        "comment": "",
+        "weight": 48,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "required",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "required",
+          "prepaid_full": {
+            "amount": 500,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 50,
+            "percent": 10,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303559,
+        "title": "Fjortis-укладка (прикорневое гофре,локоны,волны)",
+        "category_id": 12219032,
+        "price_min": 1200,
+        "price_max": 1200,
+        "discount": 0,
+        "comment": "",
+        "weight": 46,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 1200,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 1200,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303560,
+        "title": "Express-прическа (без мытья)",
+        "category_id": 12219032,
+        "price_min": 500,
+        "price_max": 500,
+        "discount": 0,
+        "comment": "",
+        "weight": 45,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 500,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 500,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303561,
+        "title": "Прическа",
+        "category_id": 12219032,
+        "price_min": 1700,
+        "price_max": 1700,
+        "discount": 0,
+        "comment": "",
+        "weight": 44,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 1700,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 1700,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303530,
+        "title": "Маникюр без покрытия",
+        "category_id": 10303505,
+        "price_min": 900,
+        "price_max": 900,
+        "discount": 0,
+        "comment": "",
+        "weight": 23,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 900,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 900,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303531,
+        "title": "Маникюр аппаратный",
+        "category_id": 10303505,
+        "price_min": 1100,
+        "price_max": 1100,
+        "discount": 0,
+        "comment": "",
+        "weight": 22,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 1100,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 1100,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303532,
+        "title": "Мужской маникюр",
+        "category_id": 10303505,
+        "price_min": 1000,
+        "price_max": 1000,
+        "discount": 0,
+        "comment": "",
+        "weight": 21,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "required",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "required",
+          "prepaid_full": {
+            "amount": 1000,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 500,
+            "percent": 0,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303533,
+        "title": "Коррекция формы ногтей",
+        "category_id": 10303505,
+        "price_min": 500,
+        "price_max": 500,
+        "discount": 0,
+        "comment": "",
+        "weight": 20,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 500,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 500,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303534,
+        "title": "Покрытие (лак,лечебное)",
+        "category_id": 10303505,
+        "price_min": 300,
+        "price_max": 300,
+        "discount": 0,
+        "comment": "",
+        "weight": 19,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 300,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 300,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303535,
+        "title": "Покрытие vinilux",
+        "category_id": 10303505,
+        "price_min": 500,
+        "price_max": 500,
+        "discount": 0,
+        "comment": "",
+        "weight": 18,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 500,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 500,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303536,
+        "title": "Покрытие френч (лак)",
+        "category_id": 10303505,
+        "price_min": 600,
+        "price_max": 600,
+        "discount": 0,
+        "comment": "",
+        "weight": 17,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 600,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 600,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303537,
+        "title": "Покрытие shellac френч",
+        "category_id": 10303505,
+        "price_min": 1600,
+        "price_max": 1600,
+        "discount": 0,
+        "comment": "",
+        "weight": 16,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 1600,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 1600,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303538,
+        "title": "Снятие shellac",
+        "category_id": 10303505,
+        "price_min": 500,
+        "price_max": 500,
+        "discount": 0,
+        "comment": "",
+        "weight": 15,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 500,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 500,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303539,
+        "title": "Маникюр+покрытие shellac",
+        "category_id": 10303505,
+        "price_min": 2000,
+        "price_max": 2000,
+        "discount": 0,
+        "comment": "",
+        "weight": 14,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 2000,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 2000,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303540,
+        "title": "Маникюр+покрытие shellac френч",
+        "category_id": 10303505,
+        "price_min": 2300,
+        "price_max": 2300,
+        "discount": 0,
+        "comment": "",
+        "weight": 13,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 2300,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 2300,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303541,
+        "title": "Восстановление ibx",
+        "category_id": 10303505,
+        "price_min": 900,
+        "price_max": 900,
+        "discount": 0,
+        "comment": "",
+        "weight": 12,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 900,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 900,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303542,
+        "title": "Дизайн ногтя (рисунок)",
+        "category_id": 10303505,
+        "price_min": 150,
+        "price_max": 150,
+        "discount": 0,
+        "comment": "",
+        "weight": 11,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 150,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 150,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303543,
+        "title": "Дизайн ногтя (рисунок сложный)",
+        "category_id": 10303505,
+        "price_min": 200,
+        "price_max": 200,
+        "discount": 0,
+        "comment": "",
+        "weight": 10,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 200,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 200,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303544,
+        "title": "Дизайн ногтя (стразы 7 шт)",
+        "category_id": 10303505,
+        "price_min": 200,
+        "price_max": 200,
+        "discount": 0,
+        "comment": "",
+        "weight": 9,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 200,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 200,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303545,
+        "title": "Ремонт одного ногтя",
+        "category_id": 10303505,
+        "price_min": 400,
+        "price_max": 400,
+        "discount": 0,
+        "comment": "",
+        "weight": 8,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 400,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 400,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303546,
+        "title": "Наращивание ногтей на формах",
+        "category_id": 10303505,
+        "price_min": 3000,
+        "price_max": 3000,
+        "discount": 0,
+        "comment": "",
+        "weight": 7,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 3000,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 3000,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303547,
+        "title": "Наращивание ногтей на формах френч",
+        "category_id": 10303505,
+        "price_min": 3200,
+        "price_max": 3200,
+        "discount": 0,
+        "comment": "",
+        "weight": 6,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 3200,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 3200,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303548,
+        "title": "Коррекция нарощенных ногтей",
+        "category_id": 10303505,
+        "price_min": 2300,
+        "price_max": 2300,
+        "discount": 0,
+        "comment": "",
+        "weight": 5,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 2300,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 2300,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303549,
+        "title": "Парафинотерапия",
+        "category_id": 10303505,
+        "price_min": 300,
+        "price_max": 300,
+        "discount": 0,
+        "comment": "",
+        "weight": 4,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 300,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 300,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10303550,
+        "title": "Массаж рук (10 мин)",
+        "category_id": 10303505,
+        "price_min": 300,
+        "price_max": 600,
+        "discount": 0,
+        "comment": "",
+        "weight": 3,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 300,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 300,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 12219035,
+        "title": "Голени",
+        "category_id": 12219031,
+        "price_min": 800,
+        "price_max": 800,
+        "discount": 0,
+        "comment": "",
+        "weight": 58,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 800,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 800,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 12219043,
+        "title": "Ягодицы",
+        "category_id": 12219031,
+        "price_min": 750,
+        "price_max": 750,
+        "discount": 0,
+        "comment": "",
+        "weight": 57,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 750,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 750,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 12219037,
+        "title": "Ноги полностью",
+        "category_id": 12219031,
+        "price_min": 1300,
+        "price_max": 1300,
+        "discount": 0,
+        "comment": "",
+        "weight": 56,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 1300,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 1300,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 12219038,
+        "title": "Область живота",
+        "category_id": 12219031,
+        "price_min": 600,
+        "price_max": 600,
+        "discount": 0,
+        "comment": "",
+        "weight": 55,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 600,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 600,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 12219036,
+        "title": "Классическое Бикини",
+        "category_id": 12219031,
+        "price_min": 1400,
+        "price_max": 1400,
+        "discount": 0,
+        "comment": "",
+        "weight": 54,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 1400,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 1400,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 12219034,
+        "title": "Глубокое бикини",
+        "category_id": 12219031,
+        "price_min": 2000,
+        "price_max": 2000,
+        "discount": 0,
+        "comment": "",
+        "weight": 53,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "required",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "required",
+          "prepaid_full": {
+            "amount": 2000,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 400,
+            "percent": 20,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 10838621,
+        "title": "услуга",
+        "category_id": 12219031,
+        "price_min": 500,
+        "price_max": 500,
+        "discount": 0,
+        "comment": "",
+        "weight": 0,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 500,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 500,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      },
+      {
+        "id": 12613390,
+        "title": "Новая услуга",
+        "category_id": 12219031,
+        "price_min": 1000,
+        "price_max": 1000,
+        "discount": 0,
+        "comment": "[removed]",
+        "weight": 0,
+        "active": 1,
+        "sex": 0,
+        "image": "",
+        "prepaid": "forbidden",
+        "seance_length": 3600,
+        "abonement_restriction": 0,
+        "prepaid_settings": {
+          "status": "forbidden",
+          "prepaid_full": {
+            "amount": 1000,
+            "currency": "AMD"
+          },
+          "prepaid_min": {
+            "amount": 1000,
+            "percent": 100,
+            "currency": "AMD"
+          }
+        },
+        "is_composite": false,
+        "is_chain": false,
+        "images": null,
+        "composite_details": null
+      }
+    ],
+    "category": [
+      {
+        "id": 12219032,
+        "title": "Стрижки",
+        "sex": 0,
+        "api_id": 0,
+        "weight": 3
+      },
+      {
+        "id": 10303505,
+        "title": "Маникюр",
+        "sex": 0,
+        "api_id": 0,
+        "weight": 2
+      },
+      {
+        "id": 12219031,
+        "title": "Биоэпиляция",
+        "sex": 0,
+        "api_id": 0,
+        "weight": 1
+      }
+    ]
+  }
+}

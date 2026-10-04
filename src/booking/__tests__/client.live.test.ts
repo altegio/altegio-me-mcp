@@ -1,4 +1,10 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from '@jest/globals';
 import { BookingClient, type BusinessCard, type TimeSlot } from '../client.js';
@@ -18,6 +24,7 @@ import {
 } from '../schemas.js';
 import {
   createRecordingFetch,
+  RECORDED_ROUTES,
   type RecordedRoute,
   type Recording,
 } from './helpers/live-recorder.js';
@@ -144,15 +151,20 @@ describeLive('live Altegio booking API (ALTEGIO_E2E=1)', () => {
   });
 
   it(
-    'company: the card parses, the widget is active and the booking-form host is allow-listed',
+    'company: the card parses, widgetActive mirrors the active flag and the booking-form host is allow-listed',
     async () => {
       card = await client.company(locationId);
 
-      expect(companyDataSchema.safeParse(latestData('company')).success).toBe(
-        true
-      );
+      const raw = latestData('company');
+      expect(companyDataSchema.safeParse(raw).success).toBe(true);
       expect(card.locationId).toBe(locationId);
-      expect(card.widgetActive).toBe(true);
+      // `active` is SalonService::isWidgetActive (license not frozen, business
+      // active or created within 7 days), and the public widget shows its
+      // disabled page when it is not 1. A location may legitimately report 0
+      // (the demo location 722227 does) while the booking routes still answer,
+      // so the card must mirror the flag rather than assume it.
+      const active = (raw as { active?: unknown }).active;
+      expect(card.widgetActive).toBe(active === 1 || active === true);
       const formUrl = found(card.bookingFormUrl, 'a booking-form URL');
       // On failure the diff names the observed host (02-RESEARCH A5).
       const host = new URL(formUrl).hostname;
@@ -343,6 +355,32 @@ describeLive('live Altegio booking API (ALTEGIO_E2E=1)', () => {
         plainBookingLink(locationId, liveCard.bookingFormUrl).url
       )
     ).toBe(true);
+  });
+
+  it('the recordings on disk hold no partner token and no e-mail address', () => {
+    // Runs with the real token in the environment, which the required CI job
+    // never has; the CI recordings test covers e-mails and phones only.
+    const token = process.env.ALTEGIO_API_TOKEN ?? '';
+    const files = existsSync(LIVE_DIR)
+      ? readdirSync(LIVE_DIR).filter((name) => name.endsWith('.json'))
+      : [];
+    const problems: string[] = [];
+    for (const name of files) {
+      const text = readFileSync(join(LIVE_DIR, name), 'utf8');
+      if (token.length >= 8 && text.includes(token)) {
+        problems.push(`${name}: partner token`);
+      }
+      if (/[\w.+-]+@[\w-]+\.[\w.]+/.test(text)) {
+        problems.push(`${name}: e-mail address`);
+      }
+    }
+    // Only file names and a label are reported, never the token.
+    expect(problems).toEqual([]);
+    if (RECORD) {
+      expect(files.map((name) => name.replace(/\.json$/, '')).sort()).toEqual(
+        [...RECORDED_ROUTES].sort()
+      );
+    }
   });
 
   it(`stays within ${MAX_UPSTREAM_CALLS} upstream calls`, () => {
