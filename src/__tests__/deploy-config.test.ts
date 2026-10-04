@@ -1,6 +1,18 @@
-import { accessSync, constants, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from '@jest/globals';
+import { afterAll, describe, expect, it } from '@jest/globals';
 import { TOOL_DEADLINE_MS } from '../tools/context.js';
 
 // Static checks of the deploy pipeline (OPS-02, OPS-01, OPS-04). Nothing here
@@ -340,5 +352,562 @@ describe('scripts/smoke-url.sh', () => {
     'FAIL:',
   ])('contains %s', (fragment) => {
     expect(script).toContain(fragment);
+  });
+});
+
+// The one-time setup script (OPS-01, OPS-02, OPS-04, OPS-05). Nothing here
+// reaches GCP: every run puts a stub `gcloud` first on PATH, so even a script
+// bug cannot call the real one. --print must not call it at all.
+
+const BOOTSTRAP = 'scripts/gcp/bootstrap.sh';
+const OWNER = 'owner@example.invalid';
+const BUILD_EMAIL = 'altegio-me-mcp-build@altegio-mcp.iam.gserviceaccount.com';
+const RUNTIME_EMAIL =
+  'altegio-me-mcp-runtime@altegio-mcp.iam.gserviceaccount.com';
+
+const STUB_GCLOUD = `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$STUB_LOG"
+args=" $* "
+has() { case "$args" in *"$1"*) return 0 ;; esac; return 1; }
+if has ' projects describe '; then echo altegio-mcp; exit 0; fi
+if has ' services list '; then
+  printf '%s\\n' run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com monitoring.googleapis.com logging.googleapis.com iam.googleapis.com
+  exit 0
+fi
+if has ' artifacts repositories describe '; then echo cloud-run; exit 0; fi
+if has ' builds connections describe '; then echo Altegio; exit 0; fi
+if has ' secrets describe '; then echo secret; exit 0; fi
+if has ' builds triggers describe '; then
+  if [ -z "\${STUB_TRIGGER_SA:-}" ]; then exit 1; fi
+  if has 'value(serviceAccount)'; then echo "$STUB_TRIGGER_SA"; else echo altegio-me-mcp-deploy; fi
+  exit 0
+fi
+if has ' run services describe '; then
+  if [ "\${STUB_SERVICE:-0}" != 1 ]; then exit 1; fi
+  if has 'value(status.url)'; then echo https://altegio-me-mcp-abc-ew.a.run.app
+  elif has '--format=json'; then echo '{"spec":{"template":{"spec":{"serviceAccountName":"${RUNTIME_EMAIL}"}}},"metadata":{"annotations":{"run.googleapis.com/invoker-iam-disabled": "true"}}}'
+  else echo altegio-me-mcp; fi
+  exit 0
+fi
+if has ' monitoring channels list '; then
+  if [ "\${STUB_CHANNEL:-0}" = 1 ]; then echo projects/altegio-mcp/notificationChannels/111; fi
+  exit 0
+fi
+if has ' monitoring uptime create '; then touch "$STUB_STATE/check"; exit 0; fi
+if has ' monitoring uptime list-configs '; then
+  if has 'alert-drill' && [ -f "$STUB_STATE/check" ]; then echo projects/altegio-mcp/uptimeCheckConfigs/drill-1; fi
+  exit 0
+fi
+if has ' monitoring policies create '; then touch "$STUB_STATE/policy"; exit 0; fi
+if has ' monitoring policies list '; then
+  if has 'alert-drill' && [ -f "$STUB_STATE/policy" ]; then echo projects/altegio-mcp/alertPolicies/9; fi
+  exit 0
+fi
+if has ' monitoring uptime delete '; then rm -f "$STUB_STATE/check"; exit 0; fi
+if has ' monitoring policies delete '; then rm -f "$STUB_STATE/policy"; exit 0; fi
+if has ' auth print-access-token '; then exit 1; fi
+exit 0
+`;
+
+interface BootstrapRun {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  /** The gcloud calls the stub saw, one per line; empty when none. */
+  calls: string[];
+}
+
+interface BootstrapOptions {
+  shell?: string;
+  env?: Record<string, string>;
+}
+
+const scratchDirs: string[] = [];
+
+afterAll(() => {
+  for (const dir of scratchDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function runBootstrap(
+  args: string[],
+  options: BootstrapOptions = {}
+): BootstrapRun {
+  const dir = mkdtempSync(join(tmpdir(), 'bootstrap-test-'));
+  scratchDirs.push(dir);
+  const bin = join(dir, 'bin');
+  const state = join(dir, 'state');
+  mkdirSync(bin);
+  mkdirSync(state);
+  const log = join(dir, 'gcloud.log');
+  writeFileSync(join(bin, 'gcloud'), STUB_GCLOUD);
+  chmodSync(join(bin, 'gcloud'), 0o755);
+  const result = spawnSync(
+    options.shell ?? 'bash',
+    [join(ROOT, BOOTSTRAP), ...args],
+    {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: {
+        PATH: `${bin}:${process.env.PATH ?? ''}`,
+        HOME: dir,
+        STUB_LOG: log,
+        STUB_STATE: state,
+        BOOTSTRAP_DRILL_POLL_SECONDS: '0',
+        BOOTSTRAP_DRILL_MAX_POLLS: '2',
+        ...options.env,
+      },
+    }
+  );
+  const calls = existsSync(log)
+    ? readFileSync(log, 'utf8')
+        .split('\n')
+        .filter((line) => line !== '')
+    : [];
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    calls,
+  };
+}
+
+// A write verb is a whole word of the gcloud command, not a part of a name
+// such as altegio-me-mcp-deploy.
+const WRITE_VERB =
+  /(^| )(create|update|delete|deploy|add-iam-policy-binding)( |$)/;
+
+function printed(extra: string[] = []): string {
+  const run = runBootstrap(['--print', '--owner-email', OWNER, ...extra]);
+  expect(run.status).toBe(0);
+  expect(run.calls).toEqual([]);
+  return run.stdout;
+}
+
+/** The JSON policy files in a --print output. */
+function printedPolicies(output: string): Record<string, unknown>[] {
+  const blocks = output.match(/^\{\n[\s\S]*?^\}$/gm) ?? [];
+  return blocks.map((block) => {
+    const parsed: unknown = JSON.parse(block);
+    expect(typeof parsed).toBe('object');
+    return parsed as Record<string, unknown>;
+  });
+}
+
+describe('scripts/gcp/bootstrap.sh file', () => {
+  const script = read(BOOTSTRAP);
+
+  it('starts with the env-based bash shebang and is strict', () => {
+    expect(script.startsWith('#!/usr/bin/env bash\n')).toBe(true);
+    expect(script).toContain('set -euo pipefail');
+  });
+
+  it('has its executable bit set', () => {
+    expect(() =>
+      accessSync(join(ROOT, BOOTSTRAP), constants.X_OK)
+    ).not.toThrow();
+  });
+
+  it('contains no literal e-mail address and no secret value (T-03-37)', () => {
+    expect(script).not.toMatch(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}/);
+    expect(script).not.toMatch(/\bBearer [A-Za-z0-9._-]{20,}/);
+  });
+
+  it('parses under the macOS bash 3.2 when /bin/bash exists', () => {
+    if (!existsSync('/bin/bash')) {
+      return;
+    }
+    const result = spawnSync('/bin/bash', ['-n', join(ROOT, BOOTSTRAP)], {
+      encoding: 'utf8',
+    });
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+  });
+
+  it('uses no bash 4 construct', () => {
+    const code = script
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('#'))
+      .join('\n');
+    expect(code).not.toMatch(
+      /declare -A|mapfile|readarray|\$\{[a-z_]+(,,|\^\^)\}/
+    );
+  });
+});
+
+describe('scripts/gcp/bootstrap.sh --print', () => {
+  it('prints the trigger on the build account with the ignored paths and the secret substitutions', () => {
+    const output = printed();
+    const trigger = output
+      .split('\n')
+      .find((line) => line.startsWith('gcloud builds triggers create github'));
+    expect(trigger).toBeDefined();
+    expect(trigger).toContain(
+      `--service-account=projects/altegio-mcp/serviceAccounts/${BUILD_EMAIL}`
+    );
+    expect(trigger).toContain("--branch-pattern='^main$'");
+    expect(trigger).toContain('--build-config=cloudbuild.yaml');
+    expect(trigger).toContain(
+      "--ignored-files='docs/**,**/*.md,.github/**,scripts/**'"
+    );
+    expect(trigger).toContain(
+      '--substitutions=_TOKEN_SECRET=ALTEGIO_API_TOKEN,_PROXY_KEY_SECRET=MCP_PROXY_BACKEND_KEY'
+    );
+  });
+
+  it('is identical under /bin/bash (3.2 on macOS) and the bash on PATH', () => {
+    if (!existsSync('/bin/bash')) {
+      return;
+    }
+    const args = ['--print', '--owner-email', OWNER, '--public-check'];
+    const viaPath = runBootstrap(args);
+    const viaBin = runBootstrap(args, { shell: '/bin/bash' });
+    expect(viaBin.status).toBe(0);
+    expect(viaBin.stdout).toBe(viaPath.stdout);
+  });
+
+  it('prints no command that reaches beyond the named resources (T-03-35)', () => {
+    const output = printed(['--public-check']);
+    expect(output).not.toMatch(/compute@developer/);
+    expect(output).not.toContain('services enable');
+    expect(output).not.toContain('logging buckets update');
+    expect(output).not.toContain('allUsers');
+    expect(output).not.toContain('allAuthenticatedUsers');
+    expect(output).not.toContain('secrets versions access');
+    expect(output).not.toContain('--allow-unauthenticated');
+    expect(output).not.toContain('mcp-autoheal');
+  });
+
+  it('binds secretAccessor only for the runtime account and only on the two secrets (T-03-34)', () => {
+    const lines = printed()
+      .split('\n')
+      .filter((line) => line.includes('secretAccessor'));
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      expect(line).toContain(`--member=serviceAccount:${RUNTIME_EMAIL}`);
+      expect(line).toMatch(
+        /secrets add-iam-policy-binding (ALTEGIO_API_TOKEN|MCP_PROXY_BACKEND_KEY) /
+      );
+    }
+    expect(printed()).not.toContain(
+      `serviceAccount:${BUILD_EMAIL} --role=roles/secretmanager`
+    );
+  });
+
+  it('gives the build account exactly the narrow roles of the IAM table', () => {
+    const lines = printed()
+      .split('\n')
+      .filter((line) => line.includes(`serviceAccount:${BUILD_EMAIL}`));
+    const roles = lines.map((line) => /--role=(\S+)/.exec(line)?.[1]).sort();
+    expect(roles).toEqual([
+      'roles/artifactregistry.writer',
+      'roles/iam.serviceAccountUser',
+      'roles/logging.logWriter',
+      'roles/run.developer',
+    ]);
+    const logWriter = lines.find((line) => line.includes('logging.logWriter'));
+    expect(logWriter).toContain('--condition=None');
+    expect(logWriter).toContain('projects add-iam-policy-binding altegio-mcp');
+    const runDeveloper = lines.find((line) => line.includes('run.developer'));
+    expect(runDeveloper).toContain(
+      'run services add-iam-policy-binding altegio-me-mcp'
+    );
+  });
+
+  it('has exactly one gcloud run deploy, from the placeholder image, never our image', () => {
+    const output = printed();
+    const deploys = output
+      .split('\n')
+      .filter((line) => line.includes('gcloud run deploy'));
+    expect(deploys).toHaveLength(1);
+    expect(deploys[0]).toContain(
+      '--image=us-docker.pkg.dev/cloudrun/container/hello'
+    );
+    expect(deploys[0]).toContain(`--service-account=${RUNTIME_EMAIL}`);
+    expect(deploys[0]).toContain('--ingress=all');
+    expect(deploys[0]).toContain('--no-invoker-iam-check');
+    expect(output).not.toContain(
+      'europe-west1-docker.pkg.dev/altegio-mcp/cloud-run/altegio-me-mcp'
+    );
+  });
+
+  it('prints the invoker check, the label and the project on every write', () => {
+    const writes = printed()
+      .split('\n')
+      .filter((line) => line.startsWith('gcloud '));
+    expect(writes.length).toBeGreaterThan(10);
+    for (const line of writes) {
+      expect(line).toContain('--project=altegio-mcp');
+    }
+    expect(printed()).toContain('altegio_me_mcp_upstream_unauthorized');
+    expect(printed()).toContain('altegio-me-mcp-health');
+  });
+
+  it('--token-secret changes both the runtime binding and the trigger substitution', () => {
+    const output = printed(['--token-secret', 'MARKETPLACE_PARTNER_TOKEN']);
+    expect(output).toContain(
+      'secrets add-iam-policy-binding MARKETPLACE_PARTNER_TOKEN '
+    );
+    expect(output).toContain('_TOKEN_SECRET=MARKETPLACE_PARTNER_TOKEN,');
+    expect(output).not.toContain('ALTEGIO_API_TOKEN');
+  });
+
+  it('--skip-secret-bindings prints no secret binding', () => {
+    const output = printed(['--skip-secret-bindings']);
+    expect(output).not.toContain('secretAccessor');
+    expect(output).not.toContain('secrets add-iam-policy-binding');
+  });
+
+  it('prints every check at 5 minutes from three regions; the public check only with --public-check', () => {
+    const without = printed();
+    expect(without).not.toContain('altegio-me-mcp-public');
+    const checks = without
+      .split('\n')
+      .filter((line) => line.includes('monitoring uptime create'));
+    expect(checks).toHaveLength(1);
+
+    const withPublic = printed(['--public-check']);
+    const all = withPublic
+      .split('\n')
+      .filter((line) => line.includes('monitoring uptime create'));
+    expect(all).toHaveLength(2);
+    for (const line of all) {
+      expect(line).toContain('--period=5');
+      expect(line).toContain('--regions=europe,usa-iowa,asia-pacific');
+    }
+    const publicCheck = all.find((line) =>
+      line.includes('altegio-me-mcp-public')
+    );
+    expect(publicCheck).toContain('--request-method=post');
+    expect(publicCheck).toContain('mcp.alteg.io');
+    expect(publicCheck).toContain('--path=/me');
+    expect(publicCheck).toContain('tools/list');
+    expect(publicCheck).toContain('Accept=application/json, text/event-stream');
+    expect(publicCheck).toContain('--matcher-content=business_get');
+    const health = all.find((line) => line.includes('altegio-me-mcp-health'));
+    expect(health).toContain('--path=/health');
+    expect(health).toContain('"status":"ok"');
+  });
+
+  it('gives every alert policy exactly one notification channel, the owner e-mail channel (T-03-36)', () => {
+    const output = printed(['--public-check']);
+    const policies = printedPolicies(output);
+    expect(policies.map((policy) => policy.displayName)).toEqual([
+      'altegio-me-mcp-down',
+      'altegio-me-mcp-upstream-unauthorized',
+      'altegio-me-mcp-upstream-rate-limited',
+      'altegio-me-mcp-upstream-unavailable',
+    ]);
+    for (const policy of policies) {
+      const channels = policy.notificationChannels;
+      expect(Array.isArray(channels)).toBe(true);
+      expect(channels).toHaveLength(1);
+      expect(String((channels as unknown[])[0])).toMatch(
+        /^projects\/altegio-mcp\/notificationChannels\/[A-Za-z0-9_]+$/
+      );
+    }
+    const channelCreates = output
+      .split('\n')
+      .filter((line) => line.includes('monitoring channels create'));
+    expect(channelCreates).toHaveLength(1);
+    expect(channelCreates[0]).toContain('--type=email');
+    expect(channelCreates[0]).toContain(`email_address=${OWNER}`);
+  });
+
+  it('counts failing locations per host and fires on more than one (OPS-05 concurrency)', () => {
+    const down = printedPolicies(printed(['--public-check']))[0];
+    const text = JSON.stringify(down);
+    expect(text).toContain('REDUCE_COUNT_FALSE');
+    expect(text).toContain('COMPARISON_GT');
+    expect(text).toContain('"thresholdValue":1');
+    expect(text).toContain('resource.label.\\"host\\"');
+    const conditions = (down as { conditions: unknown[] }).conditions;
+    expect(conditions).toHaveLength(2);
+  });
+
+  it('feeds the three log-based metrics from mcp_call lines by upstream_kind', () => {
+    const output = printed();
+    for (const kind of ['unauthorized', 'rate_limited', 'unavailable']) {
+      const line = output
+        .split('\n')
+        .find((candidate) =>
+          candidate.includes(
+            `logging metrics create altegio_me_mcp_upstream_${kind} `
+          )
+        );
+      expect(line).toBeDefined();
+      expect(line).toContain('resource.type="cloud_run_revision"');
+      expect(line).toContain('resource.labels.service_name="altegio-me-mcp"');
+      expect(line).toContain('jsonPayload.event="mcp_call"');
+      expect(line).toContain(`jsonPayload.upstream_kind="${kind}"`);
+    }
+    const thresholds = printedPolicies(output)
+      .slice(1)
+      .map((policy) => JSON.stringify(policy));
+    expect(thresholds[0]).toContain('"thresholdValue":3');
+    expect(thresholds[0]).toContain('"alignmentPeriod":"300s"');
+    expect(thresholds[1]).toContain('"thresholdValue":10');
+    expect(thresholds[1]).toContain('"alignmentPeriod":"600s"');
+    expect(thresholds[2]).toContain('"thresholdValue":10');
+  });
+
+  it('exits 2 with a usage line when --owner-email is missing, without calling gcloud', () => {
+    for (const mode of ['--print', '--apply']) {
+      const run = runBootstrap([mode]);
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain('usage: scripts/gcp/bootstrap.sh');
+      expect(run.calls).toEqual([]);
+    }
+  });
+
+  it('exits 2 on an unknown flag, a conflicting mode or a bad secret name', () => {
+    expect(runBootstrap(['--bogus']).status).toBe(2);
+    expect(
+      runBootstrap(['--print', '--apply', '--owner-email', OWNER]).status
+    ).toBe(2);
+    expect(
+      runBootstrap(['--print', '--owner-email', OWNER, '--token-secret', 'a b'])
+        .status
+    ).toBe(2);
+    expect(
+      runBootstrap(['--print', '--owner-email', 'not-an-address']).status
+    ).toBe(2);
+  });
+
+  it('prints the drill commands with a 1 minute check and an impossible matcher', () => {
+    const run = runBootstrap(['--drill', '--print']);
+    expect(run.status).toBe(0);
+    expect(run.calls).toEqual([]);
+    const create = run.stdout
+      .split('\n')
+      .find((line) =>
+        line.includes('monitoring uptime create altegio-me-mcp-alert-drill')
+      );
+    expect(create).toContain('--period=1');
+    expect(create).toContain(
+      '--matcher-content=drill-content-that-never-appears'
+    );
+    expect(run.stdout).toContain('monitoring policies delete');
+    expect(run.stdout).toContain('monitoring uptime delete');
+    const [policy] = printedPolicies(run.stdout);
+    expect(
+      (policy as { notificationChannels: unknown[] }).notificationChannels
+    ).toHaveLength(1);
+  });
+});
+
+describe('scripts/gcp/bootstrap.sh with a stubbed gcloud', () => {
+  it('--plan reads only: no write command is ever issued', () => {
+    const run = runBootstrap(['--plan'], {
+      env: { STUB_CHANNEL: '1' },
+    });
+    expect(run.status).toBe(0);
+    expect(run.calls.length).toBeGreaterThan(5);
+    for (const call of run.calls) {
+      expect(call).not.toMatch(WRITE_VERB);
+    }
+    expect(run.stdout).toContain('would run: gcloud run deploy altegio-me-mcp');
+    expect(run.stdout).toContain('plan:');
+  });
+
+  it('--plan is the default mode', () => {
+    const run = runBootstrap([]);
+    expect(run.status).toBe(0);
+    for (const call of run.calls) {
+      expect(call).not.toMatch(WRITE_VERB);
+    }
+  });
+
+  it('refuses a trigger that runs as the default compute account and writes nothing (T-03-33)', () => {
+    const wrong =
+      'projects/altegio-mcp/serviceAccounts/767969350727-compute@developer.gserviceaccount.com';
+    for (const mode of ['--plan', '--apply']) {
+      const run = runBootstrap([mode, '--owner-email', OWNER], {
+        env: { STUB_TRIGGER_SA: wrong, STUB_CHANNEL: '1' },
+      });
+      expect(run.status).toBe(1);
+      expect(run.stdout).toContain(
+        'BLOCKER: trigger altegio-me-mcp-deploy runs as'
+      );
+      for (const call of run.calls) {
+        expect(call).not.toMatch(WRITE_VERB);
+      }
+    }
+  });
+
+  it('refuses a trigger with no service account (the default Cloud Build account)', () => {
+    const run = runBootstrap(['--apply', '--owner-email', OWNER], {
+      env: { STUB_TRIGGER_SA: ' ', STUB_CHANNEL: '1' },
+    });
+    expect(run.status).toBe(1);
+    expect(run.stdout).toContain('not as the build account');
+  });
+
+  it('--apply issues the printed writes and leaves a service that exists alone', () => {
+    const run = runBootstrap(['--apply', '--owner-email', OWNER], {
+      env: { STUB_CHANNEL: '1', STUB_SERVICE: '1' },
+    });
+    expect(run.status).toBe(0);
+    const writes = run.calls.filter((call) => WRITE_VERB.test(call));
+    expect(
+      writes.some((call) =>
+        call.startsWith('iam service-accounts create altegio-me-mcp-build')
+      )
+    ).toBe(true);
+    expect(
+      writes.some((call) => call.startsWith('builds triggers create github'))
+    ).toBe(true);
+    expect(writes.some((call) => call.startsWith('run deploy'))).toBe(false);
+    for (const call of writes) {
+      expect(call).toContain('--project=altegio-mcp');
+      expect(call).not.toMatch(
+        /compute@developer|allUsers|versions access|mcp-autoheal/
+      );
+    }
+  });
+
+  it('--apply creates the service from the placeholder only when it is missing', () => {
+    const run = runBootstrap(['--apply', '--owner-email', OWNER], {
+      env: { STUB_CHANNEL: '1', STUB_SERVICE: '0' },
+    });
+    expect(run.status).toBe(0);
+    const deploys = run.calls.filter((call) => call.startsWith('run deploy'));
+    expect(deploys).toHaveLength(1);
+    expect(deploys[0]).toContain(
+      '--image=us-docker.pkg.dev/cloudrun/container/hello'
+    );
+  });
+
+  it('--drill creates its own check and policy, then deletes both; the real policy is untouched', () => {
+    const run = runBootstrap(['--drill'], {
+      env: { STUB_CHANNEL: '1', STUB_SERVICE: '1' },
+    });
+    expect(run.status).toBe(0);
+    const writes = run.calls.filter((call) => WRITE_VERB.test(call));
+    const kinds = writes.map((call) => call.split(' ').slice(0, 3).join(' '));
+    expect(kinds).toEqual([
+      'monitoring uptime create',
+      'monitoring policies create',
+      'monitoring policies delete',
+      'monitoring uptime delete',
+    ]);
+    expect(writes[0]).toContain('altegio-me-mcp-alert-drill');
+    expect(run.calls.join('\n')).not.toContain('altegio-me-mcp-down');
+  });
+
+  it('--drill-cleanup deletes leftovers and does nothing when there are none', () => {
+    const none = runBootstrap(['--drill-cleanup'], {
+      env: { STUB_CHANNEL: '1' },
+    });
+    expect(none.status).toBe(0);
+    expect(none.calls.filter((call) => WRITE_VERB.test(call))).toEqual([]);
+  });
+
+  it('--drill stops when the owner channel does not exist', () => {
+    const run = runBootstrap(['--drill'], { env: { STUB_CHANNEL: '0' } });
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('does not exist');
+    expect(run.calls.filter((call) => WRITE_VERB.test(call))).toEqual([]);
   });
 });
