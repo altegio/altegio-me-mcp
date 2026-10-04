@@ -64,3 +64,38 @@ uptime through the proxy is checked with an MCP request.
   OAuth authorization server of our own" is reopened for that phase.
 - If the platform team cannot add an anonymous lane, fall back to ADR 0001 D3 as written, on a
   domain of our own.
+
+## Research note (2026-10-04)
+
+Phase 3 research read the proxy code in `altegio/altegio-mcp-platform` (`mcp-proxy/server.js`,
+`mcp-proxy/lib/backend-auth.js`, `mcp-proxy/lib/dcr.js`). It found that the Context above
+assumed too much: the proxy has no lane today that does what `/me` needs, so the route is a
+platform code change and not a `routes.json` entry.
+
+- The https target fields (`target_host`, `target_https`, `target_path`) exist only in the
+  signed-in auth-inject lane. That lane sits behind the Google sign-in gate, forwards only
+  `content-type`, `accept`, `mcp-*` and `last-event-id`, so it carries no client address, and by
+  design it never signs a request to an https target (an https target is a third party and must
+  never see the proxy-origin header).
+- The lanes that do sign speak plain http to a VM backend. The Altegio-token lane answers 401 to
+  a request without a token, and the legacy lane needs a Google sign-in.
+- Every route must also declare `host`, `port`, `aud` and `scopes`, and the platform's boot test
+  lists the customer routes it serves.
+
+So `/me` needs a new proxy lane: anonymous admission (no 401, no protected-resource metadata),
+https to our `run.app` host, a per-route opt-in to sign `x-mcp-proxy-auth` (preferably with a key
+issued for this route), and the client address in the signed header `x-mcp-auth-client-ip`. The
+proxy already strips client-supplied `x-mcp-auth-*` headers and its signature covers every such
+header, so the new header is tamper-proof without a change to the signing format. The ask is open
+item I5 in [open-questions.md](../open-questions.md), written as a feature request. The platform
+may instead prefer our container on its `mcp-customer-servers` VM, which the legacy lane already
+signs for; ADR 0003 leaves that choice to them.
+
+Two further points for the ask:
+
+- `/me` must be excluded from the platform's `mcp_proxy_upstream_502` metric in both forms,
+  `/me` and `/me/mcp`. The documented filter ends the URL with `/mcp`, so the short form never
+  matches it and the long form does.
+- The own-domain fallback of ADR 0001 D3 stays deliverable without a code change on our side. It
+  is configuration: `PROXY_AUTH=off` (no proxy-origin check) and `TRUSTED_PROXY_HOPS=0` (no proxy
+  in front, so no forwarded address is trusted).
