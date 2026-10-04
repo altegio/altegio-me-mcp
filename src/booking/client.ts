@@ -326,6 +326,17 @@ function toTeamMember(member: TeamMembersData[number]): TeamMember {
     member.show_rating === null ||
     member.show_rating === undefined ||
     truthy(member.show_rating);
+  // 0 also means nobody has rated the member: that is "no rating", not a bad
+  // one, so an assistant must not steer a client away from them (CR-01).
+  const rating = member.rating;
+  const votes = member.votes_count;
+  const shownRating =
+    ratingShown &&
+    typeof rating === 'number' &&
+    rating > 0 &&
+    (votes === null || votes === undefined || votes > 0)
+      ? rating
+      : null;
   return {
     id: member.id,
     name: member.name,
@@ -335,8 +346,8 @@ function toTeamMember(member: TeamMembersData[number]): TeamMember {
         ? null
         : nonEmpty(position.title),
     bookable: truthy(member.bookable),
-    // A rating the business hides in its widget is not passed on.
-    rating: ratingShown ? (member.rating ?? null) : null,
+    // A rating the business hides, or nobody has given, is not passed on.
+    rating: shownRating,
     nextFreeDate: nonEmpty(member.seance_date),
   };
 }
