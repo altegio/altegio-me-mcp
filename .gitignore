@@ -13,6 +13,10 @@ coverage/
 # Root file on purpose: prettier --check reads only the root ignore files.
 scripts/browser-check/output/
 
+# Load test output: results.json and container logs (src/loadtest/run.ts).
+# Root file on purpose: prettier --check reads only the root ignore files.
+loadtest-output/
+
 # Runtime
 logs/
 uploads/
