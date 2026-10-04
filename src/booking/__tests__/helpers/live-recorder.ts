@@ -3,12 +3,14 @@ import { scrubSecrets } from '../../../observability/redact.js';
 // Recording fetch wrapper and sanitiser for the live suite (plan 02-09, D-10).
 // Real responses become committed fixtures, so everything that could identify
 // a person or reach one is replaced with a fixed placeholder before a
-// recording leaves memory: phones, e-mails, sites and social links, team-member
-// names, free-text bios and comments, and image URLs (T-02-31). The partner
-// token is scrubbed last, anywhere in the payload (T-02-30). Ids, service
-// titles, prices, dates, slot datetimes, booking-form URLs and timezone fields
-// stay as the API wrote them, because the route schemas and the deep link
-// read exactly those.
+// recording leaves memory: phones, e-mails, sites and social links, the names
+// of team members and of the people nested in them, addresses, coordinates,
+// business and booking-form titles, account ids, free-text bios and comments,
+// and image URLs (T-02-31, T-03-05). The partner token is scrubbed last,
+// anywhere in the payload (T-02-30). Ids (except account ids), service and
+// category titles, prices, dates, slot datetimes, booking-form URLs and
+// timezone fields stay as the API wrote them, because the route schemas and the
+// deep link read exactly those.
 
 /** The six upstream routes, named as their URL path segment. */
 export const RECORDED_ROUTES = [
@@ -72,7 +74,19 @@ const TEXT_KEYS: ReadonlySet<string> = new Set([
   'information',
   'description',
   'comment',
+  ...SANITIZED_KEYS.text,
 ]);
+/** Business and booking-form titles: replaced in a company recording only. */
+const COMPANY_TEXT_KEYS: ReadonlySet<string> = new Set([
+  ...TEXT_KEYS,
+  ...SANITIZED_KEYS.companyText,
+]);
+/** Keys whose values are a position on the map. */
+const COORDINATE_KEYS: ReadonlySet<string> = new Set(SANITIZED_KEYS.coordinate);
+/** Keys whose objects carry the name of a person. */
+const PERSON_CONTAINER_KEYS: ReadonlySet<string> = new Set(
+  SANITIZED_KEYS.personContainers
+);
 /** Keys whose string leaves are image URLs. */
 const IMAGE_KEYS: ReadonlySet<string> = new Set([
   'avatar',
@@ -122,29 +136,55 @@ function sanitizePhone(value: unknown): unknown {
   return SANITIZED_PHONE;
 }
 
-function sanitizeValue(key: string | null, value: unknown): unknown {
+/** `name` inside a user or position object (or a list of them) is a person's name. */
+function renameNested(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return (value as unknown[]).map((item) => renameNested(item));
+  }
+  if (isRecord(value) && !isEmpty(value.name)) {
+    return { ...value, name: SANITIZED_TEXT };
+  }
+  return value;
+}
+
+function sanitizeValue(
+  key: string | null,
+  value: unknown,
+  textKeys: ReadonlySet<string>
+): unknown {
   if (key !== null) {
     if (PHONE_KEYS.has(key)) return sanitizePhone(value);
-    if (EMAIL_KEYS.has(key) || TEXT_KEYS.has(key)) {
+    if (EMAIL_KEYS.has(key) || textKeys.has(key)) {
       return isEmpty(value) ? value : replaceLeaves(value, SANITIZED_TEXT);
     }
     if (LINK_KEYS.has(key)) return replaceLeaves(value, SANITIZED_URL);
     if (IMAGE_KEYS.has(key)) return replaceLeaves(value, SANITIZED_IMAGE);
+    if (COORDINATE_KEYS.has(key)) {
+      return isEmpty(value) ? value : SANITIZED_COORDINATE;
+    }
+    if (key.endsWith(SANITIZED_KEYS.idSuffix)) {
+      return isEmpty(value) ? value : SANITIZED_ID;
+    }
   }
   if (typeof value === 'string') {
     // An address typed into any other text is removed as well.
     return value.replace(EMAIL_PATTERN, SANITIZED_TEXT);
   }
   if (Array.isArray(value)) {
-    return (value as unknown[]).map((item) => sanitizeValue(null, item));
+    return (value as unknown[]).map((item) =>
+      sanitizeValue(null, item, textKeys)
+    );
   }
   if (isRecord(value)) {
-    return Object.fromEntries(
+    const cleaned = Object.fromEntries(
       Object.entries(value).map(([childKey, item]) => [
         childKey,
-        sanitizeValue(childKey, item),
+        sanitizeValue(childKey, item, textKeys),
       ])
     );
+    return key !== null && PERSON_CONTAINER_KEYS.has(key)
+      ? renameNested(cleaned)
+      : cleaned;
   }
   return value;
 }
@@ -160,16 +200,21 @@ function renameTeamMembers(data: unknown): unknown {
 }
 
 /**
- * A copy of `data` safe to commit: contact data, names, free text and image
- * URLs replaced with fixed placeholders, then every secret scrubbed. The input
- * is not changed.
+ * A copy of `data` safe to commit: contact data, names (also inside nested user
+ * and position objects), addresses, coordinates, business titles, account ids,
+ * free text and image URLs replaced with fixed placeholders, then every secret
+ * scrubbed. The input is not changed.
  */
 export function sanitizeRecording(
   route: RecordedRoute,
   data: unknown,
   secrets: readonly string[]
 ): unknown {
-  let result = sanitizeValue(null, data);
+  let result = sanitizeValue(
+    null,
+    data,
+    route === 'company' ? COMPANY_TEXT_KEYS : TEXT_KEYS
+  );
   if (route === 'book_staff') result = renameTeamMembers(result);
   return scrubSecrets(result, secrets);
 }

@@ -322,7 +322,8 @@ describe('sanitizeRecording', () => {
       timezone: 3,
       timezone_name: 'Asia/Nicosia',
       next_slot: '2026-10-05T09:30:00+03:00',
-      bookforms: companyData.bookforms,
+      // A booking form keeps its id and URL; its title may name a person.
+      bookforms: [{ ...companyData.bookforms[0], title: SANITIZED_TEXT }],
       default_bookform_url: 'https://n1463903.alteg.io/',
     });
     expect(companyDataSchema.safeParse(result).success).toBe(true);
