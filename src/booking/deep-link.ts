@@ -12,6 +12,8 @@
 // digits of the slot string as the API returned it and never recomputed
 // through a JavaScript date object or converted to UTC.
 
+import { isCalendarDay } from './calendar.js';
+
 /** The slot datetime shape `book_times` returns (milliseconds optional, offset with or without a colon). */
 export const SLOT_DATETIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})$/;
@@ -114,6 +116,8 @@ export function parseSlotDatetime(value: string): SlotParts | null {
   ) {
     return null;
   }
+  // The range checks above allow 31 for every month; the day must exist.
+  if (!isCalendarDay(Number(year), Number(month), Number(day))) return null;
   const offsetMinutes = parseOffset(offset);
   if (offsetMinutes === null) return null;
   return { year, month, day, hour, minute, second, offsetMinutes };

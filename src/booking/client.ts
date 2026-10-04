@@ -1,5 +1,6 @@
 import type { z } from 'zod';
-import { SLOT_DATETIME_PATTERN } from './deep-link.js';
+import { calendarDayNumber } from './calendar.js';
+import { parseSlotDatetime } from './deep-link.js';
 import { UpstreamError } from './errors.js';
 import {
   BookingHttp,
@@ -181,28 +182,15 @@ function assertTeamMemberOrAny(value: number): void {
   }
 }
 
-const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
-
 /**
  * A YYYY-MM-DD date that exists in the calendar. It may become a URL path
  * segment, so nothing else passes (T-02-25).
  */
 function checkedDate(value: string, label: string): string {
-  const match = DATE_PATTERN.exec(value);
-  const [, year, month, day] = match ?? [];
-  if (year !== undefined && month !== undefined && day !== undefined) {
-    const date = new Date(
-      Date.UTC(Number(year), Number(month) - 1, Number(day))
-    );
-    if (
-      date.getUTCFullYear() === Number(year) &&
-      date.getUTCMonth() === Number(month) - 1 &&
-      date.getUTCDate() === Number(day)
-    ) {
-      return value;
-    }
+  if (calendarDayNumber(value) === null) {
+    throw new TypeError(`${label} must be a calendar date in YYYY-MM-DD form`);
   }
-  throw new TypeError(`${label} must be a calendar date in YYYY-MM-DD form`);
+  return value;
 }
 
 function optionalDate(
@@ -212,9 +200,9 @@ function optionalDate(
   return value === undefined ? undefined : checkedDate(value, label);
 }
 
-/** A datetime filter must be a slot datetime as book_times returns it. */
+/** A datetime filter must be a slot datetime as book_times returns it, on a day that exists. */
 function checkedDatetime(datetime: string | undefined): string | undefined {
-  if (datetime !== undefined && !SLOT_DATETIME_PATTERN.test(datetime)) {
+  if (datetime !== undefined && parseSlotDatetime(datetime) === null) {
     throw new TypeError('datetime must be an ISO 8601 slot datetime');
   }
   return datetime;
@@ -515,7 +503,7 @@ export class BookingClient {
       throw new TypeError('at least one service id is required');
     }
     assertTeamMemberOrAny(selection.teamMemberId);
-    if (!SLOT_DATETIME_PATTERN.test(selection.datetime)) {
+    if (parseSlotDatetime(selection.datetime) === null) {
       throw new TypeError('datetime must be an ISO 8601 slot datetime');
     }
     const { route, method } = BOOKING_ROUTES.check;
