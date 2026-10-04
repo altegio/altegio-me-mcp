@@ -113,6 +113,14 @@ function isOriginAllowed(
   return allowLoopbackOrigins && LOOPBACK_HOSTNAMES.has(parsed.hostname);
 }
 
+// The origin of PUBLIC_BASE_URL plus the configured extra origins (OPS-08).
+export function allowedOriginsFor(
+  publicBaseUrl: string,
+  _extraOrigins: readonly string[]
+): string[] {
+  return [new URL(publicBaseUrl).origin];
+}
+
 export function createApp<D>(deps: AppDeps<D>): Express {
   const app = express();
   app.disable('x-powered-by');

@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { PACKAGE_VERSION } from '../util/package-metadata.js';
 import { PROXY_AUTH_HEADER } from '../security/proxy-auth.js';
-import { createApp } from '../app.js';
+import { allowedOriginsFor, createApp } from '../app.js';
 import { createSharedEgressList } from '../security/client-ip.js';
 import { createEdgeLimiter } from '../security/edge-limiter.js';
 import { defineTool } from '../tools/factory.js';
@@ -876,5 +876,159 @@ describe('edge limiter on POST /mcp (OPS-06)', () => {
     ]) {
       expect(text).not.toContain(address);
     }
+  });
+});
+
+describe('Origin allow-list for the claude.ai connector (OPS-08)', () => {
+  const PUBLIC_BASE_URL = 'https://mcp.alteg.io/me';
+  const EXTRA = ['https://claude.ai', 'https://claude.com'];
+
+  it('builds the list from the PUBLIC_BASE_URL origin and the extra origins', () => {
+    expect(allowedOriginsFor(PUBLIC_BASE_URL, EXTRA)).toEqual([
+      'https://mcp.alteg.io',
+      'https://claude.ai',
+      'https://claude.com',
+    ]);
+    expect(allowedOriginsFor('https://claude.ai/x', EXTRA)).toEqual([
+      'https://claude.ai',
+      'https://claude.com',
+    ]);
+  });
+
+  it('serves claude.ai, claude.com, the public origin and a request without Origin', async () => {
+    const harness = await startApp({
+      allowedOrigins: allowedOriginsFor(PUBLIC_BASE_URL, EXTRA),
+    });
+    for (const origin of [
+      'https://claude.ai',
+      'https://claude.com',
+      'https://mcp.alteg.io',
+    ]) {
+      const res = await postMcp(harness.baseUrl, toolsListBody(), { origin });
+      expect(res.status).toBe(200);
+    }
+    expect((await postMcp(harness.baseUrl, toolsListBody())).status).toBe(200);
+    const logs = await waitForLogs(harness, 4);
+    expect(logs.every((line) => line.origin_host === null)).toBe(true);
+  });
+
+  it('refuses another origin with 403 and names its host in the log line', async () => {
+    const harness = await startApp({
+      allowedOrigins: allowedOriginsFor(PUBLIC_BASE_URL, EXTRA),
+    });
+    const res = await postMcp(harness.baseUrl, toolsListBody(), {
+      origin: 'https://evil.example',
+    });
+    expect(res.status).toBe(403);
+    const logs = await waitForLogs(harness, 1);
+    expect(logs[0]?.http_status).toBe(403);
+    expect(logs[0]?.origin_host).toBe('evil.example');
+  });
+
+  it('cuts a long host at 100 characters and drops characters outside printable ASCII', async () => {
+    const harness = await startApp({
+      allowedOrigins: allowedOriginsFor(PUBLIC_BASE_URL, EXTRA),
+    });
+    await postMcp(harness.baseUrl, toolsListBody(), {
+      origin: `https://${'a'.repeat(150)}.example`,
+    });
+    await postMcp(harness.baseUrl, toolsListBody(), {
+      origin: 'bad\u00e9origin\u00ffvalue',
+    });
+    const logs = await waitForLogs(harness, 2);
+    expect(logs[0]?.origin_host).toBe('a'.repeat(100));
+    expect(logs[1]?.origin_host).toBe('badoriginvalue');
+  });
+});
+
+describe('client key into the tool context (IN-06)', () => {
+  const KEY = 'clientkey-test-key-0123456789abcdef0123456789abcdef';
+  const CLIENT = '203.0.113.7';
+
+  const keyProbeTool = defineTool({
+    name: 'demo_client_key',
+    title: 'Client key probe',
+    description: 'Reports whether the call carries a gate key.',
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+    },
+    input: z.strictObject({}),
+    output: z.strictObject({
+      keyed: z.boolean(),
+      isThisAddress: z.boolean(),
+    }),
+    render: (out) => `keyed=${String(out.keyed)}`,
+    handler: ({ ctx }) =>
+      Promise.resolve({
+        keyed: ctx.clientKey !== null,
+        isThisAddress: ctx.clientKey === `ip:${CLIENT}`,
+      }),
+  });
+
+  function edge() {
+    return {
+      limiter: createEdgeLimiter(),
+      identity: {
+        trustedHops: 1,
+        proxyAuthOn: true,
+        sharedEgress: createSharedEgressList(['160.79.104.0/21']),
+      },
+    };
+  }
+
+  function signedFor(address: string): Record<string, string> {
+    const headers = { 'x-mcp-auth-client-ip': address };
+    return {
+      ...headers,
+      [PROXY_AUTH_HEADER]: signProxyRequest({
+        key: KEY,
+        method: 'POST',
+        path: '/mcp',
+        headers,
+      }),
+    };
+  }
+
+  async function probe(
+    baseUrl: string,
+    headers: Record<string, string>
+  ): Promise<{ keyed: boolean; isThisAddress: boolean }> {
+    const res = await postMcp(
+      baseUrl,
+      toolCallBody('demo_client_key', {}),
+      headers
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      result: { structuredContent: { keyed: boolean; isThisAddress: boolean } };
+    };
+    return body.result.structuredContent;
+  }
+
+  it('passes ip:<address> for a caller outside the pool, nothing for the pool, nothing without the edge', async () => {
+    const harness = await startApp({
+      tools: [keyProbeTool],
+      proxyAuth: { keys: () => [KEY] },
+      edge: edge(),
+    });
+    expect(await probe(harness.baseUrl, signedFor(CLIENT))).toEqual({
+      keyed: true,
+      isThisAddress: true,
+    });
+    expect(await probe(harness.baseUrl, signedFor('160.79.104.9'))).toEqual({
+      keyed: false,
+      isThisAddress: false,
+    });
+
+    const bare = await startApp({ tools: [keyProbeTool] });
+    expect(await probe(bare.baseUrl, {})).toEqual({
+      keyed: false,
+      isThisAddress: false,
+    });
+    const text = JSON.stringify([...harness.logs, ...bare.logs]);
+    expect(text).not.toContain(CLIENT);
+    expect(text).not.toContain('160.79.104.9');
   });
 });

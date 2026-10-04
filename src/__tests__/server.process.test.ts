@@ -271,6 +271,37 @@ describe('node dist/server.js', () => {
   );
 
   it(
+    'serves the claude.ai and claude.com origins and refuses another with 403',
+    async () => {
+      const env = await validEnv();
+      const server = startServer(env);
+      await within(server.firstStdoutLine(), 10_000);
+      const base = `http://127.0.0.1:${env.PORT ?? ''}`;
+      const status = async (origin: string | null): Promise<number> => {
+        const res = await fetch(`${base}/mcp`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json, text/event-stream',
+            ...(origin === null ? {} : { origin }),
+          },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+        });
+        await res.text();
+        return res.status;
+      };
+      expect(await status('https://claude.ai')).toBe(200);
+      expect(await status('https://claude.com')).toBe(200);
+      expect(await status(null)).toBe(200);
+      expect(await status('https://evil.example')).toBe(403);
+
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
     'exits 0 within 10 seconds on SIGTERM and never prints the token',
     async () => {
       const env = await validEnv();
