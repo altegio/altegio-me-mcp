@@ -284,7 +284,9 @@ describe('createEdgeLimiter: in-flight caps', () => {
     const third = Array.from({ length: 6 }, () => edge.ip());
     expect(third.every((call) => call.admitted)).toBe(true);
     third.forEach((call) => {
-      call.res.emit('error', new Error('socket hang up'));
+      // The error handler answers 500, then the response finishes.
+      call.res.statusCode = 500;
+      call.res.emit('finish');
       call.res.emit('close');
     });
     const fourth = Array.from({ length: 6 }, () => edge.ip());
