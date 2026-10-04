@@ -165,9 +165,9 @@ request to the booking write route, so no booking can result. The only POST it s
 ### Results
 
 Each run writes `scripts/browser-check/output/<timestamp>/results.json` (`run_at`,
-`chrome_version`, `location_id`, `form_id`, `discovered_at`, `min_lead_hours`, one entry per case
-with `link`, `link_kind`, `expected`, `seen`, `status`, `reason`, `screenshot`, and
-`repeat_loads`) and one PNG per case and per repeated load, then prints a Markdown results table
+`chrome_version`, `location_id`, `form_id`, `time_zone`, `utc_offset_hours`, `discovered_at`,
+`min_lead_hours`, one entry per case with `link`, `link_kind`, `expected`, `seen`, `status`,
+`reason`, `screenshot`, and `repeat_loads`) and one PNG per case and per repeated load, then prints a Markdown results table
 and the repeated-load tally. The output folder is git-ignored.
 
 ### Manual fallback

@@ -176,6 +176,9 @@ interface Results {
   chrome_version: string;
   location_id: number;
   form_id: number | null;
+  /** The business card's time zone and current offset, as the API reported them. */
+  time_zone: string | null;
+  utc_offset_hours: number | null;
   discovered_at: string;
   min_lead_hours: number;
   cases: CaseResult[];
@@ -1446,6 +1449,8 @@ async function main(argv: readonly string[]): Promise<number> {
     chrome_version: chromeVersion,
     location_id: locationId,
     form_id: defaultFormId(card),
+    time_zone: card.timeZoneName,
+    utc_offset_hours: card.utcOffsetHours,
     discovered_at: new Date(startedAt).toISOString(),
     min_lead_hours: minLeadHours,
     cases: results,
@@ -1460,7 +1465,7 @@ async function main(argv: readonly string[]): Promise<number> {
   console.log(repeatSummary(repeat));
   console.log('');
   console.log(
-    `Chrome ${report.chrome_version}. Results: ${relative(PACKAGE_DIR, resultsPath)}`
+    `Chrome ${report.chrome_version}. Time zone ${report.time_zone ?? 'unknown'} (UTC offset ${report.utc_offset_hours ?? 'unknown'} h). Results: ${relative(PACKAGE_DIR, resultsPath)}`
   );
   return results.some((result) => result.status === 'fail') ? 1 : 0;
 }
