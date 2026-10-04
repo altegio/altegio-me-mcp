@@ -911,3 +911,237 @@ describe('scripts/gcp/bootstrap.sh with a stubbed gcloud', () => {
     expect(run.calls.filter((call) => WRITE_VERB.test(call))).toEqual([]);
   });
 });
+
+// README "Deployed settings" versus the pipeline (DOC-02). The README table
+// must carry the values of cloudbuild.yaml as exact strings, in backticks:
+// "512Mi" is not "0.5Gi" and "60" is not "60s". The trigger is created by the
+// bootstrap script and is named there, not in cloudbuild.yaml.
+
+const README_TEXT = read('README.md');
+const BOOTSTRAP_TEXT = read(BOOTSTRAP);
+
+const SETTING_LABELS = [
+  'Region',
+  'Service',
+  'Minimum instances',
+  'Maximum instances',
+  'CPU',
+  'Memory',
+  'Concurrency',
+  'Request timeout',
+  'Ingress',
+  'Runtime account',
+  'Trigger',
+] as const;
+
+/** The deployed settings as the pipeline and the bootstrap script define them. */
+function pipelineSettings(
+  cloudbuildText: string,
+  bootstrapText: string
+): Map<string, string> {
+  const lines = cloudbuildText.split('\n');
+  const values = new Map<string, string>();
+  const subsAt = lines.indexOf('substitutions:');
+  for (const line of subsAt === -1 ? [] : lines.slice(subsAt + 1)) {
+    const match = /^ {2}(_[A-Z_]+): (.+)$/.exec(line);
+    if (match?.[1] === undefined || match[2] === undefined) {
+      break;
+    }
+    values.set(match[1], match[2].trim());
+  }
+  const resolved = (text: string): string =>
+    text.replace(
+      /\$\{(_[A-Z_]+)\}/g,
+      (whole, name: string) => values.get(name) ?? whole
+    );
+
+  const flags = new Map<string, string>();
+  const deployAt = lines.indexOf('  - id: deploy-tagged');
+  for (const line of deployAt === -1 ? [] : lines.slice(deployAt + 1)) {
+    if (/^ {2}- id: /.test(line)) {
+      break;
+    }
+    const match = /^ {6}- (--[a-z-]+)=(.+)$/.exec(line);
+    if (match?.[1] !== undefined && match[2] !== undefined) {
+      flags.set(match[1], resolved(match[2].trim()));
+    }
+  }
+
+  const project = /^PROJECT=(\S+)$/m.exec(bootstrapText)?.[1];
+  const account = flags.get('--service-account');
+  const settings = new Map<string, string>();
+  const put = (label: string, value: string | undefined): void => {
+    if (value !== undefined) {
+      settings.set(label, value);
+    }
+  };
+  put('Region', flags.get('--region'));
+  put('Service', values.get('_SERVICE'));
+  put('Minimum instances', flags.get('--min-instances'));
+  put('Maximum instances', flags.get('--max-instances'));
+  put('CPU', flags.get('--cpu'));
+  put('Memory', flags.get('--memory'));
+  put('Concurrency', flags.get('--concurrency'));
+  put('Request timeout', flags.get('--timeout'));
+  put('Ingress', flags.get('--ingress'));
+  put(
+    'Runtime account',
+    account !== undefined && project !== undefined
+      ? account.replace('$PROJECT_ID', project)
+      : undefined
+  );
+  put('Trigger', /^TRIGGER=(\S+)$/m.exec(bootstrapText)?.[1]);
+  return settings;
+}
+
+function readmeSection(readme: string, heading: string): string {
+  const start = readme.indexOf(`\n${heading}\n`);
+  if (start === -1) {
+    return '';
+  }
+  const rest = readme.slice(start + heading.length + 2);
+  const next = rest.search(/^## /m);
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
+/** Label to backticked value for the rows of the Deployed settings table. */
+function readmeSettings(readme: string): Map<string, string> {
+  const rows = new Map<string, string>();
+  for (const line of readmeSection(readme, '## Deploy').split('\n')) {
+    const match = /^\|\s*([^|`]+?)\s*\|\s*`([^`]+)`\s*\|/.exec(line);
+    if (
+      match?.[1] !== undefined &&
+      match[2] !== undefined &&
+      !rows.has(match[1])
+    ) {
+      rows.set(match[1], match[2]);
+    }
+  }
+  return rows;
+}
+
+/** One line per setting whose README value is missing or not the pipeline's exact string. */
+function settingsMismatches(
+  readme: string,
+  cloudbuildText: string,
+  bootstrapText: string
+): string[] {
+  const expected = pipelineSettings(cloudbuildText, bootstrapText);
+  const actual = readmeSettings(readme);
+  const problems: string[] = [];
+  for (const label of SETTING_LABELS) {
+    const want = expected.get(label);
+    const got = actual.get(label);
+    if (want === undefined) {
+      problems.push(`${label}: not found in the pipeline`);
+    } else if (got === undefined) {
+      problems.push(`${label}: missing from the README table`);
+    } else if (got !== want) {
+      problems.push(`${label}: README has ${got}, pipeline has ${want}`);
+    }
+  }
+  return problems;
+}
+
+/** A README Deploy section built from the pipeline itself, for the comparison unit tests. */
+function readmeFrom(settings: Map<string, string>): string {
+  const rows = [...settings.entries()].map(
+    ([label, value]) => `| ${label} | \`${value}\` | note |`
+  );
+  return ['', '## Deploy', '', '| Setting | Value | Note |', '|---|---|---|']
+    .concat(rows, ['', '## Cost estimate', ''])
+    .join('\n');
+}
+
+describe('README Deployed settings (DOC-02)', () => {
+  it('has a row in the table for every setting the pipeline fixes', () => {
+    const settings = pipelineSettings(cloudbuild, BOOTSTRAP_TEXT);
+    expect([...settings.keys()].sort()).toEqual([...SETTING_LABELS].sort());
+  });
+
+  it('carries exactly the values of cloudbuild.yaml and the bootstrap script', () => {
+    expect(settingsMismatches(README_TEXT, cloudbuild, BOOTSTRAP_TEXT)).toEqual(
+      []
+    );
+  });
+
+  it('passes on a README built from the pipeline itself', () => {
+    const fake = readmeFrom(pipelineSettings(cloudbuild, BOOTSTRAP_TEXT));
+    expect(settingsMismatches(fake, cloudbuild, BOOTSTRAP_TEXT)).toEqual([]);
+  });
+
+  it('fails when the pipeline memory changes and the README does not', () => {
+    const fake = readmeFrom(pipelineSettings(cloudbuild, BOOTSTRAP_TEXT));
+    const changed = cloudbuild.replace('--memory=512Mi', '--memory=1Gi');
+    expect(changed).not.toBe(cloudbuild);
+    expect(settingsMismatches(fake, changed, BOOTSTRAP_TEXT)).toEqual([
+      'Memory: README has 512Mi, pipeline has 1Gi',
+    ]);
+  });
+
+  it('compares exact strings, with no unit conversion or rounding (OPS-01 precision)', () => {
+    const settings = pipelineSettings(cloudbuild, BOOTSTRAP_TEXT);
+    const converted = new Map(settings);
+    converted.set('Memory', '0.5Gi');
+    converted.set('Request timeout', '60s');
+    converted.set('CPU', '1.0');
+    expect(
+      settingsMismatches(readmeFrom(converted), cloudbuild, BOOTSTRAP_TEXT)
+    ).toEqual([
+      'CPU: README has 1.0, pipeline has 1',
+      'Memory: README has 0.5Gi, pipeline has 512Mi',
+      'Request timeout: README has 60s, pipeline has 60',
+    ]);
+  });
+
+  it('reports a row that is missing from the README', () => {
+    const settings = pipelineSettings(cloudbuild, BOOTSTRAP_TEXT);
+    settings.delete('Ingress');
+    expect(
+      settingsMismatches(readmeFrom(settings), cloudbuild, BOOTSTRAP_TEXT)
+    ).toEqual(['Ingress: missing from the README table']);
+  });
+
+  it('reports a trigger name that differs from the bootstrap script', () => {
+    const fake = readmeFrom(pipelineSettings(cloudbuild, BOOTSTRAP_TEXT));
+    const renamed = BOOTSTRAP_TEXT.replace(
+      'TRIGGER=altegio-me-mcp-deploy',
+      'TRIGGER=other-trigger'
+    );
+    expect(renamed).not.toBe(BOOTSTRAP_TEXT);
+    expect(settingsMismatches(fake, cloudbuild, renamed)).toEqual([
+      'Trigger: README has altegio-me-mcp-deploy, pipeline has other-trigger',
+    ]);
+  });
+});
+
+describe('README Deploy and Cost estimate text (DOC-02)', () => {
+  const deploy = readmeSection(README_TEXT, '## Deploy');
+  const cost = readmeSection(README_TEXT, '## Cost estimate');
+
+  it.each([
+    'altegio-me-mcp-deploy',
+    'altegio-mcp',
+    'europe-west1',
+    'https://mcp.alteg.io/me',
+    'Deployed settings',
+  ])('names %s in the Deploy section', (fragment) => {
+    expect(deploy).toContain(fragment);
+  });
+
+  it('states that the bootstrap placeholder service is the only deploy outside the trigger', () => {
+    expect(deploy).toContain('scripts/gcp/bootstrap.sh');
+    expect(deploy).toMatch(/only deploy outside the (Cloud Build )?trigger/i);
+  });
+
+  it('states whether the first deploy has happened', () => {
+    expect(deploy).toMatch(/^Status: /m);
+  });
+
+  it('gives an expected and a peak column, an uptime-check row and the price date and sources', () => {
+    expect(cost).toMatch(/^\|[^\n]*Expected[^\n]*\|[^\n]*Peak[^\n]*\|$/m);
+    expect(cost).toMatch(/^\|\s*Uptime checks[^\n]*\|$/m);
+    expect(cost).toMatch(/^Prices read on \d{4}-\d{2}-\d{2} from /m);
+    expect(cost).toContain('https://cloud.google.com/run/pricing');
+  });
+});
