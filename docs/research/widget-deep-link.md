@@ -74,15 +74,20 @@ use `altegio.asia` or `altegio.org` hosts instead of `alteg.io`.
 
 ## Still to check in a real browser (Phase 2)
 
-- The time shows as selected in both menu-style and step-by-step forms.
+Each item points to its row in "Browser check results" below.
+
+- The time shows as selected in both menu-style and step-by-step forms. Rows `single-named`
+  and `menu-and-steps`.
 - Half-hour time zones (the offset helper likely renders 5.5 as `+05:50`) and dates across a
-  daylight-saving change.
-- `m-1` when "any professional" is disabled or the staff step is hidden.
-- Forms that first ask to choose between a personal booking and a group event.
-- `{slug}.altegio.me` hosts.
+  daylight-saving change. Rows `half-hour-zone` and `dst-boundary`.
+- `m-1` when "any professional" is disabled or the staff step is hidden. Rows `any-member` and
+  `any-member-disabled`.
+- Forms that first ask to choose between a personal booking and a group event. Row
+  `personal-or-group`.
+- `{slug}.altegio.me` hosts. Row `slug-host`.
 - Group-event token order: the widget writes `act` before `aid`, which by the parser's rules
-  swallows `aid`.
-- What the client sees when the slot is already taken.
+  swallows `aid`. Row `group-event-order`.
+- What the client sees when the slot is already taken. Row `taken-slot`.
 
 ## Browser check procedure (BOOK-04)
 
@@ -161,3 +166,44 @@ driven:
    and which form style or chooser the widget lands on. Take a screenshot.
 4. Fill the results table (case, status, link kind, seen or reason, screenshot) the same way
    the scripted run prints it.
+
+## Browser check results
+
+- Run: 2026-10-04 06:13 UTC (`npm --prefix scripts/browser-check start`), Google Chrome
+  154.0.8037.93, headed, Playwright 1.63.0.
+- Location 726120 "BaBarber", booking form 1472304. Link host `n1472304.alteg.io`.
+- Demo location 722227, used in the examples above, could not be used: its widget is inactive
+  (`company.active` 0, see plan 02-09). The owner chose 726120 instead on 2026-10-04. The run
+  passed the location as `ALTEGIO_E2E_LOCATION_ID=726120` in the process environment, so the
+  local env file was not changed.
+- Evidence: `scripts/browser-check/output/2026-10-04T06-13-33-050Z/` (git-ignored) holds
+  `results.json` and `plain-fallback.png`. It also holds three read-only widget screenshots,
+  taken by opening the step URLs directly without any click: `widget-probe-select-master.png`,
+  `widget-probe-select-services.png` and `widget-probe-select-time.png`.
+- What discovery found: the partner API lists 8 team members at 726120, none of them bookable,
+  and 0 services bookable online. The widget shows the same thing: all 8 professionals are
+  listed, "Select services" says "Nothing found", and "Select date and time" says "There are no
+  available spots for upcoming months". With no free slot to verify with `book_check`, the check
+  had no pre-selected link to open.
+
+| Case | Link kind | Expected | Seen | Result | Note |
+|------|-----------|----------|------|--------|------|
+| single-named | - | service, team member and time pre-selected | no link: 8 team members, 0 bookable | not-run | location has no free slot (BOOK-04 core not shown) |
+| multi-services | - | two services pre-selected | no link: 8 team members, 0 bookable | not-run | location has no free slot |
+| any-member | - | service and time pre-selected with `m-1` | no link: 0 services for any team member | not-run | location has no service bookable online |
+| plain-fallback | booking_form | form opens with nothing pre-selected | lands on `/company/726120/personal/menu?o=` (empty `o=`), menu style, nothing selected | pass | BOOK-05 link |
+| taken-slot | - | no time selected for a non-free time | no link | not-run | needs a free slot to shift by one minute |
+| menu-and-steps | - | time shown in the menu form and the step form | main form is menu style (from plain-fallback); no link | not-run | needs a free slot; `BROWSER_CHECK_STEPS_LOCATION_ID` not set |
+| personal-or-group | - | no personal-or-group chooser | plain link skips the chooser and lands on the menu | not-run | the pre-selected link was not opened |
+| half-hour-zone | - | time kept in a half-hour zone | - | not-run | `BROWSER_CHECK_HALF_HOUR_LOCATION_ID` not set |
+| dst-boundary | - | time kept after an offset change | no link | not-run | needs a free slot |
+| any-member-disabled | - | widget reaction to `m-1` when disabled | - | not-run | `BROWSER_CHECK_ANY_DISABLED_LOCATION_ID` not set |
+| slug-host | - | same link on an `altegio.me` host | no link | not-run | needs a free slot |
+| group-event-order | - | - | - | not applicable | group events are deferred (EXT-01); the builder never writes `aid` or `act` |
+
+B4 status: partial: the plain booking-form link (BOOK-05) opened the form with nothing
+pre-selected on 2026-10-04 (location 726120, form 1472304); the BOOK-04 core (service, team
+member and time pre-selected) was not shown in a browser, because location 726120 has no service
+bookable online and no free time, so no pre-selected link could be verified and opened.
+
+Owner review: pending
