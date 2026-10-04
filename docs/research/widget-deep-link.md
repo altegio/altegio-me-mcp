@@ -83,3 +83,81 @@ use `altegio.asia` or `altegio.org` hosts instead of `alteg.io`.
 - Group-event token order: the widget writes `act` before `aid`, which by the parser's rules
   swallows `aid`.
 - What the client sees when the slot is already taken.
+
+## Browser check procedure (BOOK-04)
+
+`scripts/browser-check/` is a local, repeatable check of the links above in a real browser. It is
+an isolated package (own `package.json` and lockfile, `playwright` pinned at exactly 1.63.0 after
+owner approval). The root package, CI and the Docker image never install it. Results of the runs
+are recorded by plan 02-11.
+
+### Prerequisites
+
+- Root `.env` with `ALTEGIO_API_TOKEN` (the partner token) and `ALTEGIO_E2E_LOCATION_ID` (the
+  test business). The token is only sent to the API; the check never prints it or writes it to
+  results or screenshots.
+- Root dependencies installed (`npm ci`); the check runs through the root `tsx` and `tsc`.
+- `npm --prefix scripts/browser-check ci --ignore-scripts` (installs the pinned Playwright, no
+  install scripts, no browser download).
+- Google Chrome installed (`/Applications/Google Chrome.app`); the check drives it with
+  `channel: 'chrome'`, headed.
+
+### Commands
+
+```bash
+npm --prefix scripts/browser-check run cases                 # list the case ids, no network
+npm --prefix scripts/browser-check start                     # run every case in Chrome
+npm --prefix scripts/browser-check start -- --print-links    # links only, for the manual fallback
+npm --prefix scripts/browser-check run typecheck             # type-check the check
+```
+
+`start` finds free slots with the repo's own `BookingClient`, confirms each one with
+`book_check` (201), builds the link with the shipped `buildBookingLink` (or `plainBookingLink`),
+opens it in a fresh Chrome context, waits up to 30 s for the widget to settle, reads the page text
+and saves a screenshot. Expectations are plain text only (service title, team-member name,
+`HH:MM`, day of month), because the widget DOM is not a contract. A case is `pass`, `fail`,
+`not-run` (with the reason) or `blocked` (Cloudflare challenge page). Exit code 1 means at least
+one case failed.
+
+Cases: `single-named`, `multi-services`, `any-member`, `plain-fallback`, `taken-slot`,
+`menu-and-steps`, `personal-or-group`, `half-hour-zone`, `dst-boundary`, `any-member-disabled`,
+`slug-host`, `group-event-order`. Together they cover the BOOK-04 core (service, team member and
+time pre-selected), the BOOK-05 plain link and every item of "Still to check in a real browser".
+Links of kind `probe` bypass one builder guard on purpose (half-hour offset, offset after a
+daylight-saving change, any team member disabled, `altegio.me` host) to see what the widget does
+with the link the builder refuses to give out.
+
+Optional variables, for businesses that show the edge cases (each case is `not-run` without
+its variable):
+
+- `BROWSER_CHECK_STEPS_LOCATION_ID`: a business whose form uses the other style (step by step
+  when the test business uses the menu, or the reverse).
+- `BROWSER_CHECK_HALF_HOUR_LOCATION_ID`: a business in a half-hour time zone (for example
+  +05:30).
+- `BROWSER_CHECK_ANY_DISABLED_LOCATION_ID`: a business with "any team member" disabled.
+
+### What the check never does
+
+It never clicks, types, fills, presses or submits anything in the widget, and it aborts any
+request to the booking write route, so no booking can result. The only POST it sends is the
+`book_check` validation route, which creates no record.
+
+### Results
+
+Each run writes `scripts/browser-check/output/<timestamp>/results.json` (`run_at`,
+`chrome_version`, `location_id`, `form_id` and one entry per case with `link`, `link_kind`,
+`expected`, `seen`, `status`, `reason`, `screenshot`) and one PNG per case, then prints a Markdown
+results table. The output folder is git-ignored.
+
+### Manual fallback
+
+Use it when Cloudflare challenges the automated browser (cases `blocked`) or Chrome cannot be
+driven:
+
+1. Run `npm --prefix scripts/browser-check start -- --print-links`. It prints, per case, the
+   link, its kind and what to expect, or why the case is not run.
+2. Open each link in a normal Chrome window (a fresh profile or a private window).
+3. Without filling anything in, note what is pre-selected: services, team member, date and time,
+   and which form style or chooser the widget lands on. Take a screenshot.
+4. Fill the results table (case, status, link kind, seen or reason, screenshot) the same way
+   the scripted run prints it.
