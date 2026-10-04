@@ -14,8 +14,9 @@ import {
   toolsListBody,
   waitForLogs,
 } from '../../__tests__/helpers/http-harness.js';
+import type { ProxyAuthReason } from '../../security/proxy-auth.js';
 import { defineTool } from '../../tools/factory.js';
-import { createCallLogMiddleware } from '../call-log.js';
+import { createCallLogMiddleware, getCallRecord } from '../call-log.js';
 
 const rawServers: HttpServer[] = [];
 
@@ -35,10 +36,18 @@ afterEach(async () => {
 type RawLine = Record<string, unknown>;
 
 // The call-log middleware alone in front of a fixed responder, so the outcome
-// rule can be checked against bodies the SDK never produces.
+// rule can be checked against bodies the SDK never produces. `settled(n)`
+// resolves once n responses are fully closed on the server side, which is
+// after the call log has seen them, so a test can tell "not written" from
+// "not written yet".
 async function startRaw(
-  responder: RequestHandler
-): Promise<{ url: string; logs: RawLine[] }> {
+  responder: RequestHandler,
+  options?: { now?: () => number }
+): Promise<{
+  url: string;
+  logs: RawLine[];
+  settled: (count: number) => Promise<void>;
+}> {
   const logs: RawLine[] = [];
   const logger = pino(
     { base: null, timestamp: false, messageKey: 'message', level: 'info' },
@@ -48,10 +57,19 @@ async function startRaw(
       },
     }
   );
+  let closed = 0;
+  const countClosed: RequestHandler = (_req, res, next) => {
+    // Registered after the call log's own listeners, so they ran first.
+    res.once('close', () => {
+      closed += 1;
+    });
+    next();
+  };
   const app = express();
   app.post(
     '/mcp',
-    createCallLogMiddleware(logger, new Set()),
+    createCallLogMiddleware(logger, new Set(), options),
+    countClosed,
     express.json(),
     responder
   );
@@ -60,7 +78,17 @@ async function startRaw(
   });
   rawServers.push(server);
   const { port } = server.address() as AddressInfo;
-  return { url: `http://127.0.0.1:${port}`, logs };
+  return {
+    url: `http://127.0.0.1:${port}`,
+    logs,
+    settled: async (count: number): Promise<void> => {
+      const deadline = Date.now() + 2000;
+      while (closed < count && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(closed).toBeGreaterThanOrEqual(count);
+    },
+  };
 }
 
 async function waitForRaw(logs: RawLine[], count: number): Promise<RawLine[]> {
@@ -293,7 +321,7 @@ describe('outcome from the JSON-RPC response body (WR-05)', () => {
     expect(logs[0]?.outcome).toBe('protocol_error');
     expect(JSON.stringify(logs)).not.toContain(canary);
     const { level: _level, message: _message, ...fields } = logs[0] ?? {};
-    expect(Object.keys(fields)).toHaveLength(9);
+    expect(Object.keys(fields)).toHaveLength(15);
   });
 
   it('counts an array response that contains an error member', async () => {
@@ -332,5 +360,230 @@ describe('outcome from the JSON-RPC response body (WR-05)', () => {
     const [brokenLine] = await waitForRaw(broken.logs, 1);
     expect(plainLine?.outcome).toBe('ok');
     expect(brokenLine?.outcome).toBe('ok');
+  });
+});
+
+const NEW_FIELDS = [
+  'auth_reason',
+  'limited_by',
+  'upstream_kind',
+  'origin_host',
+  'forwarded_for_count',
+  'suppressed',
+] as const;
+
+describe('call log field set for the proxy check and the later limits (OPS-03)', () => {
+  it('writes auth_reason, limited_by, upstream_kind, origin_host, forwarded_for_count and suppressed on every line, null by default', async () => {
+    const harness = await startApp();
+    await postMcp(harness.baseUrl, toolsListBody(1));
+    await postMcp(
+      harness.baseUrl,
+      toolCallBody('demo_echo_items', { items: ['a'] }, 2)
+    );
+    const logs = await waitForLogs(harness, 2);
+    expect(logs).toHaveLength(2);
+    for (const line of logs) {
+      for (const key of NEW_FIELDS) {
+        expect(line).toHaveProperty(key, null);
+      }
+    }
+  });
+
+  it('writes what a later plan puts on the call record, and nothing else', async () => {
+    const raw = await startRaw((_req, res) => {
+      const record = getCallRecord(res);
+      record.limited_by = 'gate';
+      record.upstream_kind = 'rate_limited';
+      record.origin_host = 'mcp.example.test';
+      record.forwarded_for_count = 2;
+      res.status(200).json({ jsonrpc: '2.0', id: 1, result: {} });
+    });
+    await postMcp(raw.url, toolsListBody(1));
+    const [line] = await waitForRaw(raw.logs, 1);
+    expect(line).toMatchObject({
+      auth_reason: null,
+      limited_by: 'gate',
+      upstream_kind: 'rate_limited',
+      origin_host: 'mcp.example.test',
+      forwarded_for_count: 2,
+      suppressed: null,
+    });
+  });
+});
+
+describe('throttled proxy-auth rejection lines (T-03-14)', () => {
+  const rejectWith =
+    (reason: ProxyAuthReason): RequestHandler =>
+    (_req, res) => {
+      getCallRecord(res).auth_reason = reason;
+      res.status(401).json({ error: 'proxy_auth_required' });
+    };
+
+  function clock(startMs = 1_700_000_000_000): {
+    now: () => number;
+    advance: (ms: number) => void;
+  } {
+    let current = startMs;
+    return {
+      now: () => current,
+      advance: (ms) => {
+        current += ms;
+      },
+    };
+  }
+
+  it('writes 1 line for 5 rejections inside one second and 4 as suppressed on the next written one', async () => {
+    const time = clock();
+    const raw = await startRaw(rejectWith('missing'), { now: time.now });
+    for (let call = 0; call < 5; call += 1) {
+      await postMcp(raw.url, toolsListBody(call));
+    }
+    await raw.settled(5);
+    expect(raw.logs).toHaveLength(1);
+    expect(raw.logs[0]).toMatchObject({
+      event: 'mcp_call',
+      auth_reason: 'missing',
+      http_status: 401,
+      outcome: 'http_error',
+      suppressed: 0,
+    });
+
+    time.advance(1000);
+    await postMcp(raw.url, toolsListBody(6));
+    await raw.settled(6);
+    expect(raw.logs).toHaveLength(2);
+    expect(raw.logs[1]).toMatchObject({
+      auth_reason: 'missing',
+      suppressed: 4,
+    });
+
+    // The count starts again after a written line.
+    await postMcp(raw.url, toolsListBody(7));
+    time.advance(1000);
+    await postMcp(raw.url, toolsListBody(8));
+    await raw.settled(8);
+    expect(raw.logs).toHaveLength(3);
+    expect(raw.logs[2]).toMatchObject({ suppressed: 1 });
+  });
+
+  it('suppresses at 999 ms and writes at 1000 ms', async () => {
+    const time = clock();
+    const raw = await startRaw(rejectWith('bad_signature'), {
+      now: time.now,
+    });
+    await postMcp(raw.url, toolsListBody(1));
+    time.advance(999);
+    await postMcp(raw.url, toolsListBody(2));
+    await raw.settled(2);
+    expect(raw.logs).toHaveLength(1);
+    time.advance(1);
+    await postMcp(raw.url, toolsListBody(3));
+    await raw.settled(3);
+    expect(raw.logs).toHaveLength(2);
+    expect(raw.logs[1]).toMatchObject({ suppressed: 1 });
+  });
+
+  it('throttles every reason together, as one stream', async () => {
+    const time = clock();
+    const reasons: ProxyAuthReason[] = [
+      'missing',
+      'malformed',
+      'stale',
+      'bad_signature',
+    ];
+    let next = 0;
+    const raw = await startRaw(
+      (req, res, nextHandler) => {
+        const reason = reasons[next % reasons.length] ?? 'missing';
+        next += 1;
+        rejectWith(reason)(req, res, nextHandler);
+      },
+      { now: time.now }
+    );
+    for (let call = 0; call < 4; call += 1) {
+      await postMcp(raw.url, toolsListBody(call));
+    }
+    await raw.settled(4);
+    expect(raw.logs).toHaveLength(1);
+    expect(raw.logs[0]).toMatchObject({ auth_reason: 'missing' });
+    time.advance(1000);
+    await postMcp(raw.url, toolsListBody(5));
+    await raw.settled(5);
+    expect(raw.logs[1]).toMatchObject({
+      auth_reason: 'malformed',
+      suppressed: 3,
+    });
+  });
+
+  it('never throttles a line without auth_reason and always gives it suppressed null', async () => {
+    const time = clock();
+    let rejectNext = true;
+    const raw = await startRaw(
+      (req, res, nextHandler) => {
+        if (rejectNext) {
+          rejectWith('missing')(req, res, nextHandler);
+          return;
+        }
+        res.status(200).json({ jsonrpc: '2.0', id: 1, result: {} });
+      },
+      { now: time.now }
+    );
+    await postMcp(raw.url, toolsListBody(1));
+    await postMcp(raw.url, toolsListBody(2));
+    rejectNext = false;
+    for (let call = 3; call < 6; call += 1) {
+      await postMcp(raw.url, toolsListBody(call));
+    }
+    await raw.settled(5);
+    expect(raw.logs).toHaveLength(4);
+    expect(raw.logs.map((line) => line.suppressed)).toEqual([
+      0,
+      null,
+      null,
+      null,
+    ]);
+    expect(raw.logs.map((line) => line.auth_reason)).toEqual([
+      'missing',
+      null,
+      null,
+      null,
+    ]);
+
+    // The suppressed rejection is carried to the next written rejection.
+    time.advance(1000);
+    rejectNext = true;
+    await postMcp(raw.url, toolsListBody(6));
+    await raw.settled(6);
+    expect(raw.logs[4]).toMatchObject({
+      auth_reason: 'missing',
+      suppressed: 1,
+    });
+  });
+
+  it('does not stay silent when the clock steps backwards', async () => {
+    const time = clock(10_000_000);
+    const raw = await startRaw(rejectWith('missing'), { now: time.now });
+    await postMcp(raw.url, toolsListBody(1));
+    time.advance(-5_000_000);
+    await postMcp(raw.url, toolsListBody(2));
+    await raw.settled(2);
+    expect(raw.logs).toHaveLength(2);
+  });
+
+  it('puts no header value, key or address on a rejection line', async () => {
+    const secretHeader = 'v1:1700000000:' + 'ab'.repeat(32);
+    const raw = await startRaw(rejectWith('malformed'));
+    await postMcp(raw.url, toolsListBody(1), {
+      'x-mcp-proxy-auth': secretHeader,
+      'x-mcp-auth-client-ip': '203.0.113.77',
+      'x-forwarded-for': '198.51.100.9',
+    });
+    const logs = await waitForRaw(raw.logs, 1);
+    const text = JSON.stringify(logs);
+    expect(text).not.toContain(secretHeader);
+    expect(text).not.toContain('abab');
+    expect(text).not.toContain('203.0.113.77');
+    expect(text).not.toContain('198.51.100.9');
+    expect(text).not.toContain('127.0.0.1');
   });
 });

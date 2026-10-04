@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { BOOKING_ROUTES } from '../../booking/client.js';
 import { createMcpServer } from '../../mcp/create-server.js';
 import { SERVER_INSTRUCTIONS } from '../../mcp/instructions.js';
+import { createCallRecord } from '../../observability/call-log.js';
 import type { ToolMeta, ToolSpec } from '../../tools/factory.js';
 import { productionTools } from '../../tools/registry.js';
 import {
@@ -403,7 +404,7 @@ describe('compliant paginated tool through an SDK client', () => {
       toolsByName: new Map([[compliantListTool.name, compliantListTool]]),
       toolDeps: undefined,
       secrets: [],
-      record: { tool: null, outcome: null, error_type: null },
+      record: createCallRecord(),
     });
     const client = new Client({ name: 'jest-client', version: '0.0.0' });
     const [clientTransport, serverTransport] =

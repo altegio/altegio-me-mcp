@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@jest/globals';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createCallRecord } from '../../observability/call-log.js';
 import { UNTRUSTED_CLOSE } from '../../tools/untrusted.js';
 import { createMcpServer } from '../create-server.js';
 import { SERVER_INSTRUCTIONS } from '../instructions.js';
@@ -33,7 +34,7 @@ describe('SERVER_INSTRUCTIONS', () => {
       toolsByName: new Map(),
       toolDeps: undefined,
       secrets: [],
-      record: { tool: null, outcome: null, error_type: null },
+      record: createCallRecord(),
     });
     const client = new Client({ name: 'jest-client', version: '0.0.0' });
     const [clientTransport, serverTransport] =

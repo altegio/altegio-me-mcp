@@ -1,5 +1,7 @@
 import type { Request, RequestHandler, Response } from 'express';
 import type { Logger } from 'pino';
+import type { UpstreamErrorKind } from '../booking/errors.js';
+import type { ProxyAuthReason } from '../security/proxy-auth.js';
 import type { ToolOutcome } from '../tools/factory.js';
 
 // One structured log line per POST /mcp. The line is built from a closed field
@@ -24,6 +26,15 @@ export interface CallRecord {
   tool: string | null;
   outcome: CallOutcome | null;
   error_type: string | null;
+  auth_reason: ProxyAuthReason | null;
+  limited_by: 'inflight' | 'ip' | 'pool' | 'gate' | null;
+  upstream_kind: UpstreamErrorKind | null;
+  origin_host: string | null;
+  forwarded_for_count: number | null;
+}
+
+export interface CallLogOptions {
+  now?: () => number;
 }
 
 const KNOWN_METHODS: ReadonlySet<string> = new Set([
@@ -42,13 +53,23 @@ const NON_PRINTABLE_ASCII = /[^\x20-\x7E]/g;
 const BODY_COPY_LIMIT = 64 * 1024;
 const JSON_CONTENT_TYPE = /^application\/([a-z0-9.+-]+\+)?json\s*(;|$)/i;
 
-function newRecord(): CallRecord {
-  return { tool: null, outcome: null, error_type: null };
+// Exported so a test that needs a record does not list every field.
+export function createCallRecord(): CallRecord {
+  return {
+    tool: null,
+    outcome: null,
+    error_type: null,
+    auth_reason: null,
+    limited_by: null,
+    upstream_kind: null,
+    origin_host: null,
+    forwarded_for_count: null,
+  };
 }
 
 export function getCallRecord(res: Response): CallRecord {
   const existing = res.locals.callRecord as CallRecord | undefined;
-  return existing ?? newRecord();
+  return existing ?? createCallRecord();
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -242,10 +263,11 @@ function outcomeOf(
 
 export function createCallLogMiddleware(
   logger: Logger,
-  toolNames: ReadonlySet<string>
+  toolNames: ReadonlySet<string>,
+  _options?: CallLogOptions
 ): RequestHandler {
   return (req, res, next) => {
-    const record = newRecord();
+    const record = createCallRecord();
     res.locals.callRecord = record;
     const startedAt = performance.now();
     const copy = captureBody(res);

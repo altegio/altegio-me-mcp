@@ -115,6 +115,36 @@ describe('scripts/smoke.sh', () => {
     expect(smoke).toContain('-e ALTEGIO_API_TOKEN="$CANARY_TOKEN"');
   });
 
+  it.each([
+    'x-mcp-proxy-auth',
+    'MCP_PROXY_BACKEND_KEY_FILE',
+    'proxy_auth_required',
+    'docker inspect',
+  ])('exercises the proxy check: contains %s (OPS-03)', (fragment) => {
+    expect(smoke).toContain(fragment);
+  });
+
+  it('checks that /health reports the COMMIT_SHA the container was given', () => {
+    expect(smoke).toContain('-e COMMIT_SHA="$COMMIT_VALUE"');
+    expect(smoke).toContain('.commit == $c');
+  });
+
+  it('checks that the image config declares no secret-named variable', () => {
+    expect(smoke).toContain(
+      'docker inspect --format \'{{json .Config.Env}}\' "$IMAGE"'
+    );
+    expect(smoke).toContain('TOKEN|SECRET|KEY|PASSWORD');
+  });
+
+  it('checks that neither the canary token nor the canary key reaches the logs', () => {
+    expect(smoke).toContain('grep -qF "$CANARY_TOKEN"');
+    expect(smoke).toContain('grep -qF "$PROXY_KEY"');
+  });
+
+  it('checks that the unsigned refusal is logged with its auth_reason', () => {
+    expect(smoke).toContain('"auth_reason":"missing"');
+  });
+
   it('has its executable bit set', () => {
     expect(() =>
       accessSync(join(ROOT, 'scripts/smoke.sh'), constants.X_OK)

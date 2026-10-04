@@ -108,15 +108,21 @@ describe('stateless MCP over POST /mcp (tracer)', () => {
       const { level: _level, message: _message, ...fields } = line;
       expect(Object.keys(fields).sort()).toEqual(
         [
+          'auth_reason',
           'error_type',
           'event',
+          'forwarded_for_count',
           'http_status',
           'latency_ms',
+          'limited_by',
           'mcp_client',
+          'origin_host',
           'outcome',
           'protocol_version',
           'rpc_method',
+          'suppressed',
           'tool',
+          'upstream_kind',
         ].sort()
       );
     }
@@ -511,11 +517,43 @@ describe('proxy-origin signature on POST /mcp (OPS-03, D-04)', () => {
     ).toBe(401);
   });
 
+  // Changes the last hex digit of a signature so it can no longer verify. The
+  // digit is flipped, not set to a fixed value: setting it to '0' left the
+  // signature intact one time in sixteen and made the refusal tests flaky.
+  function tamper(header: string): string {
+    return `${header.slice(0, -1)}${header.endsWith('0') ? '1' : '0'}`;
+  }
+
+  it('refuses a signature with its last digit changed, whatever that digit is', async () => {
+    let nowMs = 1_700_000_000_000;
+    const harness = await startApp({
+      proxyAuth: { keys: () => [KEY], now: () => nowMs },
+    });
+    let endingInZero = 0;
+    for (let second = 0; second < 64; second += 1) {
+      nowMs = 1_700_000_000_000 + second * 1000;
+      const header = signProxyRequest({
+        key: KEY,
+        method: 'POST',
+        path: '/mcp',
+        nowMs,
+      });
+      if (header.endsWith('0')) endingInZero += 1;
+      const res = await postMcp(harness.baseUrl, toolsListBody(), {
+        [PROXY_AUTH_HEADER]: tamper(header),
+      });
+      expect(res.status).toBe(401);
+    }
+    // The fixed clock makes this deterministic: the loop does cover the case
+    // that used to slip through.
+    expect(endingInZero).toBeGreaterThan(0);
+  });
+
   it('logs a refused request once, with no header value and no key', async () => {
     const harness = await startApp({ proxyAuth: { keys: () => [KEY] } });
     const header = signed()[PROXY_AUTH_HEADER] ?? '';
     await postMcp(harness.baseUrl, toolsListBody(), {
-      [PROXY_AUTH_HEADER]: header.replace(/.$/, '0'),
+      [PROXY_AUTH_HEADER]: tamper(header),
     });
     const logs = await waitForLogs(harness, 1);
     expect(logs).toHaveLength(1);
@@ -523,10 +561,80 @@ describe('proxy-origin signature on POST /mcp (OPS-03, D-04)', () => {
       event: 'mcp_call',
       http_status: 401,
       outcome: 'http_error',
+      auth_reason: 'bad_signature',
     });
     const text = JSON.stringify(logs);
     expect(text).not.toContain(KEY);
     expect(text).not.toContain(header.slice(0, -1));
+  });
+
+  it('writes an mcp_call line with auth_reason missing and status 401 for an unsigned POST, with all six new fields', async () => {
+    const harness = await startApp({ proxyAuth: { keys: () => [KEY] } });
+    const res = await postMcp(harness.baseUrl, toolsListBody(), {
+      'x-mcp-auth-client-ip': '203.0.113.7',
+    });
+    expect(res.status).toBe(401);
+    const logs = await waitForLogs(harness, 1);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      event: 'mcp_call',
+      http_status: 401,
+      outcome: 'http_error',
+      auth_reason: 'missing',
+      limited_by: null,
+      upstream_kind: null,
+      origin_host: null,
+      forwarded_for_count: null,
+      suppressed: 0,
+    });
+    const text = JSON.stringify(logs);
+    expect(text).not.toContain(KEY);
+    expect(text).not.toContain('203.0.113.7');
+    expect(text).not.toContain(PROXY_AUTH_HEADER);
+  });
+
+  it.each([
+    ['malformed', (): string => 'nonsense-value-8d3f', 'nonsense-value-8d3f'],
+    [
+      'stale',
+      (): string =>
+        signProxyRequest({
+          key: KEY,
+          method: 'POST',
+          path: '/mcp',
+          nowMs: Date.now() - 301_000,
+        }),
+      null,
+    ],
+    [
+      'bad_signature',
+      (): string => tamper(signed()[PROXY_AUTH_HEADER] ?? ''),
+      null,
+    ],
+  ])(
+    'records auth_reason %s on the refusal line',
+    async (reason, headerValue, literal) => {
+      const harness = await startApp({ proxyAuth: { keys: () => [KEY] } });
+      const header = headerValue();
+      const res = await postMcp(harness.baseUrl, toolsListBody(), {
+        [PROXY_AUTH_HEADER]: header,
+      });
+      expect(res.status).toBe(401);
+      const logs = await waitForLogs(harness, 1);
+      expect(logs).toHaveLength(1);
+      expect(logs[0]?.auth_reason).toBe(reason);
+      const text = JSON.stringify(logs);
+      expect(text).not.toContain(header);
+      if (literal !== null) expect(text).not.toContain(literal);
+    }
+  );
+
+  it('leaves auth_reason null on the line of a served signed request', async () => {
+    const harness = await startApp({ proxyAuth: { keys: () => [KEY] } });
+    const res = await postMcp(harness.baseUrl, toolsListBody(), signed());
+    expect(res.status).toBe(200);
+    const logs = await waitForLogs(harness, 1);
+    expect(logs[0]).toMatchObject({ auth_reason: null, suppressed: null });
   });
 
   it('leaves /health open', async () => {
