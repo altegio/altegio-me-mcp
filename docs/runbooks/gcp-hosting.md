@@ -1,0 +1,324 @@
+# Runbook: altegio-me-mcp on Cloud Run in the platform project
+
+Operations for the hosted service (ADR-0003, Phase 3). The service runs as its own Cloud Run
+service in the platform's project `altegio-mcp`, region `europe-west1`. The one-time setup is
+`scripts/gcp/bootstrap.sh`; the deploy pipeline is `cloudbuild.yaml`. This document holds names,
+procedures and limits. It contains no secret value and no e-mail address: the owner's address is
+a parameter of the script.
+
+## Resources
+
+Every name below is created by `scripts/gcp/bootstrap.sh` unless the owner column says the
+platform owns it. The label `app=altegio-me-mcp` goes where the resource type supports one.
+
+| Resource | Name | Where | Owner | Carries `app=altegio-me-mcp` |
+| --- | --- | --- | --- | --- |
+| Cloud Run service | `altegio-me-mcp` | `altegio-mcp`, `europe-west1` | this project | yes (`--labels`) |
+| Runtime service account | `altegio-me-mcp-runtime` | `altegio-mcp` | this project | in the description (accounts have no labels) |
+| Build service account | `altegio-me-mcp-build` | `altegio-mcp` | this project | in the description |
+| Cloud Build trigger | `altegio-me-mcp-deploy` | `altegio-mcp`, `europe-west1` | this project | no: triggers have tags, not labels, and the script sets none |
+| Repository link | `altegio-me-mcp` on connection `Altegio` | `europe-west1` | this project (the connection is the platform's) | no |
+| Artifact Registry repository | `cloud-run` | `europe-west1` | the platform | no |
+| Secret, partner token | `ALTEGIO_API_TOKEN` (the name is the `--token-secret` parameter) | Secret Manager | the platform | no |
+| Secret, proxy key | `MCP_PROXY_BACKEND_KEY` (the name is the `--proxy-key-secret` parameter) | Secret Manager | the platform | no |
+| E-mail channel | `altegio-me-mcp-owner` | Cloud Monitoring | this project | yes (`--user-labels`) |
+| Uptime check, service | `altegio-me-mcp-health` | Cloud Monitoring | this project | yes |
+| Uptime check, public route | `altegio-me-mcp-public` (only with `--public-check`) | Cloud Monitoring | this project | yes |
+| Alert policy, down | `altegio-me-mcp-down` | Cloud Monitoring | this project | yes (`userLabels`) |
+| Log-based metrics | `altegio_me_mcp_upstream_unauthorized`, `altegio_me_mcp_upstream_rate_limited`, `altegio_me_mcp_upstream_unavailable` | Cloud Logging | this project | no: the metric has a description that names the app |
+| Alert policies, upstream | `altegio-me-mcp-upstream-unauthorized`, `altegio-me-mcp-upstream-rate-limited`, `altegio-me-mcp-upstream-unavailable` | Cloud Monitoring | this project | yes |
+| Drill objects (temporary) | `altegio-me-mcp-alert-drill` (check and policy) | Cloud Monitoring | this project | yes; deleted after each drill |
+
+Cost attribution by label therefore works for Cloud Run only. Everything else is found by name.
+The platform lists the monitoring objects in its own `ops/MONITORING.md`; a PR for that file is
+prepared with the owner and approved by her.
+
+## Access needed (I6)
+
+Someone with these rights runs the setup once. The recommended way is a platform engineer
+running `--apply` with the owner watching; the owner can also run it herself if the platform
+grants the rights.
+
+| Need | Roles that cover it |
+| --- | --- |
+| Create the two service accounts | `roles/iam.serviceAccountAdmin` |
+| Create the Cloud Run service, set its IAM and turn the invoker check off | `roles/run.admin` |
+| Link the repository and create the trigger on connection `Altegio` | `roles/cloudbuild.builds.editor`, plus the Cloud Build GitHub App allowed to see the repository |
+| Create checks, policies and the channel | `roles/monitoring.editor` |
+| Create the three log-based metrics | `roles/logging.configWriter` |
+| Bind the runtime account on the two secrets | `secretmanager.secrets.setIamPolicy` on those two secrets (for example `roles/secretmanager.admin` scoped to them) |
+| Bind the build account on the repository `cloud-run` | `artifactregistry.repositories.setIamPolicy` on that repository |
+| The one project-level binding (`roles/logging.logWriter` for the build account) | a project IAM administrator |
+| Read-only checks of the step 0 preflight and the step 7 report | project viewer, secret metadata viewer, and read of the `_Default` log bucket |
+
+The script never enables an API, never changes the log bucket, and never reads a secret payload.
+Also ask the platform: whether the `cloud-run` repository may be shared (see
+`## Known limits`), which developer account issued the token in `ALTEGIO_API_TOKEN` (the
+expected answer is account 2630; if it is another account, stop and tell the owner), and what the
+real `_Default` log retention is.
+
+## Bootstrap
+
+`scripts/gcp/bootstrap.sh` is idempotent: every step checks before it creates, so a second run
+creates nothing. It is bash 3.2 compatible, so the macOS `/bin/bash` runs it.
+
+1. `--print` is the review artifact. It prints every write the script would make, in order, and
+   never calls gcloud. Give this output to the platform engineer.
+
+   ```bash
+   bash scripts/gcp/bootstrap.sh --print --owner-email ADDRESS
+   ```
+
+2. `--plan` (the default) is read-only. It checks the project, the APIs, the repository, the
+   connection and the two secrets, then lists what is missing and what it would run. It exits 1
+   with a `BLOCKER` line when a prerequisite is missing, or when an existing trigger or service
+   runs as an account other than ours (the default compute account has secret access in this
+   project; our trigger and service must never use it).
+
+   ```bash
+   bash scripts/gcp/bootstrap.sh --plan
+   ```
+
+3. `--apply` creates only what is missing.
+
+   ```bash
+   bash scripts/gcp/bootstrap.sh --apply --owner-email ADDRESS
+   ```
+
+Parameters: `--token-secret NAME` (default `ALTEGIO_API_TOKEN`; the answer to which secret holds
+the account 2630 token, set on both the runtime binding and the trigger substitution
+`_TOKEN_SECRET`), `--proxy-key-secret NAME` (default `MCP_PROXY_BACKEND_KEY`), `--project`,
+`--region`, `--skip-secret-bindings` (a platform engineer binds the two secrets separately; the
+script then prints and runs no secret binding), `--public-check` (after the platform route is
+live), `--drill`, `--drill-cleanup`. The owner's address is a parameter only. It is not written to
+any file, and the script file contains no address.
+
+What the steps do, in order: (0) read-only preflight; (1) the two service accounts; (2) the
+runtime account reads the two secrets, at secret level only; (3) the build account gets
+`roles/logging.logWriter` on the project (with `--condition=None`), `roles/artifactregistry.writer`
+on the repository, and `roles/iam.serviceAccountUser` on the runtime account; (4) the Cloud Run
+service, then `roles/run.developer` for the build account on that service only; (5) the repository
+link and the trigger; (6) the owner's e-mail channel, the checks, the three log-based metrics and
+the policies; (7) a read-only report with the service URL, the trigger's account, the `_Default`
+retention in days and whether the owner's channel is verified.
+
+The build account has no secret access and no right to create or change other services. It starts
+without `roles/cloudbuild.builds.builder`. Add that role only if the build log does not appear in
+the Cloud Build console. Add `roles/secretmanager.viewer` on the two secrets for the build account
+only if the first deploy fails while validating `--set-secrets`; never `secretAccessor`.
+
+**The single exception to the git-only deploy rule.** Production changes reach Cloud Run only
+through the Cloud Build trigger on a merge to `main`. Step (4) runs `gcloud run deploy` once, and
+only while the service is missing, from Google's placeholder image
+`us-docker.pkg.dev/cloudrun/container/hello`. It never deploys our image. It exists because the
+build account (`roles/run.developer`) cannot turn the invoker IAM check off, and the trigger's
+`--no-traffic` deploy needs an existing service to update (research Pitfalls 8 and 9). The
+placeholder page is public until the first merge deploys our code. Every revision of our code
+comes only from the trigger. When the service exists, step (4) changes at most one setting: it
+turns the invoker check off if it is on.
+
+Before the first `--apply`, check that the Cloud Build GitHub App installation on the `altegio`
+organisation can see the repository `altegio/altegio-me-mcp`. If the App was installed for selected
+repositories only, an organisation admin adds the repository first; otherwise the repository link
+fails.
+
+If a binding fails right after an account was created, wait a minute and run the script again:
+IAM changes propagate with a delay, and a rerun skips what already exists.
+
+## Trigger from the Console
+
+If `gcloud builds triggers create github` returns `INVALID_ARGUMENT` (it often does for
+repositories on a second-generation connection), create the trigger in the Console and run
+`--plan` afterwards to confirm it:
+
+1. Cloud Build, Triggers, region `europe-west1`, Create trigger.
+2. Name `altegio-me-mcp-deploy`. Event: push to a branch.
+3. Source: 2nd gen, connection `Altegio`, repository `altegio-me-mcp`. Branch `^main$`.
+4. Configuration: Cloud Build configuration file, location `/cloudbuild.yaml`.
+5. Ignored files filter: `docs/**`, `**/*.md`, `.github/**`, `scripts/**`. A merge that changes
+   only those paths starts no build; every other change does.
+6. Substitution variables: `_TOKEN_SECRET` and `_PROXY_KEY_SECRET` with the secret names in use.
+7. Service account: choose the build account `altegio-me-mcp-build` of project `altegio-mcp`
+   **explicitly**. Leaving the field empty runs the build as a default account.
+8. Verify, read-only:
+
+   ```bash
+   gcloud builds triggers describe altegio-me-mcp-deploy --region=europe-west1 --project=altegio-mcp --format='value(serviceAccount)'
+   ```
+
+   The value must be `projects/altegio-mcp/serviceAccounts/` followed by the build account's
+   address (`altegio-me-mcp-build`, then `@`, then `altegio-mcp.iam.gserviceaccount.com`).
+
+## Deploy flow
+
+Merge to `main`, then the trigger runs `cloudbuild.yaml` as the build account:
+
+| Step | What it does | If it fails |
+| --- | --- | --- |
+| `build`, `push` | Builds the image and pushes only the commit tag `:$SHORT_SHA` into `cloud-run` | The Dockerfile or the repository rights are wrong. No traffic is affected |
+| `clear-stale-tags` | Removes tags left by an earlier failed run | The service is missing or the build account lacks `run.developer`. Run the bootstrap `--plan` |
+| `deploy-tagged` | Deploys a revision with `--no-traffic` under the tag `b$SHORT_SHA`, with the runtime account and the two secrets mounted as files | A flag or a secret mount is rejected. If the message is about validating `--set-secrets`, see the `secretmanager.viewer` note in `## Bootstrap` |
+| `smoke-tagged` | `scripts/smoke-url.sh` on the tag URL: `/health` reports this commit, and an unsigned `POST /mcp` is refused with 401 | The revision started wrong: a missing secret mount, a wrong commit, or the proxy check off. The revision gets no traffic; fix and merge again |
+| `shift` | Moves traffic to the tag only if that revision is still the latest created one | "No longer the latest created revision" means a newer build exists; that build will shift traffic. Nothing to do |
+| `untag` | Removes the tag so no second instance keeps running | A leftover tag keeps a second instance running and billed until the next build's first step clears it |
+
+A failed run never takes traffic. If a failed run leaves a tag and you do not want to wait for the
+next merge, clearing it by hand (`gcloud run services update-traffic altegio-me-mcp --clear-tags
+--region=europe-west1 --project=altegio-mcp`) needs the owner's approval, like any manual change
+to the service. Note the date and the reason in `## Deployment record`.
+
+## Rollback
+
+A rollback is a revert PR: revert the bad commit on a branch, open a PR, wait for the required
+`test` check, merge. The merge goes through the same trigger, the same smoke test and the same
+guarded shift, so the previous behaviour returns by the normal path.
+
+Emergency only, and only with the owner's approval: move traffic to a known good revision by hand.
+
+```bash
+gcloud run revisions list --service=altegio-me-mcp --region=europe-west1 --project=altegio-mcp
+gcloud run services update-traffic altegio-me-mcp --to-revisions=<previous>=100 --region=europe-west1 --project=altegio-mcp
+```
+
+Follow it at once with the revert PR: the next merge deploys a new revision and shifts traffic to
+it, which would bring the bad code back if the revert is not in. Record the move in
+`## Deployment record`.
+
+## Secret rotation
+
+Both secrets are mounted as files and the service re-reads them; nothing is restarted.
+
+- **Partner token** (`ALTEGIO_API_TOKEN` or the secret named by `--token-secret`): the file is
+  re-read lazily within 60 seconds of a request. A 401 or 403 from Altegio forces one re-read (at
+  most once per 60 seconds) and one retry with the new value. To rotate, add a new secret version.
+  The token is shared with the Altegio.Pro MCP; the platform coordinates its rotation.
+- **Proxy key** (`MCP_PROXY_BACKEND_KEY` or the secret named by `--proxy-key-secret`): the file
+  holds a comma-separated list during a rotation. Follow the platform's sequence: `old,new` (both
+  accepted), then the platform's proxy switches to signing with the new key (`new,old`), then
+  `new` alone once nothing signs with the old one. Each key is at least 32 characters.
+- The alert `altegio-me-mcp-upstream-unauthorized` (3 refusals in 5 minutes) means Altegio refuses
+  the token on real calls while `/health` and `tools/list` stay green. Check whether the token was
+  revoked or rotated without a new secret version reaching the service; read the call log for
+  `upstream_kind="unauthorized"` first.
+
+## Monitoring
+
+Two uptime checks run every 5 minutes from three regions (`europe`, `usa-iowa`, `asia-pacific`)
+and call no Altegio API:
+
+- `altegio-me-mcp-health`: `GET /health` on the `run.app` host, content `"status":"ok"`. It tests
+  our service alone, so it separates a failing service from a failing proxy.
+- `altegio-me-mcp-public` (created with `--public-check` after the platform route is live): `POST
+  tools/list` to `https://mcp.alteg.io/me` with `Accept: application/json, text/event-stream`,
+  content `business_get`. It tests the proxy, the route, the signature and the service together.
+
+Policy `altegio-me-mcp-down` counts failing locations per host and fires when more than one
+location fails for 10 minutes, so a blip from one region does not page. Three more policies feed
+on log-based metrics built from the `mcp_call` lines (`upstream_kind` is a closed enum): at least 3
+`unauthorized` in 5 minutes, at least 10 `rate_limited` in 10 minutes, at least 10 `unavailable` in
+10 minutes. They exist because `/health` and `tools/list` stay green while a revoked token fails
+every real call.
+
+All four policies notify only the owner's e-mail channel `altegio-me-mcp-owner`. The script
+attaches no other channel, and the platform's autoheal channel must never be attached: a fault in
+our service must not reset the platform's VMs.
+
+Cost: about $3 a month for two checks at 5 minutes (about 51,840 executions a month at roughly
+$0.30 per 1,000, with the project's free tier already used by the platform's own checks). One
+minute would cost about 12 times as much (about $140 a month), which is why the period is 5.
+Detection takes 5 to 10 minutes.
+
+An unverified e-mail channel may need the owner to confirm a mail. The step 7 report shows its
+verification status; the drill proves delivery.
+
+## Alert drill
+
+Proves that a failing check reaches the owner's inbox without taking the service down.
+
+```bash
+bash scripts/gcp/bootstrap.sh --drill
+```
+
+`--drill` implies `--apply`. It creates `altegio-me-mcp-alert-drill`, a `/health` check with a
+content matcher that can never match (period 1 minute), and a drill policy of the same shape on the
+same e-mail channel. It then waits up to 15 minutes, polling every 60 seconds and printing what the
+check reports and a link to the Console incident list (gcloud has no command that lists
+incidents). Press Enter in an interactive terminal to end it early once the mail has arrived. It
+deletes both objects at the end, also when interrupted. The real check and the real policy are not
+touched, so a real outage during a drill still pages through the real policy.
+
+1. Run the drill and watch the owner's inbox for the incident mail.
+2. Confirm that the incident opened, and that it closed after the delete.
+3. If no mail arrives, confirm the channel's verification status (step 7 of the bootstrap) and
+   confirm the mail address with the owner.
+4. If a drill was cut off hard and left objects behind, `bash scripts/gcp/bootstrap.sh
+   --drill-cleanup` removes them.
+
+Record the date and the result in `## Deployment record`.
+
+## Public route checks
+
+Run these once the platform's `/me` route exists, in this order.
+
+1. Before the first public request, confirm that the platform's log-based metric
+   `mcp_proxy_upstream_502` excludes both `/me` and `/me/mcp`. A fault in our service must not feed
+   the platform's autoheal. This reads the metric's definition and changes nothing:
+
+   ```bash
+   gcloud logging metrics describe mcp_proxy_upstream_502 --project=altegio-mcp --format='value(filter)'
+   ```
+
+   The filter must exclude the short address `https://mcp.alteg.io/me` and the long form
+   `https://mcp.alteg.io/me/mcp`. The documented filter requires the URL to end in `/mcp`, so the
+   short form is not matched by it unless it is excluded or the pattern is widened. If either
+   address is not excluded, stop and ask the platform to add the exclusion.
+
+2. The public path: `bash scripts/smoke-url.sh --public https://mcp.alteg.io/me` (initialize and
+   `tools/list` answer 200, no `mcp-session-id`, no redirect, and the protected-resource metadata
+   route is 404).
+3. The direct `run.app` address must refuse an unsigned call with 401:
+   `bash scripts/smoke-url.sh <run.app URL> <commit>` checks `/health` and that refusal.
+4. Create the public check and add it to the down policy by running the bootstrap again with
+   `--public-check`.
+
+## Live load run
+
+The live scenario spends the partner token that the Altegio.Pro MCP also uses.
+
+- Announce the run to the Altegio.Pro MCP maintainers first, with the time window.
+- `npm run loadtest -- --scenario=live --confirm-announced` refuses to start without
+  `--confirm-announced`. It uses the read-only tools without `book_check`, on location 726120, runs
+  at most 180 seconds, and is capped at 2.7 upstream calls per second (90 percent of the gate).
+- Hard stop: the run ends at the first busy or not-accepted tool error and at the first HTTP 401,
+  429 or 5xx. Do not rerun after a stop without finding the cause and telling the maintainers.
+- The results file goes under the ignored `loadtest-output/` directory; summarize it in the
+  deployment record.
+
+## Known limits
+
+- **`run.app` cannot be closed to the proxy.** Internal ingress admits only callers inside the
+  same project's VPC, and the platform's proxy reaches a `run.app` address through public egress; an
+  IAM invoker rule would need the proxy to send an ID token, which its https lane does not do. The
+  service therefore runs with `--ingress=all` and the invoker check off, and relies on the proxy
+  signature check on `/mcp` (`/health` stays open). Tagged revision URLs are public for the same
+  reason.
+- **`roles/artifactregistry.writer` is repository-wide** in the shared repository `cloud-run`: the
+  build account could overwrite another image's tag there. The residual risk is controlled by the
+  trigger running only on `main`, behind the required `test` check, and by pushing only the
+  commit-SHA tag. If the platform objects, the fallback is a repository of our own.
+- **No static egress IP.** Cloud Run egress uses dynamic Google addresses, so Altegio's per-IP
+  limits cannot be relied on to be per service; the gate's budget is shared and conservative.
+- **One instance and the rollout overlap.** The service runs with a minimum and a maximum of one
+  instance, so the request gate and the edge limiter are exact. During a rollout the tagged revision
+  runs next to the serving one for a short time, and two gates briefly share the upstream budget.
+- **The shared proxy key** widens who holds it. The service has no VPC egress, so it cannot reach
+  the platform's VM backends, which bounds the impact; a key issued for this route is preferred.
+
+## Deployment record
+
+Filled in at each live step (first bootstrap, first deploy, drill, public route, live load run,
+rollbacks and manual changes). Empty until the first live run.
+
+| Date | Step | Revision | Commit | Who ran it | Result |
+| --- | --- | --- | --- | --- | --- |
+|  |  |  |  |  |  |
