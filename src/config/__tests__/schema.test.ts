@@ -88,6 +88,16 @@ describe('loadConfig defaults and required keys', () => {
       LOG_LEVEL: 'info',
       NODE_ENV: 'production',
       PROXY_AUTH: 'off',
+      TRUSTED_PROXY_HOPS: 1,
+      SHARED_EGRESS_CIDRS: ['160.79.104.0/21'],
+      EXTRA_ALLOWED_ORIGINS: ['https://claude.ai', 'https://claude.com'],
+      EDGE_MAX_INFLIGHT: 60,
+      EDGE_MAX_INFLIGHT_PER_IP: 6,
+      EDGE_IP_BURST: 40,
+      EDGE_IP_REFILL_PER_SEC: 3,
+      EDGE_POOL_BURST: 200,
+      EDGE_POOL_REFILL_PER_SEC: 20,
+      GATE_MAX_QUEUE_PER_KEY: 8,
     });
   });
 
@@ -266,6 +276,16 @@ describe('ConfigError reporting', () => {
       MCP_PROXY_BACKEND_KEY: 'short',
       MCP_PROXY_BACKEND_KEY_FILE: 'relative/path',
       COMMIT_SHA: 'NOT-HEX',
+      TRUSTED_PROXY_HOPS: '-1',
+      SHARED_EGRESS_CIDRS: 'not-a-cidr',
+      EXTRA_ALLOWED_ORIGINS: 'ftp://x',
+      EDGE_MAX_INFLIGHT: '0',
+      EDGE_MAX_INFLIGHT_PER_IP: '0',
+      EDGE_IP_BURST: '0',
+      EDGE_IP_REFILL_PER_SEC: '0',
+      EDGE_POOL_BURST: '0',
+      EDGE_POOL_REFILL_PER_SEC: '0',
+      GATE_MAX_QUEUE_PER_KEY: '0',
     });
     expect(error.issues.map((issue) => issue.key)).toEqual(
       CONFIG_KEYS.filter((key) => key !== 'ALTEGIO_API_TOKEN')
@@ -305,6 +325,16 @@ describe('ConfigError reporting', () => {
       MCP_PROXY_BACKEND_KEY: `${canary}`,
       MCP_PROXY_BACKEND_KEY_FILE: `${canary}-file`,
       COMMIT_SHA: `${canary}-sha`,
+      TRUSTED_PROXY_HOPS: `${canary}-hops`,
+      SHARED_EGRESS_CIDRS: `${canary}-cidr`,
+      EXTRA_ALLOWED_ORIGINS: `${canary}-origins`,
+      EDGE_MAX_INFLIGHT: `${canary}-a`,
+      EDGE_MAX_INFLIGHT_PER_IP: `${canary}-b`,
+      EDGE_IP_BURST: `${canary}-c`,
+      EDGE_IP_REFILL_PER_SEC: `${canary}-d`,
+      EDGE_POOL_BURST: `${canary}-e`,
+      EDGE_POOL_REFILL_PER_SEC: `${canary}-f`,
+      GATE_MAX_QUEUE_PER_KEY: `${canary}-g`,
     });
     const text = `${formatConfigError(error)}\n${error.message}\n${JSON.stringify(
       error.issues
@@ -614,4 +644,126 @@ describe('loadConfig partner token settings (OPS-04, D-05)', () => {
       loadConfig({ ...WITHOUT_TOKEN, ALTEGIO_API_TOKEN: 'x' })
     ).toMatchObject({ ALTEGIO_API_TOKEN: 'x' });
   });
+});
+
+describe('loadConfig edge protection and origin settings (OPS-06, OPS-08)', () => {
+  const POSITIVE_INTEGERS = [
+    'EDGE_MAX_INFLIGHT',
+    'EDGE_MAX_INFLIGHT_PER_IP',
+    'EDGE_IP_BURST',
+    'EDGE_POOL_BURST',
+    'GATE_MAX_QUEUE_PER_KEY',
+  ] as const;
+  const POSITIVE_NUMBERS = [
+    'EDGE_IP_REFILL_PER_SEC',
+    'EDGE_POOL_REFILL_PER_SEC',
+  ] as const;
+
+  it('loads the documented defaults from .env.example', () => {
+    expect(loadConfig(readEnvExample())).toMatchObject({
+      TRUSTED_PROXY_HOPS: 1,
+      SHARED_EGRESS_CIDRS: ['160.79.104.0/21'],
+      EXTRA_ALLOWED_ORIGINS: ['https://claude.ai', 'https://claude.com'],
+      EDGE_MAX_INFLIGHT: 60,
+      EDGE_MAX_INFLIGHT_PER_IP: 6,
+      EDGE_IP_BURST: 40,
+      EDGE_IP_REFILL_PER_SEC: 3,
+      EDGE_POOL_BURST: 200,
+      EDGE_POOL_REFILL_PER_SEC: 20,
+      GATE_MAX_QUEUE_PER_KEY: 8,
+    });
+  });
+
+  it.each(POSITIVE_INTEGERS)('accepts %s as a positive integer', (key) => {
+    expect(loadConfig({ ...VALID, [key]: '12' })).toMatchObject({ [key]: 12 });
+    expect(issueKeys({ ...VALID, [key]: '0' })).toEqual([key]);
+    expect(issueKeys({ ...VALID, [key]: '1.5' })).toEqual([key]);
+    expect(issueKeys({ ...VALID, [key]: '-3' })).toEqual([key]);
+    expect(configErrorFor({ ...VALID, [key]: 'abc' }).issues).toEqual([
+      { key, message: 'must be a positive integer' },
+    ]);
+  });
+
+  it.each(POSITIVE_NUMBERS)('accepts %s as a positive number', (key) => {
+    expect(loadConfig({ ...VALID, [key]: '2.5' })).toMatchObject({
+      [key]: 2.5,
+    });
+    expect(issueKeys({ ...VALID, [key]: '0' })).toEqual([key]);
+    expect(issueKeys({ ...VALID, [key]: '-1' })).toEqual([key]);
+    expect(configErrorFor({ ...VALID, [key]: 'fast' }).issues).toEqual([
+      { key, message: 'must be a positive number' },
+    ]);
+  });
+
+  it('accepts TRUSTED_PROXY_HOPS from zero and rejects a negative or fractional count', () => {
+    expect(loadConfig({ ...VALID, TRUSTED_PROXY_HOPS: '0' })).toMatchObject({
+      TRUSTED_PROXY_HOPS: 0,
+    });
+    expect(loadConfig({ ...VALID, TRUSTED_PROXY_HOPS: '3' })).toMatchObject({
+      TRUSTED_PROXY_HOPS: 3,
+    });
+    for (const bad of ['-1', '1.5', 'one']) {
+      expect(
+        configErrorFor({ ...VALID, TRUSTED_PROXY_HOPS: bad }).issues
+      ).toEqual([
+        {
+          key: 'TRUSTED_PROXY_HOPS',
+          message: 'must be a non-negative integer',
+        },
+      ]);
+    }
+  });
+
+  it('reads SHARED_EGRESS_CIDRS as a comma list of IPv4 and IPv6 CIDRs', () => {
+    expect(
+      loadConfig({
+        ...VALID,
+        SHARED_EGRESS_CIDRS: '160.79.104.0/21, 2001:db8::/32',
+      })
+    ).toMatchObject({
+      SHARED_EGRESS_CIDRS: ['160.79.104.0/21', '2001:db8::/32'],
+    });
+  });
+
+  it.each(['not-a-cidr', '160.79.104.0', '160.79.104.0/33', '1.2.3.4/8,x'])(
+    'rejects the CIDR list %s with a fixed message that echoes no input',
+    (bad) => {
+      const expected = [
+        {
+          key: 'SHARED_EGRESS_CIDRS',
+          message:
+            'must be a comma-separated list of IPv4 or IPv6 CIDRs, for example 160.79.104.0/21',
+        },
+      ];
+      expect(
+        configErrorFor({ ...VALID, SHARED_EGRESS_CIDRS: bad }).issues
+      ).toEqual(expected);
+    }
+  );
+
+  it('reads EXTRA_ALLOWED_ORIGINS as a comma list and keeps only each origin', () => {
+    expect(
+      loadConfig({
+        ...VALID,
+        EXTRA_ALLOWED_ORIGINS: 'https://a.example/, http://b.example:8080',
+      })
+    ).toMatchObject({
+      EXTRA_ALLOWED_ORIGINS: ['https://a.example', 'http://b.example:8080'],
+    });
+  });
+
+  it.each(['ftp://x', 'claude.ai', 'https://claude.ai,not a url'])(
+    'rejects the origin list %s with a fixed message that echoes no input',
+    (bad) => {
+      expect(
+        configErrorFor({ ...VALID, EXTRA_ALLOWED_ORIGINS: bad }).issues
+      ).toEqual([
+        {
+          key: 'EXTRA_ALLOWED_ORIGINS',
+          message:
+            'must be a comma-separated list of http(s) origins, for example https://claude.ai',
+        },
+      ]);
+    }
+  );
 });

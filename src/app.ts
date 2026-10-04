@@ -1,3 +1,4 @@
+import type { BlockList } from 'node:net';
 import express, {
   type Express,
   type NextFunction,
@@ -33,6 +34,16 @@ export interface AppDeps<D> {
   proxyAuth?: { keys: () => readonly string[]; now?: () => number } | null;
   // The deployed commit, reported by /health.
   commit?: string | null;
+  // Edge abuse protection for POST /mcp (OPS-06): the client identity step and
+  // the limiter built by createEdgeLimiter(). Absent or null leaves both off.
+  edge?: {
+    limiter: RequestHandler;
+    identity: {
+      trustedHops: number;
+      proxyAuthOn: boolean;
+      sharedEgress: BlockList;
+    };
+  } | null;
 }
 
 interface JsonRpcErrorBody {

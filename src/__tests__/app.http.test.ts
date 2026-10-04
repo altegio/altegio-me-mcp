@@ -6,6 +6,8 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { PACKAGE_VERSION } from '../util/package-metadata.js';
 import { PROXY_AUTH_HEADER } from '../security/proxy-auth.js';
 import { createApp } from '../app.js';
+import { createSharedEgressList } from '../security/client-ip.js';
+import { createEdgeLimiter } from '../security/edge-limiter.js';
 import { defineTool } from '../tools/factory.js';
 import {
   ALLOWED_ORIGIN,
@@ -699,5 +701,180 @@ describe('secrets as a function, evaluated once per request (OPS-04, SEC-03)', (
     const app = await startApp({ secrets: [OLD_SECRET] });
     const body = await echoed(app.baseUrl, OLD_SECRET);
     expect(body).not.toContain(OLD_SECRET);
+  });
+});
+
+describe('edge limiter on POST /mcp (OPS-06)', () => {
+  const KEY = 'edge-test-key-0123456789abcdef0123456789abcdef';
+  const FIXED_NOW = 1_700_000_000_000;
+  const CLIENT = '203.0.113.7';
+  const XFF_ADDRESSES = ['198.51.100.9', '34.1.1.1'];
+
+  function edgeFor(proxyAuthOn: boolean, trustedHops = 1) {
+    return {
+      limiter: createEdgeLimiter({ now: () => FIXED_NOW }),
+      identity: {
+        trustedHops,
+        proxyAuthOn,
+        sharedEgress: createSharedEgressList(['160.79.104.0/21']),
+      },
+    };
+  }
+
+  function signed(
+    headers: Record<string, string> = {}
+  ): Record<string, string> {
+    return {
+      ...headers,
+      [PROXY_AUTH_HEADER]: signProxyRequest({
+        key: KEY,
+        method: 'POST',
+        path: '/mcp',
+        headers,
+      }),
+    };
+  }
+
+  async function sendMany(
+    baseUrl: string,
+    headersFor: (index: number) => Record<string, string>,
+    count: number
+  ): Promise<Response[]> {
+    const responses: Response[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const res = await postMcp(baseUrl, toolsListBody(), headersFor(index));
+      await res.text();
+      responses.push(res);
+    }
+    return responses;
+  }
+
+  it('answers the 41st signed POST from one address with 429, Retry-After and the JSON-RPC body', async () => {
+    const harness = await startApp({
+      proxyAuth: { keys: () => [KEY] },
+      edge: edgeFor(true),
+    });
+    const headers = signed({ 'x-mcp-auth-client-ip': CLIENT });
+    const responses = await sendMany(harness.baseUrl, () => headers, 40);
+    expect(responses.every((res) => res.status === 200)).toBe(true);
+
+    const limited = await postMcp(harness.baseUrl, toolsListBody(), headers);
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('retry-after')).toBe('1');
+    expect(await limited.json()).toEqual({
+      jsonrpc: '2.0',
+      error: {
+        code: -32000,
+        message:
+          'Too many requests. Next: wait 1 seconds, then repeat the request.',
+      },
+      id: null,
+    });
+    const logs = await waitForLogs(harness, 41);
+    expect(logs.at(-1)?.limited_by).toBe('ip');
+    expect(logs.at(-1)?.http_status).toBe(429);
+  });
+
+  it('does not limit 41 addresses inside 160.79.104.0/21, one pool', async () => {
+    const harness = await startApp({
+      proxyAuth: { keys: () => [KEY] },
+      edge: edgeFor(true),
+    });
+    const responses = await sendMany(
+      harness.baseUrl,
+      (index) =>
+        signed({
+          'x-mcp-auth-client-ip': `160.79.${String(104 + (index % 8))}.${String(index + 1)}`,
+        }),
+      41
+    );
+    expect(responses.map((res) => res.status)).toEqual(
+      Array<number>(41).fill(200)
+    );
+    const logs = await waitForLogs(harness, 41);
+    expect(logs.every((line) => line.limited_by === null)).toBe(true);
+  });
+
+  it('refuses an unsigned request with a forged client address before the limiter runs', async () => {
+    const reached = jest.fn();
+    const harness = await startApp({
+      proxyAuth: { keys: () => [KEY] },
+      edge: {
+        ...edgeFor(true),
+        limiter: (_req, _res, next) => {
+          reached();
+          next();
+        },
+      },
+    });
+    const res = await postMcp(harness.baseUrl, toolsListBody(), {
+      'x-mcp-auth-client-ip': CLIENT,
+    });
+    expect(res.status).toBe(401);
+    expect(reached).not.toHaveBeenCalled();
+  });
+
+  it('limits a signed request that names no address under the single key unknown', async () => {
+    const harness = await startApp({
+      proxyAuth: { keys: () => [KEY] },
+      edge: edgeFor(true),
+    });
+    const responses = await sendMany(harness.baseUrl, () => signed(), 41);
+    expect(responses.slice(0, 40).every((res) => res.status === 200)).toBe(
+      true
+    );
+    expect(responses[40]?.status).toBe(429);
+  });
+
+  it('with PROXY_AUTH off keys on the right-counted X-Forwarded-For entry and ignores a forged signed header', async () => {
+    const harness = await startApp({ edge: edgeFor(false) });
+    const responses = await sendMany(
+      harness.baseUrl,
+      (index) => ({
+        'x-forwarded-for': `${String(index + 1)}.2.3.4, ${CLIENT}, 34.1.1.1`,
+        'x-mcp-auth-client-ip': `198.51.100.${String(index + 1)}`,
+      }),
+      41
+    );
+    expect(responses[39]?.status).toBe(200);
+    expect(responses[40]?.status).toBe(429);
+  });
+
+  it('records forwarded_for_count and writes no address to any log line', async () => {
+    const harness = await startApp({
+      proxyAuth: { keys: () => [KEY] },
+      edge: edgeFor(true),
+    });
+    const withForwarded = signed({ 'x-mcp-auth-client-ip': CLIENT });
+    for (let index = 0; index < 41; index += 1) {
+      const res = await postMcp(harness.baseUrl, toolsListBody(), {
+        ...withForwarded,
+        'x-forwarded-for': `1.2.3.4, ${XFF_ADDRESSES.join(', ')}`,
+      });
+      await res.text();
+    }
+    const poolRes = await postMcp(
+      harness.baseUrl,
+      toolsListBody(),
+      signed({ 'x-mcp-auth-client-ip': '160.79.104.9' })
+    );
+    await poolRes.text();
+
+    const logs = await waitForLogs(harness, 42);
+    expect(logs).toHaveLength(42);
+    expect(
+      logs.slice(0, 41).every((line) => line.forwarded_for_count === 3)
+    ).toBe(true);
+    expect(logs[41]?.forwarded_for_count).toBeNull();
+    expect(logs.some((line) => line.limited_by === 'ip')).toBe(true);
+    const text = JSON.stringify(logs);
+    for (const address of [
+      CLIENT,
+      '1.2.3.4',
+      '160.79.104.9',
+      ...XFF_ADDRESSES,
+    ]) {
+      expect(text).not.toContain(address);
+    }
   });
 });
