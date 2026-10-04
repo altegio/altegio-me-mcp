@@ -105,19 +105,27 @@ describe('tier 1 simulation: the gate against the measuring upstream (OPS-07)', 
   // One minute of window slack: the rolling window can hold 180 starts that
   // began in the minute before the first one counted.
   const MAX_STARTS = DEFAULT_GATE_OPTIONS.perMinute * (MINUTES + 1);
+  // The simulation takes about a second alone, but a cold ts-jest cache and
+  // parallel suites on a two-core runner stretched the 10x step past Jest's
+  // default 5 s once. The limit is only a hang guard.
+  const SIMULATION_TIMEOUT_MS = 30_000;
 
-  it('at the expected peak for 10 simulated minutes: at most 5 starts per second, 200 per minute, no upstream 429', async () => {
-    const result = await simulatePeak({ multiplier: 1, minutes: MINUTES });
-    expect(result.toolCalls).toBeGreaterThan(1000);
-    expect(result.upstream.starts).toBeGreaterThan(1000);
-    expect(result.upstream.max1s).toBeLessThanOrEqual(5);
-    expect(result.upstream.max60s).toBeLessThanOrEqual(200);
-    expect(result.upstream.served429).toBe(0);
-    expect(result.unexpected).toEqual([]);
-    expect(result.ok + result.busy).toBe(result.toolCalls);
-    // The peak sits at about 97% of the ceiling, so most calls are answered.
-    expect(result.ok / result.toolCalls).toBeGreaterThan(0.8);
-  });
+  it(
+    'at the expected peak for 10 simulated minutes: at most 5 starts per second, 200 per minute, no upstream 429',
+    async () => {
+      const result = await simulatePeak({ multiplier: 1, minutes: MINUTES });
+      expect(result.toolCalls).toBeGreaterThan(1000);
+      expect(result.upstream.starts).toBeGreaterThan(1000);
+      expect(result.upstream.max1s).toBeLessThanOrEqual(5);
+      expect(result.upstream.max60s).toBeLessThanOrEqual(200);
+      expect(result.upstream.served429).toBe(0);
+      expect(result.unexpected).toEqual([]);
+      expect(result.ok + result.busy).toBe(result.toolCalls);
+      // The peak sits at about 97% of the ceiling, so most calls are answered.
+      expect(result.ok / result.toolCalls).toBeGreaterThan(0.8);
+    },
+    SIMULATION_TIMEOUT_MS
+  );
 
   it.each([2, 10])(
     'at %ix the peak the excess is shed as busy tool errors and adds no upstream starts',
@@ -134,12 +142,17 @@ describe('tier 1 simulation: the gate against the measuring upstream (OPS-07)', 
       expect(result.ok).toBeGreaterThan(0);
       expect(result.unexpected).toEqual([]);
       expect(result.ok + result.busy).toBe(result.toolCalls);
-    }
+    },
+    SIMULATION_TIMEOUT_MS
   );
 
-  it('is deterministic for one seed', async () => {
-    const first = await simulatePeak({ multiplier: 2, minutes: 2, seed: 7 });
-    const second = await simulatePeak({ multiplier: 2, minutes: 2, seed: 7 });
-    expect(second).toEqual(first);
-  });
+  it(
+    'is deterministic for one seed',
+    async () => {
+      const first = await simulatePeak({ multiplier: 2, minutes: 2, seed: 7 });
+      const second = await simulatePeak({ multiplier: 2, minutes: 2, seed: 7 });
+      expect(second).toEqual(first);
+    },
+    SIMULATION_TIMEOUT_MS
+  );
 });
