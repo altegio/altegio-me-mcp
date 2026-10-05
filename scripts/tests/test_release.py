@@ -139,6 +139,14 @@ class ReleaseTests(unittest.TestCase):
 
 
 class ApiPollingTests(unittest.TestCase):
+    def test_build_uuid_tag_is_unique_and_fits_service_dns_label(self):
+        first = r.tag_for_owner('5c3f284f-e917-45e2-b259-28b7dc58ca69')
+        other = r.tag_for_owner('5c3f284f-e917-45e2-b259-28b7dc58ca68')
+        self.assertNotEqual(first, other)
+        self.assertEqual(len(first), 27)
+        self.assertLessEqual(len(first + '---altegio-me-mcp-brg2k7l5ma-ew'), 63)
+
+
     def test_service_scoped_permission_never_reads_regional_operations(self):
         api = r.Api('project', 'region', 'service')
         calls = []

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Serialized, fail-closed Cloud Run release; no additional IAM or datastore."""
+import base64
 import copy
 import json
 import os
@@ -8,6 +9,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 PREFIX = 'altegio.io/'
 LOCK = PREFIX + 'release-owner'
@@ -181,6 +183,12 @@ class Release:
             self.cleanup()
 
 
+def tag_for_owner(owner):
+    # Keep the tagged run.app DNS label below 63 characters without discarding
+    # any of the unique build UUID's 128 bits.
+    return 'b' + base64.b32encode(uuid.UUID(owner).bytes).decode().rstrip('=').lower()
+
+
 def main():
     project, region, service, owner, commit = sys.argv[1:6]
     command = sys.argv[6:]
@@ -188,7 +196,7 @@ def main():
         sequence = json.load(source)['sequence']
     if not isinstance(sequence, int) or sequence < 1:
         raise RuntimeError('Invalid release sequence')
-    tag = 'b' + owner
+    tag = tag_for_owner(owner)
     def deploy():
         subprocess.run(command + ['--tag=' + tag, '--revision-suffix=' + tag], check=True, timeout=600)
     def smoke(url):
