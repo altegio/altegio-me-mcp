@@ -389,6 +389,10 @@ if has ' run services describe '; then
   else echo altegio-me-mcp; fi
   exit 0
 fi
+if has ' components list '; then
+  if [ "\${STUB_BETA:-1}" = 0 ]; then echo 'Not Installed'; else echo Installed; fi
+  exit 0
+fi
 if has ' monitoring channels list '; then
   if [ "\${STUB_CHANNEL:-0}" = 1 ]; then echo projects/altegio-mcp/notificationChannels/111; fi
   exit 0
@@ -546,6 +550,9 @@ describe('scripts/gcp/bootstrap.sh --print', () => {
     expect(trigger).toContain(
       `--service-account=projects/altegio-mcp/serviceAccounts/${BUILD_EMAIL}`
     );
+    expect(trigger).toContain(
+      '--repository=projects/altegio-mcp/locations/europe-west1/connections/Altegio/repositories/altegio-altegio-me-mcp'
+    );
     expect(trigger).toContain("--branch-pattern='^main$'");
     expect(trigger).toContain('--build-config=cloudbuild.yaml');
     expect(trigger).toContain(
@@ -553,6 +560,15 @@ describe('scripts/gcp/bootstrap.sh --print', () => {
     );
     expect(trigger).toContain(
       '--substitutions=_TOKEN_SECRET=ALTEGIO_API_TOKEN,_PROXY_KEY_SECRET=MCP_PROXY_BACKEND_KEY'
+    );
+  });
+
+  it('links the repository under the id the platform asked for (owner-repo form)', () => {
+    const link = printed()
+      .split('\n')
+      .find((line) => line.startsWith('gcloud builds repositories create'));
+    expect(link).toBe(
+      'gcloud builds repositories create altegio-altegio-me-mcp --remote-uri=https://github.com/altegio/altegio-me-mcp.git --connection=Altegio --region=europe-west1 --project=altegio-mcp'
     );
   });
 
@@ -711,6 +727,9 @@ describe('scripts/gcp/bootstrap.sh --print', () => {
       .split('\n')
       .filter((line) => line.includes('monitoring channels create'));
     expect(channelCreates).toHaveLength(1);
+    expect(channelCreates[0]).toMatch(
+      /^gcloud beta monitoring channels create /
+    );
     expect(channelCreates[0]).toContain('--type=email');
     expect(channelCreates[0]).toContain(`email_address=${OWNER}`);
   });
@@ -798,6 +817,14 @@ describe('scripts/gcp/bootstrap.sh --print', () => {
 });
 
 describe('scripts/gcp/bootstrap.sh with a stubbed gcloud', () => {
+  it('--plan blocks when the gcloud beta component is missing (monitoring channels is not GA)', () => {
+    const run = runBootstrap(['--plan'], { env: { STUB_BETA: '0' } });
+    expect(run.status).toBe(1);
+    expect(run.stdout).toContain(
+      'BLOCKER: gcloud beta component is Not Installed (needed by monitoring channels); run: gcloud components install beta'
+    );
+  });
+
   it('--plan reads only: no write command is ever issued', () => {
     const run = runBootstrap(['--plan'], {
       env: { STUB_CHANNEL: '1' },
