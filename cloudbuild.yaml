@@ -13,13 +13,16 @@
 # Built-ins used: $PROJECT_ID, $SHORT_SHA and $COMMIT_SHA are trigger values.
 # A manual `gcloud builds submit` must pass them itself. Inside a bash script
 # a literal shell variable is written $$VAR so Cloud Build leaves it alone.
+# A built-in inside a substitution VALUE is not expanded (the first trigger
+# build, 2026-10-05, tagged the image with a literal $PROJECT_ID), so _IMAGE
+# writes the project out; the project is fixed by the bootstrap anyway.
 #
 # No secret value is here. The two secrets reach the revision as mounted files
 # (--set-secrets); the server re-reads them (plans 03-05 and 03-08).
 substitutions:
   _REGION: europe-west1
   _SERVICE: altegio-me-mcp
-  _IMAGE: europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run/altegio-me-mcp
+  _IMAGE: europe-west1-docker.pkg.dev/altegio-mcp/cloud-run/altegio-me-mcp
   _RUNTIME_SA: altegio-me-mcp-runtime
   _TOKEN_SECRET: MARKETPLACE_PARTNER_TOKEN
   _PROXY_KEY_SECRET: MCP_PROXY_BACKEND_KEY_ME

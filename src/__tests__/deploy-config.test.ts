@@ -299,7 +299,7 @@ describe('cloudbuild.yaml identity and registry (T-03-31, T-03-32)', () => {
 
   it('pushes into the shared cloud-run repository of the build project', () => {
     expect(substitutions().get('_IMAGE')).toBe(
-      'europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run/altegio-me-mcp'
+      'europe-west1-docker.pkg.dev/altegio-mcp/cloud-run/altegio-me-mcp'
     );
     expect((code.match(/^\s+args: \[push, /gm) ?? []).length).toBe(1);
   });
