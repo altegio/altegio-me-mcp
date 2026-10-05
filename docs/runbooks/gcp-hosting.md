@@ -17,7 +17,7 @@ platform owns it. The label `app=altegio-me-mcp` goes where the resource type su
 | Runtime service account | `altegio-me-mcp-runtime` | `altegio-mcp` | this project | in the description (accounts have no labels) |
 | Build service account | `altegio-me-mcp-build` | `altegio-mcp` | this project | in the description |
 | Cloud Build trigger | `altegio-me-mcp-deploy` | `altegio-mcp`, `europe-west1` | this project | no: triggers have tags, not labels, and the script sets none |
-| Repository link | `altegio-me-mcp` on connection `Altegio` | `europe-west1` | this project (the connection is the platform's) | no |
+| Repository link | `altegio-altegio-me-mcp` on connection `Altegio` (the owner-repo id the platform asked for) | `europe-west1` | this project (the connection is the platform's) | no |
 | Artifact Registry repository | `cloud-run` | `europe-west1` | the platform | no |
 | Secret, partner token | `ALTEGIO_API_TOKEN` (the name is the `--token-secret` parameter) | Secret Manager | the platform | no |
 | Secret, proxy key | `MCP_PROXY_BACKEND_KEY` (the name is the `--proxy-key-secret` parameter) | Secret Manager | the platform | no |
@@ -60,7 +60,9 @@ real `_Default` log retention is.
 ## Bootstrap
 
 `scripts/gcp/bootstrap.sh` is idempotent: every step checks before it creates, so a second run
-creates nothing. It is bash 3.2 compatible, so the macOS `/bin/bash` runs it.
+creates nothing. It is bash 3.2 compatible, so the macOS `/bin/bash` runs it. It needs the Cloud SDK
+`beta` component (`gcloud components install beta`): `gcloud monitoring channels` is not a GA command
+group, and the preflight blocks when the component is missing.
 
 1. `--print` is the review artifact. It prints every write the script would make, in order, and
    never calls gcloud. Give this output to the platform engineer.
@@ -133,7 +135,7 @@ repositories on a second-generation connection), create the trigger in the Conso
 
 1. Cloud Build, Triggers, region `europe-west1`, Create trigger.
 2. Name `altegio-me-mcp-deploy`. Event: push to a branch.
-3. Source: 2nd gen, connection `Altegio`, repository `altegio-me-mcp`. Branch `^main$`.
+3. Source: 2nd gen, connection `Altegio`, repository `altegio-altegio-me-mcp`. Branch `^main$`.
 4. Configuration: Cloud Build configuration file, location `/cloudbuild.yaml`.
 5. Ignored files filter: `docs/**`, `**/*.md`, `.github/**`, `scripts/**`. A merge that changes
    only those paths starts no build; every other change does.

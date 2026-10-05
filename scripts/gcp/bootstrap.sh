@@ -23,6 +23,10 @@
 #                              to 15 minutes, delete both (implies --apply)
 #   --drill-cleanup            delete drill leftovers (implies --apply)
 #
+# Needs the Cloud SDK beta component (gcloud components install beta): the
+# notification channel commands are not a GA command group, and the preflight
+# blocks when the component is missing.
+#
 # What it never does: enable an API, change a log bucket or any project-wide
 # setting, bind anything to another service or another secret, grant a public
 # invoker, read a secret payload, use the project's default compute service
@@ -40,7 +44,7 @@ REGION=europe-west1
 SERVICE=altegio-me-mcp
 AR_REPO=cloud-run
 CONNECTION=Altegio
-REPO_LINK=altegio-me-mcp
+REPO_LINK=altegio-altegio-me-mcp # the link id the platform asked for (owner-repo form)
 REMOTE_URI=https://github.com/altegio/altegio-me-mcp.git
 TRIGGER=altegio-me-mcp-deploy
 RUNTIME_SA_NAME=altegio-me-mcp-runtime
@@ -359,7 +363,7 @@ policy_name() { # prints the policy resource name, or nothing
 }
 
 channel_ref() {
-  value monitoring channels list "--project=$PROJECT" "--filter=displayName=\"$CHANNEL_NAME\"" '--format=value(name)'
+  value beta monitoring channels list "--project=$PROJECT" "--filter=displayName=\"$CHANNEL_NAME\"" '--format=value(name)'
 }
 
 service_host() {
@@ -373,12 +377,13 @@ TRIGGER_EXISTS=0
 SERVICE_EXISTS=0
 
 preflight() {
-  local enabled api label secret
+  local enabled api label secret state
   head_line "step 0: read-only preflight (project, APIs, repo, connection, secrets, existing identities)"
   if [ "$MODE" = print ]; then
     head_line "  checked by --plan and --apply, listed here for review; APIs are reported, never enabled"
     head_line "  project $PROJECT reachable"
     head_line "  APIs on: run, cloudbuild, artifactregistry, secretmanager, monitoring, logging, iam"
+    head_line "  gcloud beta component installed (monitoring channels is not a GA command group)"
     head_line "  Artifact Registry repository $AR_REPO and connection $CONNECTION exist"
     head_line "  secrets $TOKEN_SECRET and $PROXY_KEY_SECRET exist (metadata only, no payload is read)"
     head_line "  an existing trigger runs as $BUILD_SA_NAME and an existing service as $RUNTIME_SA_NAME"
@@ -402,6 +407,15 @@ ${api}.googleapis.com
       *) block "API ${api}.googleapis.com is not enabled; this script never enables APIs, ask a platform engineer" ;;
     esac
   done
+
+  # The notification channel commands are not a GA command group (SDK 587 has
+  # dashboards, policies, snoozes and uptime only); they need the beta component.
+  state=$(value components list --filter=id:beta '--format=value(state.name)')
+  if [ "$state" = Installed ]; then
+    say "ok: gcloud beta component is installed (monitoring channels)"
+  else
+    block "gcloud beta component is ${state:-not found} (needed by monitoring channels); run: gcloud components install beta"
+  fi
 
   if ! has_value "Artifact Registry repository $AR_REPO" artifacts repositories describe "$AR_REPO" "--location=$REGION" "--project=$PROJECT" '--format=value(name)'; then
     block "Artifact Registry repository $AR_REPO is missing; this script never creates it"
@@ -579,7 +593,7 @@ step_monitoring() {
     say "ok: notification channel $CHANNEL_NAME"
   else
     if [ "$MODE" != print ]; then say "missing: notification channel $CHANNEL_NAME"; fi
-    gwrite monitoring channels create "--display-name=$CHANNEL_NAME" --type=email "--channel-labels=email_address=$OWNER_EMAIL_SHOWN" "--user-labels=$APP_LABEL"
+    gwrite beta monitoring channels create "--display-name=$CHANNEL_NAME" --type=email "--channel-labels=email_address=$OWNER_EMAIL_SHOWN" "--user-labels=$APP_LABEL"
     if [ "$MODE" = apply ]; then
       CHANNEL_REF=$(channel_ref)
       if [ -z "$CHANNEL_REF" ]; then
@@ -676,7 +690,7 @@ step_report() {
   say "trigger account: ${account:-not created yet}"
   retention=$(value logging buckets describe _Default --location=global "--project=$PROJECT" '--format=value(retentionDays)')
   say "_Default log retention (days): ${retention:-unknown}"
-  verification=$(value monitoring channels list "--project=$PROJECT" "--filter=displayName=\"$CHANNEL_NAME\"" '--format=value(verificationStatus)')
+  verification=$(value beta monitoring channels list "--project=$PROJECT" "--filter=displayName=\"$CHANNEL_NAME\"" '--format=value(verificationStatus)')
   say "owner channel verification: ${verification:-unknown} (an unverified channel needs the owner to confirm a mail)"
 }
 
