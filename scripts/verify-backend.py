@@ -12,6 +12,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 base, commit = sys.argv[1:]
 if not base.startswith('https://'):
@@ -26,13 +27,17 @@ if len(key) < 32:
 def request(path, payload=None, signed=True):
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream'}
     if payload is not None and signed:
+        request_id = str(uuid.uuid4())
+        headers['x-mcp-auth-request-id'] = request_id
         seconds = int(time.time())
-        mac = hmac.new(key.encode(), f'mcp-proxy-auth/v1\n{seconds}\nPOST\n{path}'.encode(), hashlib.sha256).hexdigest()
+        mac = hmac.new(key.encode(), f'mcp-proxy-auth/v1\n{seconds}\nPOST\n{path}\nx-mcp-auth-request-id:{request_id}'.encode(), hashlib.sha256).hexdigest()
         headers['x-mcp-proxy-auth'] = f'v1:{seconds}:{mac}'
     req = urllib.request.Request(base.rstrip('/') + path, headers=headers,
                                  data=None if payload is None else json.dumps(payload).encode())
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
+            if payload is not None and signed:
+                assert response.headers.get('x-request-id') == headers['x-mcp-auth-request-id'], 'signed correlation mismatch'
             return response.status, response.headers, json.load(response)
     except urllib.error.HTTPError as error:
         return error.code, error.headers, {}
