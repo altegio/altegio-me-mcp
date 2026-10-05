@@ -1,7 +1,7 @@
 // Controlled TLS-terminating trusted proxy. Uses the production container,
 // real v1 HMAC format and mounted key; no HTTP harness or auth-off seam.
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import process from 'node:process';
@@ -43,6 +43,7 @@ if (process.env.VERIFY_UNSIGNED !== '0') {
 
 const key = readFileSync('/tmp/proxy-key', 'utf8').trim();
 const cert = readFileSync('/tmp/fixture-cert.pem');
+const signedIds = [];
 const proxy = https.createServer(
   {
     cert,
@@ -50,8 +51,12 @@ const proxy = https.createServer(
   },
   (req, res) => {
     const seconds = Math.floor(Date.now() / 1000);
+    const requestId = randomUUID();
+    signedIds.push(requestId);
     const mac = createHmac('sha256', key)
-      .update(`mcp-proxy-auth/v1\n${seconds}\n${req.method}\n${req.url}`)
+      .update(
+        `mcp-proxy-auth/v1\n${seconds}\n${req.method}\n${req.url}\nx-mcp-auth-request-id:${requestId}`
+      )
       .digest('hex');
     // Drop caller-supplied identity and signature before signing our upstream.
     const headers = Object.fromEntries(
@@ -68,6 +73,7 @@ const proxy = https.createServer(
         headers: {
           ...headers,
           'x-forwarded-proto': 'https',
+          'x-mcp-auth-request-id': requestId,
           'x-mcp-proxy-auth': `v1:${seconds}:${mac}`,
         },
       },
@@ -127,10 +133,12 @@ try {
     },
   });
   assert.equal(init.status, 200);
+  assert.equal(init.headers['x-request-id'], signedIds[0]);
   assert.equal(init.body.result.protocolVersion, '2025-11-25');
   assert.equal(init.headers['mcp-session-id'], undefined);
   const list = await post({ jsonrpc: '2.0', id: 102, method: 'tools/list' });
   assert.equal(list.status, 200);
+  assert.equal(list.headers['x-request-id'], signedIds[1]);
   assert.equal(list.headers['mcp-session-id'], undefined);
   assert.deepEqual(list.body.result.tools.map((tool) => tool.name).sort(), [
     'book_check',

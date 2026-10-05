@@ -1043,3 +1043,62 @@ describe('client key into the tool context (IN-06)', () => {
     expect(text).not.toContain('160.79.104.9');
   });
 });
+
+describe('verified proxy request correlation', () => {
+  const key = 'request-correlation-test-key-0123456789abcdef';
+  const requestId = '11223344-5566-4788-9abc-ddeeff001122';
+  function headers(id: string): Record<string, string> {
+    const identity = { 'x-mcp-auth-request-id': id };
+    return {
+      ...identity,
+      [PROXY_AUTH_HEADER]: signProxyRequest({
+        key,
+        method: 'POST',
+        path: '/mcp',
+        headers: identity,
+      }),
+    };
+  }
+
+  it('uses the signed UUID in the response and backend log', async () => {
+    const harness = await startApp({ proxyAuth: { keys: () => [key] } });
+    const response = await postMcp(
+      harness.baseUrl,
+      toolsListBody(),
+      headers(requestId)
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-request-id')).toBe(requestId);
+    const [line] = await waitForLogs(harness, 1);
+    expect(line?.request_id).toBe(requestId);
+  });
+
+  it('generates its own UUID for an unsigned correlation header', async () => {
+    const harness = await startApp({ proxyAuth: { keys: () => [key] } });
+    const response = await postMcp(harness.baseUrl, toolsListBody(), {
+      'x-mcp-auth-request-id': requestId,
+    });
+    expect(response.status).toBe(401);
+    const own = response.headers.get('x-request-id');
+    expect(own).toMatch(/^[a-f0-9-]{36}$/);
+    expect(own).not.toBe(requestId);
+    const [line] = await waitForLogs(harness, 1);
+    expect(line?.request_id).toBe(own);
+  });
+
+  it('keeps arbitrary signed text out of the response and log', async () => {
+    const harness = await startApp({ proxyAuth: { keys: () => [key] } });
+    const text = 'client-private-text-must-not-be-logged';
+    const response = await postMcp(
+      harness.baseUrl,
+      toolsListBody(),
+      headers(text)
+    );
+    expect(response.status).toBe(200);
+    const own = response.headers.get('x-request-id');
+    expect(own).toMatch(/^[a-f0-9-]{36}$/);
+    const [line] = await waitForLogs(harness, 1);
+    expect(line?.request_id).toBe(own);
+    expect(JSON.stringify(line)).not.toContain(text);
+  });
+});
