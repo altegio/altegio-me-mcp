@@ -64,6 +64,11 @@ PROXY_KEY_SECRET=MCP_PROXY_BACKEND_KEY
 # Drill pacing, overridable so the stubbed test does not wait a quarter hour.
 DRILL_POLL_SECONDS="${BOOTSTRAP_DRILL_POLL_SECONDS:-60}"
 DRILL_MAX_POLLS="${BOOTSTRAP_DRILL_MAX_POLLS:-15}"
+# A new log-based metric takes a few minutes to appear in Monitoring, and a
+# policy created before that answers "Cannot find metric(s)": apply waits and
+# retries that one error, up to POLICY_RETRY_MAX times.
+POLICY_RETRY_SECONDS="${BOOTSTRAP_POLICY_RETRY_SECONDS:-30}"
+POLICY_RETRY_MAX="${BOOTSTRAP_POLICY_RETRY_MAX:-12}"
 
 # ---- arguments --------------------------------------------------------------
 MODE=''
@@ -340,16 +345,40 @@ metric_condition() { # $1 metric name, $2 threshold (at least), $3 window second
 EOF
 }
 
-# create_policy DISPLAY JSON-TEXT: write the file, print or run the create.
+# create_policy DISPLAY JSON-TEXT: write the file, print or run the create. In
+# apply mode a "Cannot find metric(s)" answer means the log-based metric behind
+# the policy is not visible to Monitoring yet: wait and retry, nothing else.
 create_policy() {
-  local display=$1 json=$2 file="$POLICY_DIR/$1.json"
+  local display=$1 json=$2 file="$POLICY_DIR/$1.json" attempt=1 out=''
   if [ "$MODE" = print ]; then
     head_line "policy file $display.json"
     printf '%s\n' "$json"
   else
     printf '%s\n' "$json" >"$file"
   fi
-  gwrite monitoring policies create "--policy-from-file=$file"
+  if [ "$MODE" != apply ]; then
+    gwrite monitoring policies create "--policy-from-file=$file"
+    return 0
+  fi
+  while :; do
+    if out=$(gwrite monitoring policies create "--policy-from-file=$file" 2>&1); then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    printf '%s\n' "$out"
+    case "$out" in
+      *"Cannot find metric"*)
+        if [ "$attempt" -ge "$POLICY_RETRY_MAX" ]; then
+          echo "FATAL: the metric behind $display is still not visible to Monitoring after $attempt attempts; run the script again in a few minutes" >&2
+          return 1
+        fi
+        say "waiting ${POLICY_RETRY_SECONDS}s for the log-based metric to appear in Monitoring (attempt $attempt of $POLICY_RETRY_MAX)"
+        sleep "$POLICY_RETRY_SECONDS"
+        attempt=$((attempt + 1))
+        ;;
+      *) return 1 ;;
+    esac
+  done
 }
 
 # ---- lookups ----------------------------------------------------------------

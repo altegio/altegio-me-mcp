@@ -402,7 +402,14 @@ if has ' monitoring uptime list-configs '; then
   if has 'alert-drill' && [ -f "$STUB_STATE/check" ]; then echo projects/altegio-mcp/uptimeCheckConfigs/drill-1; fi
   exit 0
 fi
-if has ' monitoring policies create '; then touch "$STUB_STATE/policy"; exit 0; fi
+if has ' monitoring policies create '; then
+  if [ "\${STUB_POLICY_FAIL_ONCE:-0}" = 1 ] && [ ! -f "$STUB_STATE/policy-failed" ]; then
+    touch "$STUB_STATE/policy-failed"
+    echo 'ERROR: (gcloud.monitoring.policies.create) Projects instance [altegio-mcp] not found: Cannot find metric(s) that match type = "logging.googleapis.com/user/x".' >&2
+    exit 1
+  fi
+  touch "$STUB_STATE/policy"; exit 0
+fi
 if has ' monitoring policies list '; then
   if has 'alert-drill' && [ -f "$STUB_STATE/policy" ]; then echo projects/altegio-mcp/alertPolicies/9; fi
   exit 0
@@ -898,6 +905,25 @@ describe('scripts/gcp/bootstrap.sh with a stubbed gcloud', () => {
         /compute@developer|allUsers|versions access|mcp-autoheal/
       );
     }
+  });
+
+  it('--apply waits for a new log-based metric to appear in Monitoring and retries the policy', () => {
+    const run = runBootstrap(['--apply', '--owner-email', OWNER], {
+      env: {
+        STUB_CHANNEL: '1',
+        STUB_SERVICE: '1',
+        STUB_POLICY_FAIL_ONCE: '1',
+        BOOTSTRAP_POLICY_RETRY_SECONDS: '0',
+      },
+    });
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain(
+      'waiting 0s for the log-based metric to appear in Monitoring (attempt 1 of 12)'
+    );
+    const creates = run.calls.filter((call) =>
+      call.startsWith('monitoring policies create')
+    );
+    expect(creates).toHaveLength(5);
   });
 
   it('--apply creates the service from the placeholder only when it is missing', () => {
