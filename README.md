@@ -208,7 +208,7 @@ business, for example the demo location `722227`, whose booking routes answer al
 widget reports `active: 0`) in `.env`. It parses
 every route with the same schemas as the fixture tests, checks that two identical slot checks
 are both accepted and leave the slot free, and makes at most 20 upstream calls per run, because
-the partner budget is shared with Altegio.Pro MCP. `ALTEGIO_E2E_RECORD=1 npm run test:live`
+the partner budget is shared with marketplace confirmations (developer 2630). `ALTEGIO_E2E_RECORD=1 npm run test:live`
 also refreshes the sanitised recordings in `src/booking/__tests__/fixtures/live/`. The sanitiser
 removes exactly this: the token, e-mail addresses, phone numbers, team-member and contact names,
 addresses, coordinates, business titles and account ids (plus free text, links and image URLs);
@@ -282,8 +282,8 @@ fails when this table and the pipeline differ.
 |---|---|---|
 | Region | `europe-west1` | Belgium |
 | Service | `altegio-me-mcp` | its own Cloud Run service, not a container on a platform VM |
-| Minimum instances | `1` | no cold start in the middle of a chat |
-| Maximum instances | `1` | the request gate and the edge limiter live in one process, so their limits are exact |
+| Minimum instances | `0` | revision minimum; service minimum is 1 for serving capacity |
+| Maximum instances | `1` | revision and service maximum; rollout budgeting is described in the operational contract |
 | CPU | `1` | vCPU, with startup boost; billed per request (CPU throttling on) |
 | Memory | `512Mi` | |
 | Concurrency | `80` | requests per instance; our own cap of 60 in flight answers 429 before Google does |
@@ -292,18 +292,17 @@ fails when this table and the pipeline differ.
 | Runtime account | `altegio-me-mcp-runtime@altegio-mcp.iam.gserviceaccount.com` | reads only the two secrets |
 | Trigger | `altegio-me-mcp-deploy` | region `europe-west1`, runs `/cloudbuild.yaml` on a merge to `main` |
 
-**How a deploy goes.** The trigger builds the image and pushes only the commit tag (the
-repository `cloud-run` is shared with the platform's images, so no moving tag). It deploys a
-revision that takes no traffic, under a tag, and smoke-tests that tag URL with
-`scripts/smoke-url.sh`: `/health` must report this commit and an unsigned `POST /mcp` must be
-refused with 401. Only then does it move traffic, and only if the revision is still the latest
-created one; a revision that fails the smoke test never takes traffic. Rollback is a revert pull
-request through the same trigger. Moving traffic by hand in an emergency needs the owner's
-approval. There is no manual `gcloud run deploy`, with one exception: `scripts/gcp/bootstrap.sh`
-creates the service once, from Google's placeholder image, when it is missing (the build account
-cannot turn the invoker check off, and the trigger's deploy needs a service to update). That is
-the only deploy outside the trigger; our image reaches Cloud Run only through the trigger. Steps,
-failure handling and the alert drill are in the runbook.
+**How a deploy goes.** Increment `release.json.sequence`, merge the checked PR,
+then Cloud Build verifies the production image with a signed HTTPS protocol
+fixture, pushes only the commit tag and serializes candidate deployment,
+liveness/unsigned-rejection checks and explicit traffic promotion using Cloud Run
+etag. Older release numbers cannot overwrite newer releases. Cleanup removes only
+the owning candidate tag; failed production health restores prior traffic.
+Rollback is a forward revert PR with a higher sequence. See
+[the operational contract](docs/runbooks/operations.md) for monitoring/publication
+gates, process allocation, limitations and interrupted-build recovery.
+
+The placeholder service created by `scripts/gcp/bootstrap.sh` is the only deploy outside the Cloud Build trigger.
 
 **Public address and access.** Clients reach the service at `https://mcp.alteg.io/me`, a route on
 the platform proxy (ADR 0002) that forwards to `/mcp`. `GET /health` is readable only on the

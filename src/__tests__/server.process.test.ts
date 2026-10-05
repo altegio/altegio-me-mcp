@@ -244,6 +244,7 @@ describe('node dist/server.js', () => {
       expect(health.status).toBe(200);
       expect(await health.json()).toEqual({
         status: 'ok',
+        service: 'altegio-me-mcp',
         version: PACKAGE_VERSION,
         commit: null,
       });
@@ -678,6 +679,7 @@ describe('node dist/server.js: GET /health commit (OPS-02)', () => {
       const health = await fetch(`http://127.0.0.1:${env.PORT ?? ''}/health`);
       expect(await health.json()).toEqual({
         status: 'ok',
+        service: 'altegio-me-mcp',
         version: PACKAGE_VERSION,
         commit: '0123abc4567def',
       });

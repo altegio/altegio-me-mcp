@@ -126,6 +126,7 @@ export function createProxyAuthMiddleware(opts: {
     // The reason, never the header, goes on the call record (the call log
     // writes it, throttled).
     getCallRecord(res).auth_reason = result.reason;
+    getCallRecord(res).error_type = 'proxy_auth_required';
     res.status(401).json(PROXY_AUTH_REFUSAL);
   };
 }

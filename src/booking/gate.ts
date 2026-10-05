@@ -1,15 +1,10 @@
 import type { GateLike, UpstreamCallOptions } from './http.js';
 
-// Outbound throttle for the Altegio API (BAPI-02, D-03). The API blocks a
-// caller over 5 requests/s or 200 requests/min, and the partner token of
-// developer account 2630 is shared with Altegio.Pro MCP (D-02), so one server
-// process stays below both: one start every 250 ms and at most 180 starts in
-// any rolling 60 seconds. A 429 pauses every caller until the advised time. A
-// caller that would wait past a host timeout is turned away at once.
-//
-// The gate is per process. A scale-out multiplies the effective rate; that
-// limit is recorded for Phase 3 (OPS-06, OPS-07). No dependency: p-throttle is
-// flagged suspicious and bottleneck is unmaintained (02-RESEARCH).
+// Developer 2630 is shared with platform marketplace confirmations, not Pro.
+// Production reserves two process allocations for the serialized rollout:
+// 90 starts/min and 2 starts/sec each, leaving 20/min and 1/sec to marketplace.
+// Cloud Run maxima are scaling controls, not a distributed quota guarantee.
+// See docs/runbooks/operations.md before increasing replica or consumer budgets.
 
 export interface RequestGateOptions {
   /** Minimum time between two starts. */
@@ -32,6 +27,12 @@ export const DEFAULT_GATE_OPTIONS = Object.freeze({
   maxWaitMs: 10_000,
   maxQueue: 40,
   maxQueuePerKey: 8,
+} as const);
+
+export const PRODUCTION_GATE_OPTIONS = Object.freeze({
+  ...DEFAULT_GATE_OPTIONS,
+  minSpacingMs: 500,
+  perMinute: 90,
 } as const);
 
 /** Wait after a 429 that names no time, in seconds. */

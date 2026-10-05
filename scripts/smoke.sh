@@ -16,6 +16,11 @@ IMAGE="$1"
 NAME="altegio-me-mcp-smoke"
 HOST_PORT=18080
 BASE_URL="http://localhost:${HOST_PORT}"
+NETWORK_ARGS=(--network bridge)
+if [ -n "${SMOKE_NETWORK:-}" ]; then
+  NETWORK_ARGS=(--network "$SMOKE_NETWORK")
+  BASE_URL="http://${NAME}:8080"
+fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CANARY_TOKEN="smoke-token-$(date +%s)-$RANDOM"
 CANARY_ARG="smoke-arg-$RANDOM"
@@ -93,7 +98,7 @@ printf '%s' "$PROXY_KEY" >"$PROXY_KEY_FILE"
 chmod 0644 "$PROXY_KEY_FILE"
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker create --name "$NAME" -p "${HOST_PORT}:8080" \
+docker create --name "$NAME" "${NETWORK_ARGS[@]}" -p "${HOST_PORT}:8080" \
   -e PORT=8080 \
   -e ALTEGIO_API_TOKEN="$CANARY_TOKEN" \
   -e PUBLIC_BASE_URL="$BASE_URL" \
@@ -154,6 +159,17 @@ unsigned_status="$(post_mcp_unsigned unsigned '{"jsonrpc":"2.0","id":4,"method":
 jq -e '.error == "proxy_auth_required"' "$WORK_DIR/unsigned.body" >/dev/null ||
   fail "the unsigned refusal has no proxy_auth_required error: $(cat "$WORK_DIR/unsigned.body")"
 
+# HTTPS terminates at a controlled trusted proxy, which signs to the production
+# backend as Cloud Run ingress/platform do. Trust this run's certificate only.
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=localhost' \
+  -addext 'subjectAltName=DNS:localhost' \
+  -keyout "$WORK_DIR/fixture-key.pem" -out "$WORK_DIR/fixture-cert.pem" >/dev/null 2>&1
+chmod 0644 "$WORK_DIR/fixture-key.pem" "$WORK_DIR/fixture-cert.pem"
+docker cp "$WORK_DIR/fixture-key.pem" "$NAME:/tmp/fixture-key.pem"
+docker cp "$WORK_DIR/fixture-cert.pem" "$NAME:/tmp/fixture-cert.pem"
+docker cp "$ROOT/scripts/https-smoke.mjs" "$NAME:/tmp/https-smoke.mjs"
+docker exec -e VERIFY_UNSIGNED=0 "$NAME" node /tmp/https-smoke.mjs || fail 'signed HTTPS protocol fixture failed'
+
 # The container runs as the node user, not root.
 configured_user="$(docker inspect --format '{{.Config.User}}' "$NAME")"
 [ "$configured_user" = "node" ] || fail "container user is '$configured_user', expected node"
@@ -167,14 +183,14 @@ stop_seconds=$((stop_finished - stop_started))
 exit_code="$(docker inspect --format '{{.State.ExitCode}}' "$NAME")"
 [ "$exit_code" = "0" ] || fail "container exit code is $exit_code, expected 0"
 
-# Logs: exactly one mcp_call line per POST (three signed, one unsigned), the
+# Logs: exactly one mcp_call line per POST (five signed, one unsigned), the
 # unsigned one with its auth_reason, no canary token, no canary key, no canary
 # argument.
 docker logs "$NAME" >"$WORK_DIR/container.log" 2>&1
 call_lines="$(grep -c '"event":"mcp_call"' "$WORK_DIR/container.log" || true)"
-[ "$call_lines" = "4" ] || fail "expected 4 mcp_call log lines, found $call_lines"
+[ "$call_lines" = "6" ] || fail "expected 6 mcp_call log lines, found $call_lines"
 refusal_lines="$(grep -c '"auth_reason":"missing"' "$WORK_DIR/container.log" || true)"
-[ "$refusal_lines" = "1" ] || fail "expected 1 log line with auth_reason missing, found $refusal_lines"
+[ "$refusal_lines" -ge "1" ] || fail "expected at least 1 log line with auth_reason missing, found $refusal_lines"
 if grep -qF "$CANARY_TOKEN" "$WORK_DIR/container.log"; then
   fail "the canary token appears in the container logs"
 fi

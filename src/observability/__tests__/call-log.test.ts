@@ -158,14 +158,14 @@ describe('call log fields', () => {
     expect(JSON.stringify(line)).not.toContain('injected');
   });
 
-  it('logs a printable mcp_client of at most 100 characters', async () => {
+  it('logs a closed client category without arbitrary client text', async () => {
     const harness = await startApp();
     const name = `bad\u0000\u001b[31m${'x'.repeat(300)}`;
     await postMcp(harness.baseUrl, initializeBody(name));
     const [line] = await waitForLogs(harness, 1);
     const client = String(line?.mcp_client);
-    expect(client.length).toBeLessThanOrEqual(100);
-    expect(client).toMatch(/^[\x20-\x7E]+$/);
+    expect(client).toBe('other');
+    expect(JSON.stringify(line)).not.toContain(name);
   });
 
   it('logs protocol_version null for a garbage header', async () => {
@@ -321,7 +321,7 @@ describe('outcome from the JSON-RPC response body (WR-05)', () => {
     expect(logs[0]?.outcome).toBe('protocol_error');
     expect(JSON.stringify(logs)).not.toContain(canary);
     const { level: _level, message: _message, ...fields } = logs[0] ?? {};
-    expect(Object.keys(fields)).toHaveLength(15);
+    expect(Object.keys(fields)).toHaveLength(17);
   });
 
   it('counts an array response that contains an error member', async () => {

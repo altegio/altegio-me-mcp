@@ -14,7 +14,6 @@ import {
 import {
   createCallLogMiddleware,
   getCallRecord,
-  printable,
 } from './observability/call-log.js';
 import {
   classifyClient,
@@ -123,13 +122,6 @@ export function allowedOriginsFor(
   return [...new Set([new URL(publicBaseUrl).origin, ...extraOrigins])];
 }
 
-// The host of a refused origin, for the call log: a 403 on the first claude.ai
-// run is then diagnosable from the line alone. An origin that does not parse is
-// logged as it arrived, cleaned the same way.
-function refusedOriginHost(origin: string): string | null {
-  return printable(URL.canParse(origin) ? new URL(origin).host : origin);
-}
-
 export function createApp<D>(deps: AppDeps<D>): Express {
   const app = express();
   app.disable('x-powered-by');
@@ -149,6 +141,7 @@ export function createApp<D>(deps: AppDeps<D>): Express {
   app.get('/health', (_req, res) => {
     res.json({
       status: 'ok',
+      service: deps.name,
       version: deps.version,
       commit: deps.commit ?? null,
     });
@@ -164,7 +157,7 @@ export function createApp<D>(deps: AppDeps<D>): Express {
       next();
       return;
     }
-    getCallRecord(res).origin_host = refusedOriginHost(origin);
+    getCallRecord(res).origin_host = 'untrusted';
     res.status(403).json(rpcError(-32000, 'Forbidden origin'));
   };
 
@@ -214,9 +207,21 @@ export function createApp<D>(deps: AppDeps<D>): Express {
       ? []
       : [createProxyAuthMiddleware(deps.proxyAuth)];
 
+  const identity = {
+    service: deps.name,
+    version: deps.version,
+    commit: deps.commit ?? null,
+  };
+  const bindings = deps.logger.bindings();
+  const callLogger = Object.entries(identity).every(
+    ([key, value]) => bindings[key] === value
+  )
+    ? deps.logger
+    : deps.logger.child(identity);
+
   app.post(
     '/mcp',
-    createCallLogMiddleware(deps.logger, toolNames),
+    createCallLogMiddleware(callLogger, toolNames),
     originGuard,
     ...proxyAuth,
     ...edge,

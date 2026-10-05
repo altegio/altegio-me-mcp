@@ -2,7 +2,7 @@
 // from run.ts so the guards on the live scenario can be tested without starting
 // a container or sending a request.
 //
-// The live scenario spends partner-token budget that Altegio.Pro MCP shares, so
+// The live scenario spends partner-token budget that marketplace confirmations share, so
 // the guards are here and are repeated where the requests are sent (live.ts):
 // it refuses to start without --confirm-announced, caps its duration and rate,
 // and no other scenario may name a remote target or carry the flag (T-03-38).
@@ -12,8 +12,8 @@ export type Scenario = (typeof SCENARIOS)[number];
 
 /** Longest live run, in seconds (plan 03-16 runs a few minutes at most). */
 export const LIVE_MAX_DURATION_SEC = 180;
-/** Fastest live run: 90% of the gate's 3 upstream calls a second. One live tool call is one upstream call. */
-export const LIVE_MAX_RATE_PER_SEC = 2.7;
+/** Fastest live run: 90% of the production gate's 1.5 upstream calls a second. One live tool call is one upstream call. */
+export const LIVE_MAX_RATE_PER_SEC = 1.35;
 export const LIVE_DEFAULT_DURATION_SEC = 120;
 export const LIVE_DEFAULT_RATE_PER_SEC = 1;
 /** The owner's location that the live run reads (read-only routes, no booking). */
@@ -150,7 +150,7 @@ export function parseArgs(argv: readonly string[]): LoadtestArgs {
     // The guard of T-03-38: no flag, no run, no request.
     if (!confirmAnnounced) {
       throw new UsageError(
-        'The live scenario spends partner-token budget shared with Altegio.Pro MCP: it needs --confirm-announced, and the owner must have announced the run first'
+        'The live scenario spends partner-token budget shared with marketplace confirmations (developer 2630): it needs --confirm-announced, and the owner must have announced the run first'
       );
     }
     if (target === null) throw new UsageError('--target is required for live');

@@ -84,6 +84,7 @@ describe('stateless MCP over POST /mcp (tracer)', () => {
       expect(status).toBe(200);
       expect(body).toEqual({
         status: 'ok',
+        service: 'altegio-me-mcp',
         version: PACKAGE_VERSION,
         commit: null,
       });
@@ -107,9 +108,18 @@ describe('stateless MCP over POST /mcp (tracer)', () => {
     expect(logs).toHaveLength(3);
     for (const line of logs) {
       expect(line.event).toBe('mcp_call');
+      expect(line.service).toBe('altegio-me-mcp');
+      expect(line.version).toBe(PACKAGE_VERSION);
+      expect(line.route).toBe('/mcp');
+      expect(line.request_id).toMatch(/^[a-f0-9-]{36}$/);
       const { level: _level, message: _message, ...fields } = line;
       expect(Object.keys(fields).sort()).toEqual(
         [
+          'service',
+          'version',
+          'commit',
+          'request_id',
+          'route',
           'auth_reason',
           'error_type',
           'event',
@@ -648,6 +658,7 @@ describe('proxy-origin signature on POST /mcp (OPS-03, D-04)', () => {
     expect(status).toBe(200);
     expect(body).toEqual({
       status: 'ok',
+      service: 'altegio-me-mcp',
       version: PACKAGE_VERSION,
       commit: '0123abc',
     });
@@ -922,7 +933,7 @@ describe('Origin allow-list for the claude.ai connector (OPS-08)', () => {
     expect(res.status).toBe(403);
     const logs = await waitForLogs(harness, 1);
     expect(logs[0]?.http_status).toBe(403);
-    expect(logs[0]?.origin_host).toBe('evil.example');
+    expect(logs[0]?.origin_host).toBe('untrusted');
   });
 
   it('cuts a long host at 100 characters and drops characters outside printable ASCII', async () => {
@@ -936,8 +947,8 @@ describe('Origin allow-list for the claude.ai connector (OPS-08)', () => {
       origin: 'bad\u00e9origin\u00ffvalue',
     });
     const logs = await waitForLogs(harness, 2);
-    expect(logs[0]?.origin_host).toBe('a'.repeat(100));
-    expect(logs[1]?.origin_host).toBe('badoriginvalue');
+    expect(logs[0]?.origin_host).toBe('untrusted');
+    expect(logs[1]?.origin_host).toBe('untrusted');
   });
 });
 

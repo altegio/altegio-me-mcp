@@ -199,6 +199,8 @@ describe('.github/workflows/ci.yml', () => {
       'Set up Node',
       'Install',
       'Conventional commits',
+      'Release order',
+      'Release race and rollback tests',
       'Lint',
       'Format',
       'Typecheck',
