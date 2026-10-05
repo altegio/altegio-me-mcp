@@ -1,6 +1,6 @@
 {
   "name": "altegio-me-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Remote MCP server that lets clients of Altegio businesses discover services and free time slots from AI assistants and hand off to the booking widget",
