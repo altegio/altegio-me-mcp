@@ -284,6 +284,7 @@ export function createCallLogMiddleware(
 
   return (req, res, next) => {
     const requestId = randomUUID();
+    res.locals.requestId = requestId;
     res.setHeader('x-request-id', requestId);
     const record = createCallRecord();
     res.locals.callRecord = record;
@@ -319,7 +320,7 @@ export function createCallLogMiddleware(
       );
       const line = {
         event: 'mcp_call',
-        request_id: requestId,
+        request_id: res.locals.requestId as string,
         route: '/mcp',
         rpc_method: method,
         tool: toolOf(record, method, body, toolNames),

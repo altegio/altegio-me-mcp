@@ -138,5 +138,55 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(api.state['annotations'][r.LOCK], '1')
 
 
+class ApiPollingTests(unittest.TestCase):
+    def test_build_uuid_tag_is_unique_and_fits_service_dns_label(self):
+        first = r.tag_for_owner('5c3f284f-e917-45e2-b259-28b7dc58ca69')
+        other = r.tag_for_owner('5c3f284f-e917-45e2-b259-28b7dc58ca68')
+        self.assertNotEqual(first, other)
+        self.assertEqual(len(first), 27)
+        self.assertLessEqual(len(first + '---altegio-me-mcp-brg2k7l5ma-ew'), 63)
+
+
+    def test_service_scoped_permission_never_reads_regional_operations(self):
+        api = r.Api('project', 'region', 'service')
+        calls = []
+        states = iter([
+            {'reconciling': True, 'generation': '2', 'observedGeneration': '1'},
+            {'generation': '2', 'observedGeneration': '2',
+             'annotations': {r.LOCK: 'owner'},
+             'terminalCondition': {'state': 'CONDITION_SUCCEEDED'}},
+        ])
+        def request(method, url, data=None):
+            calls.append((method, url))
+            if method == 'PATCH':
+                return {'name': 'projects/project/locations/region/operations/not-readable'}
+            self.assertEqual(url, api.url)
+            return next(states)
+        api.request = request
+        original_sleep = r.time.sleep
+        r.time.sleep = lambda _: None
+        try:
+            api.patch({'etag': 'old'}, annotations={r.LOCK: 'owner'})
+        finally:
+            r.time.sleep = original_sleep
+        self.assertEqual([method for method, _ in calls], ['PATCH', 'GET', 'GET'])
+        self.assertTrue(all('/operations/' not in url for _, url in calls))
+
+    def test_empty_annotation_map_can_be_omitted(self):
+        self.assertTrue(r.field_matches('annotations', {}, None))
+        self.assertFalse(r.field_matches('annotations', {r.LOCK: 'owner'}, None))
+
+    def test_traffic_normalizes_omitted_zero_and_order(self):
+        expected = [{'revision': 'good', 'percent': 100},
+                    {'revision': 'candidate', 'tag': 'owner', 'percent': 0}]
+        actual = [{'revision': 'candidate', 'tag': 'owner',
+                   'type': 'TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION'},
+                  {'revision': 'good', 'percent': 100,
+                   'type': 'TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION'}]
+        self.assertTrue(r.field_matches('traffic', expected, actual))
+        actual[1]['percent'] = 99
+        self.assertFalse(r.field_matches('traffic', expected, actual))
+
+
 if __name__ == '__main__':
     unittest.main()

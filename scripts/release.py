@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Serialized, fail-closed Cloud Run release; no additional IAM or datastore."""
+import base64
 import copy
 import json
 import os
@@ -8,6 +9,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 PREFIX = 'altegio.io/'
 LOCK = PREFIX + 'release-owner'
@@ -46,15 +48,38 @@ class Api:
     def patch(self, service, **fields):
         operation = self.request('PATCH', self.url + '?updateMask=' + ','.join(fields),
             {'name': self.name, 'etag': service['etag'], **fields})
-        deadline = time.monotonic() + 900
-        while not operation.get('done'):
-            if time.monotonic() > deadline:
-                # An unknown operation outcome must retain the lock for recovery.
-                raise TimeoutError('Cloud Run operation unresolved; retain release lock')
-            time.sleep(3)
-            operation = self.request('GET', 'https://run.googleapis.com/v2/' + operation['name'])
         if 'error' in operation:
-            raise RuntimeError('Cloud Run operation failed; inspect operation ' + operation['name'])
+            raise RuntimeError('Cloud Run update rejected')
+        # run.developer is bound to the SERVICE, not its regional operations.
+        # Poll only that service (same permissions as gcloud's v1 deploy path).
+        deadline = time.monotonic() + 900
+        while time.monotonic() <= deadline:
+            current = self.get()
+            settled = (not current.get('reconciling') and
+                       current.get('generation') == current.get('observedGeneration'))
+            if settled:
+                if current.get('terminalCondition', {}).get('state') == 'CONDITION_FAILED':
+                    raise RuntimeError('Cloud Run reconciliation failed; inspect service conditions')
+                if all(field_matches(key, value, current.get(key)) for key, value in fields.items()):
+                    return
+            time.sleep(3)
+        # An unknown operation outcome must retain the lock for recovery.
+        raise TimeoutError('Cloud Run service update unresolved; retain release lock')
+
+
+def field_matches(key, expected, actual):
+    if key == 'annotations':
+        return (expected or {}) == (actual or {})
+    if key == 'traffic':
+        # v2 may omit percent=0/default type and reorder target entries.
+        def normalized(entries):
+            return sorted((entry.get('revision', ''), entry.get('tag', ''),
+                           entry.get('percent', 0), entry.get('type',
+                           'TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION' if entry.get('revision')
+                           else 'TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST'))
+                          for entry in entries or [])
+        return normalized(expected) == normalized(actual)
+    return expected == actual
 
 
 def annotations(service):
@@ -158,6 +183,12 @@ class Release:
             self.cleanup()
 
 
+def tag_for_owner(owner):
+    # Keep the tagged run.app DNS label below 63 characters without discarding
+    # any of the unique build UUID's 128 bits.
+    return 'b' + base64.b32encode(uuid.UUID(owner).bytes).decode().rstrip('=').lower()
+
+
 def main():
     project, region, service, owner, commit = sys.argv[1:6]
     command = sys.argv[6:]
@@ -165,7 +196,7 @@ def main():
         sequence = json.load(source)['sequence']
     if not isinstance(sequence, int) or sequence < 1:
         raise RuntimeError('Invalid release sequence')
-    tag = 'b' + owner
+    tag = tag_for_owner(owner)
     def deploy():
         subprocess.run(command + ['--tag=' + tag, '--revision-suffix=' + tag], check=True, timeout=600)
     def smoke(url):

@@ -120,6 +120,18 @@ export function createProxyAuthMiddleware(opts: {
     });
     if (result.ok) {
       res.locals.proxyVerified = true;
+      const requestId = req.headers['x-mcp-auth-request-id'];
+      // The v1 signature covers this identity header. Never adopt unsigned or
+      // arbitrary free text as a correlation ID in responses or operational logs.
+      if (
+        typeof requestId === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          requestId
+        )
+      ) {
+        res.locals.requestId = requestId;
+        res.setHeader('x-request-id', requestId);
+      }
       next();
       return;
     }

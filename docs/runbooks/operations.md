@@ -75,8 +75,8 @@ replicas would require coordination outside these local gates; none is claimed.
 
 ## Logs
 
-Every `mcp_call` has service, version, commit, generated request_id (also returned
-as `x-request-id`), route `/mcp`, closed rpc_method/tool, http_status, outcome,
+Every `mcp_call` has service, version, commit, request_id (also returned as `x-request-id`): the verified signed platform UUID
+from `x-mcp-auth-request-id`, or a generated UUID for unsigned/invalid headers, route `/mcp`, closed rpc_method/tool, http_status, outcome,
 error_type, latency_ms and nullable limited_by/upstream_kind. Pino emits Cloud
 Logging severity/message. Proxy signatures, credentials, tool arguments/results
 and raw anonymous IPs are absent. Auth-refusal records are throttled; `suppressed`
@@ -94,7 +94,9 @@ script changes must include this root sequence file to trigger a build.
 Cloud Build builds and verifies the image, pushes the commit tag and invokes
 `scripts/release.py` under the existing dedicated build account. Cloud Run v2
 `etag` compare-and-swap acquires annotation `altegio.io/release-owner` and serializes
-the entire deploy/smoke/promote/cleanup section. A lower completed release number
+the entire deploy/smoke/promote/cleanup section. Reconciliation is polled through
+service GET (generation/observedGeneration and desired fields), because the
+service-scoped build account cannot read regional operation resources. A lower completed release number
 cannot deploy or shift traffic. Build order/latest-created revision is irrelevant.
 The tag and revision suffix include the unique build ID, not a reusable short SHA.
 
