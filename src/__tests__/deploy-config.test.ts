@@ -261,8 +261,8 @@ describe('cloudbuild.yaml secrets (OPS-04)', () => {
     expect(raw).toContain('/secrets/altegio-api/token=${_TOKEN_SECRET}:latest');
     expect(raw).toContain('/secrets/proxy-key/key=${_PROXY_KEY_SECRET}:latest');
     const values = substitutions();
-    expect(values.get('_TOKEN_SECRET')).toBe('ALTEGIO_API_TOKEN');
-    expect(values.get('_PROXY_KEY_SECRET')).toBe('MCP_PROXY_BACKEND_KEY');
+    expect(values.get('_TOKEN_SECRET')).toBe('MARKETPLACE_PARTNER_TOKEN');
+    expect(values.get('_PROXY_KEY_SECRET')).toBe('MCP_PROXY_BACKEND_KEY_ME');
   });
 
   it('never pulls a secret into an environment variable', () => {
@@ -566,7 +566,7 @@ describe('scripts/gcp/bootstrap.sh --print', () => {
       "--ignored-files='docs/**,**/*.md,.github/**,scripts/**'"
     );
     expect(trigger).toContain(
-      '--substitutions=_TOKEN_SECRET=ALTEGIO_API_TOKEN,_PROXY_KEY_SECRET=MCP_PROXY_BACKEND_KEY'
+      '--substitutions=_TOKEN_SECRET=MARKETPLACE_PARTNER_TOKEN,_PROXY_KEY_SECRET=MCP_PROXY_BACKEND_KEY_ME'
     );
   });
 
@@ -610,7 +610,7 @@ describe('scripts/gcp/bootstrap.sh --print', () => {
     for (const line of lines) {
       expect(line).toContain(`--member=serviceAccount:${RUNTIME_EMAIL}`);
       expect(line).toMatch(
-        /secrets add-iam-policy-binding (ALTEGIO_API_TOKEN|MCP_PROXY_BACKEND_KEY) /
+        /secrets add-iam-policy-binding (MARKETPLACE_PARTNER_TOKEN|MCP_PROXY_BACKEND_KEY_ME) /
       );
     }
     expect(printed()).not.toContain(
@@ -668,12 +668,12 @@ describe('scripts/gcp/bootstrap.sh --print', () => {
   });
 
   it('--token-secret changes both the runtime binding and the trigger substitution', () => {
-    const output = printed(['--token-secret', 'MARKETPLACE_PARTNER_TOKEN']);
+    const output = printed(['--token-secret', 'ALTEGIO_API_TOKEN']);
     expect(output).toContain(
-      'secrets add-iam-policy-binding MARKETPLACE_PARTNER_TOKEN '
+      'secrets add-iam-policy-binding ALTEGIO_API_TOKEN '
     );
-    expect(output).toContain('_TOKEN_SECRET=MARKETPLACE_PARTNER_TOKEN,');
-    expect(output).not.toContain('ALTEGIO_API_TOKEN');
+    expect(output).toContain('_TOKEN_SECRET=ALTEGIO_API_TOKEN,');
+    expect(output).not.toContain('MARKETPLACE_PARTNER_TOKEN');
   });
 
   it('--skip-secret-bindings prints no secret binding', () => {

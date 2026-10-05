@@ -21,8 +21,8 @@ substitutions:
   _SERVICE: altegio-me-mcp
   _IMAGE: europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run/altegio-me-mcp
   _RUNTIME_SA: altegio-me-mcp-runtime
-  _TOKEN_SECRET: ALTEGIO_API_TOKEN
-  _PROXY_KEY_SECRET: MCP_PROXY_BACKEND_KEY
+  _TOKEN_SECRET: MARKETPLACE_PARTNER_TOKEN
+  _PROXY_KEY_SECRET: MCP_PROXY_BACKEND_KEY_ME
   _PUBLIC_BASE_URL: https://mcp.alteg.io/me
 
 steps:

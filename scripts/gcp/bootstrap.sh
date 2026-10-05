@@ -12,8 +12,8 @@
 #       Creates only what is missing.
 #
 # Other flags:
-#   --token-secret NAME        secret holding the partner token (ALTEGIO_API_TOKEN)
-#   --proxy-key-secret NAME    secret holding the proxy key (MCP_PROXY_BACKEND_KEY)
+#   --token-secret NAME        secret holding the partner token (MARKETPLACE_PARTNER_TOKEN)
+#   --proxy-key-secret NAME    secret holding the proxy key (MCP_PROXY_BACKEND_KEY_ME)
 #   --project ID               GCP project (altegio-mcp)
 #   --region NAME              region (europe-west1)
 #   --skip-secret-bindings     a platform engineer binds the two secrets apart
@@ -58,8 +58,8 @@ DRILL_POLICY=altegio-me-mcp-alert-drill
 PLACEHOLDER_IMAGE=us-docker.pkg.dev/cloudrun/container/hello
 APP_LABEL=app=altegio-me-mcp
 CHECK_REGIONS=europe,usa-iowa,asia-pacific
-TOKEN_SECRET=ALTEGIO_API_TOKEN
-PROXY_KEY_SECRET=MCP_PROXY_BACKEND_KEY
+TOKEN_SECRET=MARKETPLACE_PARTNER_TOKEN # holds the account-2630 token (verified by hash 2026-10-05)
+PROXY_KEY_SECRET=MCP_PROXY_BACKEND_KEY_ME # the key issued for the /me route
 
 # Drill pacing, overridable so the stubbed test does not wait a quarter hour.
 DRILL_POLL_SECONDS="${BOOTSTRAP_DRILL_POLL_SECONDS:-60}"
