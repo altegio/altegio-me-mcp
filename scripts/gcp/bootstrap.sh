@@ -316,7 +316,9 @@ $3
 EOF
 }
 
-metric_condition() { # $1 metric name, $2 threshold, $3 window seconds
+# The alerting API accepts only COMPARISON_LT and COMPARISON_GT (no GE), so
+# "at least N" on the integer counter is GT with the threshold N - 1.
+metric_condition() { # $1 metric name, $2 threshold (at least), $3 window seconds
   cat <<EOF
     {
       "displayName": "$1 at or above $2 in $3 seconds",
@@ -329,8 +331,8 @@ metric_condition() { # $1 metric name, $2 threshold, $3 window seconds
             "crossSeriesReducer": "REDUCE_SUM"
           }
         ],
-        "comparison": "COMPARISON_GE",
-        "thresholdValue": $2,
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": $(( $2 - 1 )),
         "duration": "0s",
         "trigger": { "count": 1 }
       }

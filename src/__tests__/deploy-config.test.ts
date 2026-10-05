@@ -734,6 +734,12 @@ describe('scripts/gcp/bootstrap.sh --print', () => {
     expect(channelCreates[0]).toContain(`email_address=${OWNER}`);
   });
 
+  it('compares every counter with GT, never GE, which the alerting API rejects', () => {
+    const output = printed();
+    expect(output).not.toContain('COMPARISON_GE');
+    expect(output.match(/"comparison": "COMPARISON_GT"/g)).toHaveLength(4);
+  });
+
   it('counts failing locations per host and fires on more than one (OPS-05 concurrency)', () => {
     const down = printedPolicies(printed(['--public-check']))[0];
     const text = JSON.stringify(down);
@@ -764,11 +770,11 @@ describe('scripts/gcp/bootstrap.sh --print', () => {
     const thresholds = printedPolicies(output)
       .slice(1)
       .map((policy) => JSON.stringify(policy));
-    expect(thresholds[0]).toContain('"thresholdValue":3');
+    expect(thresholds[0]).toContain('"thresholdValue":2');
     expect(thresholds[0]).toContain('"alignmentPeriod":"300s"');
-    expect(thresholds[1]).toContain('"thresholdValue":10');
+    expect(thresholds[1]).toContain('"thresholdValue":9');
     expect(thresholds[1]).toContain('"alignmentPeriod":"600s"');
-    expect(thresholds[2]).toContain('"thresholdValue":10');
+    expect(thresholds[2]).toContain('"thresholdValue":9');
   });
 
   it('exits 2 with a usage line when --owner-email is missing, without calling gcloud', () => {
