@@ -62,6 +62,7 @@ class ReleaseTests(unittest.TestCase):
         def wait(_):
             waiting.set()
             finish.wait(3)
+            old.join(3)
         def run(item):
             try:
                 item.run()
