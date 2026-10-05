@@ -4,12 +4,16 @@ import { getCallRecord } from '../observability/call-log.js';
 import type { DefinedTool } from '../tools/factory.js';
 import { createMcpServer } from './create-server.js';
 
+// A function is evaluated once per request, so a secret that rotated since the
+// last request is already in the list (OPS-04, SEC-03).
+export type SecretList = readonly string[] | (() => readonly string[]);
+
 export interface McpRequestHandlerOptions<D> {
   name: string;
   version: string;
   tools: readonly DefinedTool<D>[];
   toolDeps: D;
-  secrets: readonly string[];
+  secrets: SecretList;
 }
 
 const swallow = (): undefined => undefined;
@@ -38,8 +42,12 @@ export function createMcpRequestHandler<D>(
       specs,
       toolsByName,
       toolDeps: opts.toolDeps,
-      secrets: opts.secrets,
+      secrets:
+        typeof opts.secrets === 'function' ? opts.secrets() : opts.secrets,
       record: getCallRecord(res),
+      // Set by the client identity step (OPS-06); null for the shared pool and
+      // when the edge is off, so the gate's per-key cap never applies to them.
+      clientKey: (res.locals.clientKey as string | null | undefined) ?? null,
     });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

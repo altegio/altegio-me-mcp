@@ -8,10 +8,19 @@ import {
   loadConfig,
 } from '../schema.js';
 
+// PROXY_AUTH defaults to required, which fails without a proxy key, so the
+// shared fixture turns it off explicitly; the proxy-key cases set it themselves.
 const VALID: Record<string, string> = {
   ALTEGIO_API_TOKEN: 'partner-token-value',
   PUBLIC_BASE_URL: 'https://mcp.example.com',
+  PROXY_AUTH: 'off',
 };
+
+const PROXY_KEY = 'proxy-key-0123456789abcdef0123456789abcdef';
+
+// One fixed message names both settings and no value (OPS-04, D-05).
+const TOKEN_REQUIRED =
+  'Partner API token is required (ALTEGIO_API_TOKEN or ALTEGIO_API_TOKEN_FILE)';
 
 function parseDotenv(text: string): Record<string, string> {
   const values: Record<string, string> = {};
@@ -63,7 +72,7 @@ describe('.env.example', () => {
 
 describe('loadConfig defaults and required keys', () => {
   it('reports only the token and the public URL for an empty environment', () => {
-    const error = configErrorFor({});
+    const error = configErrorFor({ PROXY_AUTH: 'off' });
     expect(error.issues.map((issue) => issue.key)).toEqual([
       'ALTEGIO_API_TOKEN',
       'PUBLIC_BASE_URL',
@@ -78,6 +87,17 @@ describe('loadConfig defaults and required keys', () => {
       PUBLIC_BASE_URL: 'https://mcp.example.com',
       LOG_LEVEL: 'info',
       NODE_ENV: 'production',
+      PROXY_AUTH: 'off',
+      TRUSTED_PROXY_HOPS: 1,
+      SHARED_EGRESS_CIDRS: ['160.79.104.0/21'],
+      EXTRA_ALLOWED_ORIGINS: ['https://claude.ai', 'https://claude.com'],
+      EDGE_MAX_INFLIGHT: 60,
+      EDGE_MAX_INFLIGHT_PER_IP: 6,
+      EDGE_IP_BURST: 40,
+      EDGE_IP_REFILL_PER_SEC: 3,
+      EDGE_POOL_BURST: 200,
+      EDGE_POOL_REFILL_PER_SEC: 20,
+      GATE_MAX_QUEUE_PER_KEY: 8,
     });
   });
 
@@ -89,21 +109,24 @@ describe('loadConfig defaults and required keys', () => {
     expect(loadConfig({ ...VALID, PORT: '' }).PORT).toBe(8080);
     const missingToken = configErrorFor({ ...VALID, ALTEGIO_API_TOKEN: '' });
     expect(missingToken.issues).toEqual([
-      { key: 'ALTEGIO_API_TOKEN', message: 'Partner API token is required' },
+      { key: 'ALTEGIO_API_TOKEN', message: TOKEN_REQUIRED },
     ]);
   });
 
   it('treats a whitespace-only token as missing', () => {
     const error = configErrorFor({ ...VALID, ALTEGIO_API_TOKEN: '   ' });
     expect(error.issues).toEqual([
-      { key: 'ALTEGIO_API_TOKEN', message: 'Partner API token is required' },
+      { key: 'ALTEGIO_API_TOKEN', message: TOKEN_REQUIRED },
     ]);
   });
 
   it('gives a missing token the same message as an empty one', () => {
-    const error = configErrorFor({ PUBLIC_BASE_URL: VALID.PUBLIC_BASE_URL });
+    const error = configErrorFor({
+      PUBLIC_BASE_URL: VALID.PUBLIC_BASE_URL,
+      PROXY_AUTH: 'off',
+    });
     expect(error.issues).toEqual([
-      { key: 'ALTEGIO_API_TOKEN', message: 'Partner API token is required' },
+      { key: 'ALTEGIO_API_TOKEN', message: TOKEN_REQUIRED },
     ]);
   });
 
@@ -206,6 +229,7 @@ describe('loadConfig URLs and enums', () => {
         ALTEGIO_API_TOKEN: VALID.ALTEGIO_API_TOKEN,
         ALTEGIO_API_BASE: 'http://api.example.com/api/v1',
         LOG_LEVEL: 'verbose',
+        PROXY_AUTH: 'off',
       })
     ).toEqual(['ALTEGIO_API_BASE', 'PUBLIC_BASE_URL', 'LOG_LEVEL']);
   });
@@ -242,17 +266,37 @@ describe('ConfigError reporting', () => {
       NODE_ENV: 'staging',
       LOG_LEVEL: 'verbose',
       PUBLIC_BASE_URL: 'nope',
-      ALTEGIO_API_TOKEN: '',
+      // Any non-empty token is valid, so this key is the one that cannot fail
+      // while a token file is named.
+      ALTEGIO_API_TOKEN: 'x',
+      ALTEGIO_API_TOKEN_FILE: 'relative/token',
       ALTEGIO_API_BASE: 'nope',
       PORT: 'abc',
+      PROXY_AUTH: 'maybe',
+      MCP_PROXY_BACKEND_KEY: 'short',
+      MCP_PROXY_BACKEND_KEY_FILE: 'relative/path',
+      COMMIT_SHA: 'NOT-HEX',
+      TRUSTED_PROXY_HOPS: '-1',
+      SHARED_EGRESS_CIDRS: 'not-a-cidr',
+      EXTRA_ALLOWED_ORIGINS: 'ftp://x',
+      EDGE_MAX_INFLIGHT: '0',
+      EDGE_MAX_INFLIGHT_PER_IP: '0',
+      EDGE_IP_BURST: '0',
+      EDGE_IP_REFILL_PER_SEC: '0',
+      EDGE_POOL_BURST: '0',
+      EDGE_POOL_REFILL_PER_SEC: '0',
+      GATE_MAX_QUEUE_PER_KEY: '0',
     });
-    expect(error.issues.map((issue) => issue.key)).toEqual([...CONFIG_KEYS]);
+    expect(error.issues.map((issue) => issue.key)).toEqual(
+      CONFIG_KEYS.filter((key) => key !== 'ALTEGIO_API_TOKEN')
+    );
   });
 
   it('formats the failure as a header, one line per issue and a pointer', () => {
     const error = configErrorFor({
       PORT: 'abc',
       PUBLIC_BASE_URL: 'nope',
+      PROXY_AUTH: 'off',
     });
     const lines = formatConfigError(error).split('\n');
     expect(lines[0]).toBe('Invalid configuration:');
@@ -276,6 +320,21 @@ describe('ConfigError reporting', () => {
       LOG_LEVEL: `${canary}-level`,
       NODE_ENV: `${canary}-env`,
       ALTEGIO_API_BASE: `${canary}-base`,
+      ALTEGIO_API_TOKEN_FILE: `${canary}-token-file`,
+      PROXY_AUTH: `${canary}-auth`,
+      MCP_PROXY_BACKEND_KEY: `${canary}`,
+      MCP_PROXY_BACKEND_KEY_FILE: `${canary}-file`,
+      COMMIT_SHA: `${canary}-sha`,
+      TRUSTED_PROXY_HOPS: `${canary}-hops`,
+      SHARED_EGRESS_CIDRS: `${canary}-cidr`,
+      EXTRA_ALLOWED_ORIGINS: `${canary}-origins`,
+      EDGE_MAX_INFLIGHT: `${canary}-a`,
+      EDGE_MAX_INFLIGHT_PER_IP: `${canary}-b`,
+      EDGE_IP_BURST: `${canary}-c`,
+      EDGE_IP_REFILL_PER_SEC: `${canary}-d`,
+      EDGE_POOL_BURST: `${canary}-e`,
+      EDGE_POOL_REFILL_PER_SEC: `${canary}-f`,
+      GATE_MAX_QUEUE_PER_KEY: `${canary}-g`,
     });
     const text = `${formatConfigError(error)}\n${error.message}\n${JSON.stringify(
       error.issues
@@ -285,9 +344,426 @@ describe('ConfigError reporting', () => {
   });
 
   it('gives each issue a fixed, non-empty message', () => {
-    const error = configErrorFor({});
+    const error = configErrorFor({ PROXY_AUTH: 'maybe' });
     for (const issue of error.issues) {
       expect(issue.message.length).toBeGreaterThan(0);
     }
   });
+});
+
+describe('loadConfig proxy signature settings (OPS-03, D-04)', () => {
+  const WITHOUT_PROXY_SETTING: Record<string, string> = {
+    ALTEGIO_API_TOKEN: VALID.ALTEGIO_API_TOKEN ?? '',
+    PUBLIC_BASE_URL: VALID.PUBLIC_BASE_URL ?? '',
+  };
+
+  it('defaults PROXY_AUTH to required', () => {
+    expect(
+      loadConfig({ ...WITHOUT_PROXY_SETTING, MCP_PROXY_BACKEND_KEY: PROXY_KEY })
+        .PROXY_AUTH
+    ).toBe('required');
+  });
+
+  it('fails without PROXY_AUTH and without either key setting, with a fixed message', () => {
+    const error = configErrorFor(WITHOUT_PROXY_SETTING);
+    expect(error.issues).toEqual([
+      {
+        key: 'MCP_PROXY_BACKEND_KEY_FILE',
+        message:
+          'is required when PROXY_AUTH is required: set it to the path of the mounted proxy key file (or set MCP_PROXY_BACKEND_KEY; local runs set PROXY_AUTH=off)',
+      },
+    ]);
+    const text = `${formatConfigError(error)}\n${error.message}`;
+    expect(text).toContain('MCP_PROXY_BACKEND_KEY_FILE');
+    expect(text).not.toContain(WITHOUT_PROXY_SETTING.ALTEGIO_API_TOKEN ?? '');
+  });
+
+  it('treats an empty key and an empty file path as not set', () => {
+    expect(
+      issueKeys({
+        ...WITHOUT_PROXY_SETTING,
+        MCP_PROXY_BACKEND_KEY: '',
+        MCP_PROXY_BACKEND_KEY_FILE: '  ',
+      })
+    ).toEqual(['MCP_PROXY_BACKEND_KEY_FILE']);
+  });
+
+  it('accepts a key file path', () => {
+    const config = loadConfig({
+      ...WITHOUT_PROXY_SETTING,
+      MCP_PROXY_BACKEND_KEY_FILE: '/secrets/proxy-key/key',
+    });
+    expect(config.PROXY_AUTH).toBe('required');
+    expect(config.MCP_PROXY_BACKEND_KEY_FILE).toBe('/secrets/proxy-key/key');
+  });
+
+  it('accepts a key of 32 or more characters, also inside a rotation list', () => {
+    expect(
+      loadConfig({ ...WITHOUT_PROXY_SETTING, MCP_PROXY_BACKEND_KEY: PROXY_KEY })
+        .MCP_PROXY_BACKEND_KEY
+    ).toBe(PROXY_KEY);
+    expect(
+      loadConfig({
+        ...WITHOUT_PROXY_SETTING,
+        MCP_PROXY_BACKEND_KEY: `short,${PROXY_KEY}`,
+      }).MCP_PROXY_BACKEND_KEY
+    ).toBe(`short,${PROXY_KEY}`);
+  });
+
+  it('rejects a key setting with no key of 32 characters, without echoing it', () => {
+    const short = 'too-short-key-value';
+    const error = configErrorFor({
+      ...WITHOUT_PROXY_SETTING,
+      MCP_PROXY_BACKEND_KEY: short,
+    });
+    expect(error.issues).toEqual([
+      {
+        key: 'MCP_PROXY_BACKEND_KEY',
+        message: 'must hold at least one key of 32 or more characters',
+      },
+    ]);
+    expect(formatConfigError(error)).not.toContain(short);
+  });
+
+  it('rejects a relative key file path', () => {
+    expect(
+      issueKeys({
+        ...WITHOUT_PROXY_SETTING,
+        MCP_PROXY_BACKEND_KEY_FILE: 'secrets/key',
+      })
+    ).toEqual(['MCP_PROXY_BACKEND_KEY_FILE']);
+  });
+
+  it('needs no key when PROXY_AUTH is explicitly off', () => {
+    expect(
+      loadConfig({ ...WITHOUT_PROXY_SETTING, PROXY_AUTH: 'off' })
+    ).toMatchObject({ PROXY_AUTH: 'off' });
+  });
+
+  it('rejects an unknown PROXY_AUTH value instead of treating it as off', () => {
+    expect(
+      issueKeys({
+        ...WITHOUT_PROXY_SETTING,
+        PROXY_AUTH: 'false',
+        MCP_PROXY_BACKEND_KEY: PROXY_KEY,
+      })
+    ).toEqual(['PROXY_AUTH']);
+  });
+
+  it.each(['0123abc', 'a'.repeat(40)])('accepts COMMIT_SHA %j', (sha) => {
+    expect(loadConfig({ ...VALID, COMMIT_SHA: sha }).COMMIT_SHA).toBe(sha);
+  });
+
+  it.each(['0123ab', 'a'.repeat(41), '0123ABC', 'zzzzzzz'])(
+    'rejects COMMIT_SHA %j',
+    (sha) => {
+      expect(issueKeys({ ...VALID, COMMIT_SHA: sha })).toEqual(['COMMIT_SHA']);
+    }
+  );
+
+  it('treats an empty COMMIT_SHA as unset', () => {
+    expect(loadConfig({ ...VALID, COMMIT_SHA: '' }).COMMIT_SHA).toBeUndefined();
+  });
+});
+
+describe('loadConfig proxy settings: closed value sets and fixed messages', () => {
+  const WITH_KEY: Record<string, string> = {
+    ALTEGIO_API_TOKEN: VALID.ALTEGIO_API_TOKEN ?? '',
+    PUBLIC_BASE_URL: VALID.PUBLIC_BASE_URL ?? '',
+    MCP_PROXY_BACKEND_KEY: PROXY_KEY,
+  };
+
+  it.each(['required', 'off'])('accepts PROXY_AUTH %j', (mode) => {
+    expect(loadConfig({ ...WITH_KEY, PROXY_AUTH: mode }).PROXY_AUTH).toBe(mode);
+  });
+
+  it.each(['on', 'true', 'false', '0', '1', 'OFF', 'Required', 'disabled'])(
+    'rejects PROXY_AUTH %j instead of reading it as off, with a fixed message',
+    (mode) => {
+      const error = configErrorFor({ ...WITH_KEY, PROXY_AUTH: mode });
+      expect(error.issues).toEqual([
+        { key: 'PROXY_AUTH', message: 'must be one of required, off' },
+      ]);
+    }
+  );
+
+  it.each(['/secrets/proxy-key/key', '/run/secrets/k'])(
+    'accepts the absolute MCP_PROXY_BACKEND_KEY_FILE %j',
+    (path) => {
+      expect(
+        loadConfig({
+          ALTEGIO_API_TOKEN: VALID.ALTEGIO_API_TOKEN ?? '',
+          PUBLIC_BASE_URL: VALID.PUBLIC_BASE_URL ?? '',
+          MCP_PROXY_BACKEND_KEY_FILE: path,
+        }).MCP_PROXY_BACKEND_KEY_FILE
+      ).toBe(path);
+    }
+  );
+
+  it.each(['key', './key', '../key', '~/key', 'secrets/proxy-key/key'])(
+    'rejects the relative MCP_PROXY_BACKEND_KEY_FILE %j with a fixed message',
+    (path) => {
+      const error = configErrorFor({
+        ...VALID,
+        MCP_PROXY_BACKEND_KEY_FILE: path,
+      });
+      expect(error.issues).toEqual([
+        {
+          key: 'MCP_PROXY_BACKEND_KEY_FILE',
+          message: 'must be an absolute file path',
+        },
+      ]);
+      expect(formatConfigError(error)).not.toContain(path);
+    }
+  );
+
+  it('rejects a key list that holds only keys shorter than 32 characters', () => {
+    const shortList = `${'a'.repeat(31)},${'b'.repeat(10)}`;
+    const error = configErrorFor({
+      ...VALID,
+      PROXY_AUTH: 'required',
+      MCP_PROXY_BACKEND_KEY: shortList,
+    });
+    expect(error.issues).toEqual([
+      {
+        key: 'MCP_PROXY_BACKEND_KEY',
+        message: 'must hold at least one key of 32 or more characters',
+      },
+    ]);
+    expect(formatConfigError(error)).not.toContain('aaaa');
+  });
+
+  it('accepts a key of exactly 32 characters', () => {
+    expect(
+      loadConfig({
+        ...VALID,
+        PROXY_AUTH: 'required',
+        MCP_PROXY_BACKEND_KEY: 'k'.repeat(32),
+      }).MCP_PROXY_BACKEND_KEY
+    ).toBe('k'.repeat(32));
+  });
+
+  it('rejects COMMIT_SHA with a fixed message that never echoes it', () => {
+    const sha = 'NOT-A-HEX-VALUE';
+    const error = configErrorFor({ ...VALID, COMMIT_SHA: sha });
+    expect(error.issues).toEqual([
+      {
+        key: 'COMMIT_SHA',
+        message: 'must be 7 to 40 lowercase hexadecimal characters',
+      },
+    ]);
+    expect(formatConfigError(error)).not.toContain(sha);
+  });
+
+  it('never echoes a key, a path or a commit through any message of one failing run', () => {
+    const canary = 'canary-key-9d4e71c2b8a6-do-not-print';
+    const error = configErrorFor({
+      ...VALID,
+      PROXY_AUTH: 'required',
+      MCP_PROXY_BACKEND_KEY: canary.slice(0, 20),
+      MCP_PROXY_BACKEND_KEY_FILE: `relative/${canary}`,
+      COMMIT_SHA: canary,
+    });
+    const text = `${formatConfigError(error)}\n${error.message}\n${JSON.stringify(
+      error.issues
+    )}`;
+    expect(text).not.toContain('canary');
+    expect(text).not.toContain('do-not-print');
+  });
+});
+
+describe('loadConfig partner token settings (OPS-04, D-05)', () => {
+  const WITHOUT_TOKEN: Record<string, string> = {
+    PUBLIC_BASE_URL: VALID.PUBLIC_BASE_URL ?? '',
+    PROXY_AUTH: 'off',
+  };
+  const TOKEN_FILE = '/secrets/altegio-api/token';
+
+  it('accepts ALTEGIO_API_TOKEN_FILE without ALTEGIO_API_TOKEN', () => {
+    const config = loadConfig({
+      ...WITHOUT_TOKEN,
+      ALTEGIO_API_TOKEN_FILE: TOKEN_FILE,
+    });
+    expect(config.ALTEGIO_API_TOKEN_FILE).toBe(TOKEN_FILE);
+    expect(config.ALTEGIO_API_TOKEN).toBeUndefined();
+  });
+
+  it('accepts both settings and keeps both values (the file wins in src/server.ts)', () => {
+    const config = loadConfig({
+      ...VALID,
+      ALTEGIO_API_TOKEN_FILE: TOKEN_FILE,
+    });
+    expect(config.ALTEGIO_API_TOKEN).toBe('partner-token-value');
+    expect(config.ALTEGIO_API_TOKEN_FILE).toBe(TOKEN_FILE);
+  });
+
+  it('fails with neither setting, one issue that names both settings and no value', () => {
+    const error = configErrorFor(WITHOUT_TOKEN);
+    expect(error.issues).toEqual([
+      { key: 'ALTEGIO_API_TOKEN', message: TOKEN_REQUIRED },
+    ]);
+    expect(formatConfigError(error)).toContain(
+      '  - ALTEGIO_API_TOKEN: Partner API token is required (ALTEGIO_API_TOKEN or ALTEGIO_API_TOKEN_FILE)'
+    );
+  });
+
+  it('treats an empty or blank file path as not set', () => {
+    for (const blank of ['', '   ']) {
+      expect(
+        configErrorFor({ ...WITHOUT_TOKEN, ALTEGIO_API_TOKEN_FILE: blank })
+          .issues
+      ).toEqual([{ key: 'ALTEGIO_API_TOKEN', message: TOKEN_REQUIRED }]);
+      expect(
+        loadConfig({ ...VALID, ALTEGIO_API_TOKEN_FILE: blank })
+          .ALTEGIO_API_TOKEN_FILE
+      ).toBeUndefined();
+    }
+  });
+
+  it.each(['token', './token', '../token', '~/token', 'secrets/token'])(
+    'rejects the relative path %s with a fixed message, whether or not a plain token is set',
+    (path) => {
+      const expected = [
+        {
+          key: 'ALTEGIO_API_TOKEN_FILE',
+          message: 'must be an absolute file path',
+        },
+      ];
+      expect(
+        configErrorFor({ ...VALID, ALTEGIO_API_TOKEN_FILE: path }).issues
+      ).toEqual(expected);
+      expect(
+        configErrorFor({ ...WITHOUT_TOKEN, ALTEGIO_API_TOKEN_FILE: path })
+          .issues
+      ).toEqual(expected);
+    }
+  );
+
+  it('keeps the rule for ALTEGIO_API_TOKEN: any non-empty string, as in Altegio.Pro MCP', () => {
+    expect(
+      loadConfig({ ...WITHOUT_TOKEN, ALTEGIO_API_TOKEN: 'x' })
+    ).toMatchObject({ ALTEGIO_API_TOKEN: 'x' });
+  });
+});
+
+describe('loadConfig edge protection and origin settings (OPS-06, OPS-08)', () => {
+  const POSITIVE_INTEGERS = [
+    'EDGE_MAX_INFLIGHT',
+    'EDGE_MAX_INFLIGHT_PER_IP',
+    'EDGE_IP_BURST',
+    'EDGE_POOL_BURST',
+    'GATE_MAX_QUEUE_PER_KEY',
+  ] as const;
+  const POSITIVE_NUMBERS = [
+    'EDGE_IP_REFILL_PER_SEC',
+    'EDGE_POOL_REFILL_PER_SEC',
+  ] as const;
+
+  it('loads the documented defaults from .env.example', () => {
+    expect(loadConfig(readEnvExample())).toMatchObject({
+      TRUSTED_PROXY_HOPS: 1,
+      SHARED_EGRESS_CIDRS: ['160.79.104.0/21'],
+      EXTRA_ALLOWED_ORIGINS: ['https://claude.ai', 'https://claude.com'],
+      EDGE_MAX_INFLIGHT: 60,
+      EDGE_MAX_INFLIGHT_PER_IP: 6,
+      EDGE_IP_BURST: 40,
+      EDGE_IP_REFILL_PER_SEC: 3,
+      EDGE_POOL_BURST: 200,
+      EDGE_POOL_REFILL_PER_SEC: 20,
+      GATE_MAX_QUEUE_PER_KEY: 8,
+    });
+  });
+
+  it.each(POSITIVE_INTEGERS)('accepts %s as a positive integer', (key) => {
+    expect(loadConfig({ ...VALID, [key]: '12' })).toMatchObject({ [key]: 12 });
+    expect(issueKeys({ ...VALID, [key]: '0' })).toEqual([key]);
+    expect(issueKeys({ ...VALID, [key]: '1.5' })).toEqual([key]);
+    expect(issueKeys({ ...VALID, [key]: '-3' })).toEqual([key]);
+    expect(configErrorFor({ ...VALID, [key]: 'abc' }).issues).toEqual([
+      { key, message: 'must be a positive integer' },
+    ]);
+  });
+
+  it.each(POSITIVE_NUMBERS)('accepts %s as a positive number', (key) => {
+    expect(loadConfig({ ...VALID, [key]: '2.5' })).toMatchObject({
+      [key]: 2.5,
+    });
+    expect(issueKeys({ ...VALID, [key]: '0' })).toEqual([key]);
+    expect(issueKeys({ ...VALID, [key]: '-1' })).toEqual([key]);
+    expect(configErrorFor({ ...VALID, [key]: 'fast' }).issues).toEqual([
+      { key, message: 'must be a positive number' },
+    ]);
+  });
+
+  it('accepts TRUSTED_PROXY_HOPS from zero and rejects a negative or fractional count', () => {
+    expect(loadConfig({ ...VALID, TRUSTED_PROXY_HOPS: '0' })).toMatchObject({
+      TRUSTED_PROXY_HOPS: 0,
+    });
+    expect(loadConfig({ ...VALID, TRUSTED_PROXY_HOPS: '3' })).toMatchObject({
+      TRUSTED_PROXY_HOPS: 3,
+    });
+    for (const bad of ['-1', '1.5', 'one']) {
+      expect(
+        configErrorFor({ ...VALID, TRUSTED_PROXY_HOPS: bad }).issues
+      ).toEqual([
+        {
+          key: 'TRUSTED_PROXY_HOPS',
+          message: 'must be a non-negative integer',
+        },
+      ]);
+    }
+  });
+
+  it('reads SHARED_EGRESS_CIDRS as a comma list of IPv4 and IPv6 CIDRs', () => {
+    expect(
+      loadConfig({
+        ...VALID,
+        SHARED_EGRESS_CIDRS: '160.79.104.0/21, 2001:db8::/32',
+      })
+    ).toMatchObject({
+      SHARED_EGRESS_CIDRS: ['160.79.104.0/21', '2001:db8::/32'],
+    });
+  });
+
+  it.each(['not-a-cidr', '160.79.104.0', '160.79.104.0/33', '1.2.3.4/8,x'])(
+    'rejects the CIDR list %s with a fixed message that echoes no input',
+    (bad) => {
+      const expected = [
+        {
+          key: 'SHARED_EGRESS_CIDRS',
+          message:
+            'must be a comma-separated list of IPv4 or IPv6 CIDRs, for example 160.79.104.0/21',
+        },
+      ];
+      expect(
+        configErrorFor({ ...VALID, SHARED_EGRESS_CIDRS: bad }).issues
+      ).toEqual(expected);
+    }
+  );
+
+  it('reads EXTRA_ALLOWED_ORIGINS as a comma list and keeps only each origin', () => {
+    expect(
+      loadConfig({
+        ...VALID,
+        EXTRA_ALLOWED_ORIGINS: 'https://a.example/, http://b.example:8080',
+      })
+    ).toMatchObject({
+      EXTRA_ALLOWED_ORIGINS: ['https://a.example', 'http://b.example:8080'],
+    });
+  });
+
+  it.each(['ftp://x', 'claude.ai', 'https://claude.ai,not a url'])(
+    'rejects the origin list %s with a fixed message that echoes no input',
+    (bad) => {
+      expect(
+        configErrorFor({ ...VALID, EXTRA_ALLOWED_ORIGINS: bad }).issues
+      ).toEqual([
+        {
+          key: 'EXTRA_ALLOWED_ORIGINS',
+          message:
+            'must be a comma-separated list of http(s) origins, for example https://claude.ai',
+        },
+      ]);
+    }
+  );
 });

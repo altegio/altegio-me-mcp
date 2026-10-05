@@ -1,9 +1,11 @@
 import type { z } from 'zod';
-import { SLOT_DATETIME_PATTERN } from './deep-link.js';
+import { calendarDayNumber } from './calendar.js';
+import { parseSlotDatetime } from './deep-link.js';
 import { UpstreamError } from './errors.js';
 import {
   BookingHttp,
   type BookingHttpOptions,
+  type UpstreamCallOptions,
   type UpstreamCallSpec,
 } from './http.js';
 import {
@@ -181,28 +183,15 @@ function assertTeamMemberOrAny(value: number): void {
   }
 }
 
-const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
-
 /**
  * A YYYY-MM-DD date that exists in the calendar. It may become a URL path
  * segment, so nothing else passes (T-02-25).
  */
 function checkedDate(value: string, label: string): string {
-  const match = DATE_PATTERN.exec(value);
-  const [, year, month, day] = match ?? [];
-  if (year !== undefined && month !== undefined && day !== undefined) {
-    const date = new Date(
-      Date.UTC(Number(year), Number(month) - 1, Number(day))
-    );
-    if (
-      date.getUTCFullYear() === Number(year) &&
-      date.getUTCMonth() === Number(month) - 1 &&
-      date.getUTCDate() === Number(day)
-    ) {
-      return value;
-    }
+  if (calendarDayNumber(value) === null) {
+    throw new TypeError(`${label} must be a calendar date in YYYY-MM-DD form`);
   }
-  throw new TypeError(`${label} must be a calendar date in YYYY-MM-DD form`);
+  return value;
 }
 
 function optionalDate(
@@ -212,9 +201,9 @@ function optionalDate(
   return value === undefined ? undefined : checkedDate(value, label);
 }
 
-/** A datetime filter must be a slot datetime as book_times returns it. */
+/** A datetime filter must be a slot datetime as book_times returns it, on a day that exists. */
 function checkedDatetime(datetime: string | undefined): string | undefined {
-  if (datetime !== undefined && !SLOT_DATETIME_PATTERN.test(datetime)) {
+  if (datetime !== undefined && parseSlotDatetime(datetime) === null) {
     throw new TypeError('datetime must be an ISO 8601 slot datetime');
   }
   return datetime;
@@ -326,6 +315,17 @@ function toTeamMember(member: TeamMembersData[number]): TeamMember {
     member.show_rating === null ||
     member.show_rating === undefined ||
     truthy(member.show_rating);
+  // 0 also means nobody has rated the member: that is "no rating", not a bad
+  // one, so an assistant must not steer a client away from them (CR-01).
+  const rating = member.rating;
+  const votes = member.votes_count;
+  const shownRating =
+    ratingShown &&
+    typeof rating === 'number' &&
+    rating > 0 &&
+    (votes === null || votes === undefined || votes > 0)
+      ? rating
+      : null;
   return {
     id: member.id,
     name: member.name,
@@ -335,21 +335,26 @@ function toTeamMember(member: TeamMembersData[number]): TeamMember {
         ? null
         : nonEmpty(position.title),
     bookable: truthy(member.bookable),
-    // A rating the business hides in its widget is not passed on.
-    rating: ratingShown ? (member.rating ?? null) : null,
+    // A rating the business hides, or nobody has given, is not passed on.
+    rating: shownRating,
     nextFreeDate: nonEmpty(member.seance_date),
   };
 }
 
+export type BookingClientOptions = BookingHttpOptions;
+
 export class BookingClient {
   private readonly http: BookingHttp;
 
-  constructor(options: BookingHttpOptions) {
+  constructor(options: BookingClientOptions) {
     this.http = new BookingHttp(options);
   }
 
   /** The business card of one location (DISC-01). */
-  async company(locationId: number): Promise<BusinessCard> {
+  async company(
+    locationId: number,
+    call?: UpstreamCallOptions
+  ): Promise<BusinessCard> {
     assertLocationId(locationId);
     const { route, method } = BOOKING_ROUTES.company;
     const data = await this.read(
@@ -358,6 +363,7 @@ export class BookingClient {
         route,
         path: `/company/${locationId}`,
         query: { forBooking: 1, showBookforms: 1 },
+        ...call,
       },
       companyDataSchema
     );
@@ -371,7 +377,8 @@ export class BookingClient {
    */
   async services(
     locationId: number,
-    filter: ServicesFilter = {}
+    filter: ServicesFilter = {},
+    call?: UpstreamCallOptions
   ): Promise<ServiceCatalog> {
     assertLocationId(locationId);
     if (filter.teamMemberId !== undefined) {
@@ -388,6 +395,7 @@ export class BookingClient {
         // Key order on the wire: staff_id, datetime, then service_ids[].
         query: { staff_id: filter.teamMemberId, datetime },
         serviceIds,
+        ...call,
       },
       servicesDataSchema
     );
@@ -401,7 +409,8 @@ export class BookingClient {
    */
   async teamMembers(
     locationId: number,
-    filter: TeamMembersFilter = {}
+    filter: TeamMembersFilter = {},
+    call?: UpstreamCallOptions
   ): Promise<TeamMember[]> {
     assertLocationId(locationId);
     const datetime = checkedDatetime(filter.datetime);
@@ -414,6 +423,7 @@ export class BookingClient {
         path: `/book_staff/${locationId}`,
         query: { datetime },
         serviceIds,
+        ...call,
       },
       teamMembersDataSchema
     );
@@ -426,7 +436,11 @@ export class BookingClient {
    * booking window applies; date_to is inclusive. Team member 0 or none means
    * any team member, so no staff_id is sent.
    */
-  async dates(locationId: number, filter: DatesFilter = {}): Promise<string[]> {
+  async dates(
+    locationId: number,
+    filter: DatesFilter = {},
+    call?: UpstreamCallOptions
+  ): Promise<string[]> {
     assertLocationId(locationId);
     if (filter.teamMemberId !== undefined) {
       assertTeamMemberOrAny(filter.teamMemberId);
@@ -447,6 +461,7 @@ export class BookingClient {
         // Key order on the wire: staff_id, date_from, date_to, then service_ids[].
         query: { staff_id: staffId, date_from: dateFrom, date_to: dateTo },
         serviceIds,
+        ...call,
       },
       datesDataSchema
     );
@@ -462,7 +477,8 @@ export class BookingClient {
     locationId: number,
     teamMemberId: number,
     date: string,
-    serviceIds: readonly number[]
+    serviceIds: readonly number[],
+    call?: UpstreamCallOptions
   ): Promise<TimeSlot[]> {
     assertLocationId(locationId);
     assertTeamMemberOrAny(teamMemberId);
@@ -478,6 +494,7 @@ export class BookingClient {
         route,
         path: `/book_times/${locationId}/${teamMemberId}/${day}`,
         serviceIds: ids,
+        ...call,
       },
       timeSlotsDataSchema
     );
@@ -497,14 +514,18 @@ export class BookingClient {
    * unchanged (rejected with the 422 codes, not_found, rate_limited after the
    * one inline retry, unavailable). The datetime is sent exactly as given.
    */
-  async check(locationId: number, selection: CheckSelection): Promise<void> {
+  async check(
+    locationId: number,
+    selection: CheckSelection,
+    call?: UpstreamCallOptions
+  ): Promise<void> {
     assertLocationId(locationId);
     const serviceIds = checkedServiceIds(selection.serviceIds);
     if (serviceIds.length === 0) {
       throw new TypeError('at least one service id is required');
     }
     assertTeamMemberOrAny(selection.teamMemberId);
-    if (!SLOT_DATETIME_PATTERN.test(selection.datetime)) {
+    if (parseSlotDatetime(selection.datetime) === null) {
       throw new TypeError('datetime must be an ISO 8601 slot datetime');
     }
     const { route, method } = BOOKING_ROUTES.check;
@@ -522,6 +543,7 @@ export class BookingClient {
           },
         ],
       },
+      ...call,
     });
     if (reply.status !== 201) {
       throw new UpstreamError('contract_drift', route, {

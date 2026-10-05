@@ -28,7 +28,7 @@ export const UNTRUSTED_FIELD_MAX_CHARS = 500;
 /** Budget for upstream error text quoted inside an error, in code points. */
 export const UPSTREAM_DETAIL_MAX_CHARS = 300;
 
-const LABEL_MAX_CHARS = 120;
+const KEY_MAX_CHARS = 120;
 const MAX_PAYLOAD_DEPTH = 24;
 const TOO_DEEP = '[nested value omitted]';
 const REMOVED = '[markup removed]';
@@ -176,7 +176,7 @@ function sanitizeDeepAt(value: unknown, depth: number): unknown {
   // defines own properties, so a key named __proto__ stays data.
   return Object.fromEntries(
     Object.entries(value).map(([key, entry]) => [
-      sanitizeUntrusted(key, { maxChars: LABEL_MAX_CHARS }) ?? '',
+      sanitizeUntrusted(key, { maxChars: KEY_MAX_CHARS }) ?? '',
       sanitizeDeepAt(entry, depth + 1),
     ])
   );
@@ -197,7 +197,7 @@ export function untrustedBlock(
 ): string {
   const lines: string[] = [];
   for (const [rawLabel, rawValue] of Object.entries(fields)) {
-    const label = sanitizeUntrusted(rawLabel, { maxChars: LABEL_MAX_CHARS });
+    const label = sanitizeUntrusted(rawLabel, { maxChars: KEY_MAX_CHARS });
     const value = sanitizeUntrusted(rawValue);
     if (label !== null && value !== null) lines.push(`${label}: ${value}`);
   }

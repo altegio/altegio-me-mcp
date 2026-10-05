@@ -1,3 +1,4 @@
+import type { BlockList } from 'node:net';
 import express, {
   type Express,
   type NextFunction,
@@ -6,8 +7,21 @@ import express, {
   type Response,
 } from 'express';
 import type { Logger } from 'pino';
-import { createMcpRequestHandler } from './mcp/stateless-handler.js';
-import { createCallLogMiddleware } from './observability/call-log.js';
+import {
+  createMcpRequestHandler,
+  type SecretList,
+} from './mcp/stateless-handler.js';
+import {
+  createCallLogMiddleware,
+  getCallRecord,
+  printable,
+} from './observability/call-log.js';
+import {
+  classifyClient,
+  gateKeyOf,
+  resolveClientAddress,
+} from './security/client-ip.js';
+import { createProxyAuthMiddleware } from './security/proxy-auth.js';
 import type { DefinedTool } from './tools/factory.js';
 
 export const MCP_BODY_LIMIT = '100kb';
@@ -18,9 +32,27 @@ export interface AppDeps<D> {
   tools: readonly DefinedTool<D>[];
   toolDeps: D;
   logger: Logger;
-  secrets: readonly string[];
+  // Every secret to scrub from tool results; a function is evaluated once per
+  // request, so a rotated token is covered without a restart (OPS-04, SEC-03).
+  secrets: SecretList;
   allowedOrigins: readonly string[];
   allowLoopbackOrigins: boolean;
+  // Verifies the platform proxy's signature on POST /mcp (OPS-03, D-04). Absent
+  // or null leaves the check off, which only src/server.ts does, and only for
+  // an explicit PROXY_AUTH=off.
+  proxyAuth?: { keys: () => readonly string[]; now?: () => number } | null;
+  // The deployed commit, reported by /health.
+  commit?: string | null;
+  // Edge abuse protection for POST /mcp (OPS-06): the client identity step and
+  // the limiter built by createEdgeLimiter(). Absent or null leaves both off.
+  edge?: {
+    limiter: RequestHandler;
+    identity: {
+      trustedHops: number;
+      proxyAuthOn: boolean;
+      sharedEgress: BlockList;
+    };
+  } | null;
 }
 
 interface JsonRpcErrorBody {
@@ -82,6 +114,22 @@ function isOriginAllowed(
   return allowLoopbackOrigins && LOOPBACK_HOSTNAMES.has(parsed.hostname);
 }
 
+// The origin of PUBLIC_BASE_URL plus the configured extra origins, such as
+// https://claude.ai (OPS-08, research Pitfall 15), without duplicates.
+export function allowedOriginsFor(
+  publicBaseUrl: string,
+  extraOrigins: readonly string[]
+): string[] {
+  return [...new Set([new URL(publicBaseUrl).origin, ...extraOrigins])];
+}
+
+// The host of a refused origin, for the call log: a 403 on the first claude.ai
+// run is then diagnosable from the line alone. An origin that does not parse is
+// logged as it arrived, cleaned the same way.
+function refusedOriginHost(origin: string): string | null {
+  return printable(URL.canParse(origin) ? new URL(origin).host : origin);
+}
+
 export function createApp<D>(deps: AppDeps<D>): Express {
   const app = express();
   app.disable('x-powered-by');
@@ -99,7 +147,11 @@ export function createApp<D>(deps: AppDeps<D>): Express {
   );
 
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', version: deps.version });
+    res.json({
+      status: 'ok',
+      version: deps.version,
+      commit: deps.commit ?? null,
+    });
   });
 
   // Mounted after the call log so a rejected request is still logged once.
@@ -112,6 +164,7 @@ export function createApp<D>(deps: AppDeps<D>): Express {
       next();
       return;
     }
+    getCallRecord(res).origin_host = refusedOriginHost(origin);
     res.status(403).json(rpcError(-32000, 'Forbidden origin'));
   };
 
@@ -128,10 +181,45 @@ export function createApp<D>(deps: AppDeps<D>): Express {
     next();
   };
 
+  // Which client a request belongs to, decided after the signature check so
+  // forwarded data is read only on a request the proxy vouched for (OPS-06).
+  // The key goes to the limiter and, through the gate, to the per-key queue
+  // cap; the address itself is never stored, only how many entries
+  // X-Forwarded-For carried.
+  const edge: RequestHandler[] = [];
+  if (deps.edge !== undefined && deps.edge !== null) {
+    const { limiter, identity } = deps.edge;
+    edge.push((req, res, next) => {
+      const { address, forwardedForCount } = resolveClientAddress({
+        headers: req.headers,
+        verified: res.locals.proxyVerified === true,
+        proxyAuthOn: identity.proxyAuthOn,
+        trustedHops: identity.trustedHops,
+      });
+      const classification = classifyClient(address, identity.sharedEgress);
+      res.locals.clientKind = classification.kind;
+      res.locals.clientKey = gateKeyOf(classification);
+      getCallRecord(res).forwarded_for_count = forwardedForCount;
+      next();
+    }, limiter);
+  }
+
+  // Chain: call log -> origin guard -> proxy auth -> client identity -> edge
+  // limiter (a limiter built by createEdgeLimiter() in src/server.ts) -> body
+  // parser -> batch refusal -> MCP handler. Proxy auth and the limiter run
+  // before the body is parsed, so an unsigned or excess request on the public
+  // run.app address costs no parsing.
+  const proxyAuth: RequestHandler[] =
+    deps.proxyAuth === undefined || deps.proxyAuth === null
+      ? []
+      : [createProxyAuthMiddleware(deps.proxyAuth)];
+
   app.post(
     '/mcp',
     createCallLogMiddleware(deps.logger, toolNames),
     originGuard,
+    ...proxyAuth,
+    ...edge,
     express.json({ limit: MCP_BODY_LIMIT }),
     rejectBatch,
     mcpHandler

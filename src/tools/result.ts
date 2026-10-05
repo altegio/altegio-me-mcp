@@ -28,6 +28,8 @@ function failure(
     result: { content: [{ type: 'text', text }], isError: true },
     outcome,
     errorType,
+    upstreamKind: null,
+    gateLimited: false,
   };
 }
 

@@ -1,4 +1,4 @@
-import type { GateLike } from './http.js';
+import type { GateLike, UpstreamCallOptions } from './http.js';
 
 // Outbound throttle for the Altegio API (BAPI-02, D-03). The API blocks a
 // caller over 5 requests/s or 200 requests/min, and the partner token of
@@ -20,6 +20,8 @@ export interface RequestGateOptions {
   maxWaitMs?: number;
   /** A caller arriving when this many callers wait is rejected at once. */
   maxQueue?: number;
+  /** A keyed caller arriving when this many of its calls wait is rejected. */
+  maxQueuePerKey?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -29,6 +31,7 @@ export const DEFAULT_GATE_OPTIONS = Object.freeze({
   perMinute: 180,
   maxWaitMs: 10_000,
   maxQueue: 40,
+  maxQueuePerKey: 8,
 } as const);
 
 /** Wait after a 429 that names no time, in seconds. */
@@ -61,6 +64,30 @@ interface Waiter {
   start: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
+  /** Caller identity for the per-key cap; null is never capped. */
+  key: string | null;
+  /** Drops the abort listener; called once the waiter leaves the queue. */
+  release: () => void;
+}
+
+/** The reason a signal aborted with, as an Error (the reason can be any value). */
+export function abortReason(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  // Error-like, not instanceof: a DOMException from AbortSignal.timeout is not
+  // an Error of every realm (Jest runs tests in its own).
+  if (
+    typeof reason === 'object' &&
+    reason !== null &&
+    typeof (reason as { name?: unknown }).name === 'string' &&
+    typeof (reason as { message?: unknown }).message === 'string'
+  ) {
+    return reason as Error;
+  }
+  return new Error(`Call aborted: ${String(reason)}`);
+}
+
+function noop(): void {
+  // No abort listener to drop.
 }
 
 function realSleep(ms: number): Promise<void> {
@@ -97,6 +124,7 @@ export class RequestGate implements GateLike {
   private readonly perMinute: number;
   private readonly maxWaitMs: number;
   private readonly maxQueue: number;
+  private readonly maxQueuePerKey: number;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
 
@@ -113,25 +141,56 @@ export class RequestGate implements GateLike {
     this.perMinute = options.perMinute ?? DEFAULT_GATE_OPTIONS.perMinute;
     this.maxWaitMs = options.maxWaitMs ?? DEFAULT_GATE_OPTIONS.maxWaitMs;
     this.maxQueue = options.maxQueue ?? DEFAULT_GATE_OPTIONS.maxQueue;
+    this.maxQueuePerKey =
+      options.maxQueuePerKey ?? DEFAULT_GATE_OPTIONS.maxQueuePerKey;
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? realSleep;
   }
 
-  run<T>(start: () => Promise<T>): Promise<T> {
+  /**
+   * Queues `start` and runs it when its turn comes. `opts.signal` removes a
+   * call that is still queued, so an abandoned call spends no upstream budget
+   * and frees its place; a call already started is left to its own fetch
+   * signal. `opts.key` caps how many calls one caller can have queued.
+   */
+  run<T>(start: () => Promise<T>, opts: UpstreamCallOptions = {}): Promise<T> {
+    const { signal } = opts;
+    const key = opts.key ?? null;
+    if (signal?.aborted === true) return Promise.reject(abortReason(signal));
+
     const now = this.now();
     this.forgetOldStarts(now);
     const wait = this.projectedStart(now) - now;
-    if (this.queue.length >= this.maxQueue || wait > this.maxWaitMs) {
+    if (
+      this.queue.length >= this.maxQueue ||
+      wait > this.maxWaitMs ||
+      (key !== null && this.queuedFor(key) >= this.maxQueuePerKey)
+    ) {
       return Promise.reject(
         new GateSaturatedError(Math.max(1, Math.ceil(wait / 1000)))
       );
     }
     return new Promise<T>((resolve, reject) => {
-      this.queue.push({
+      const waiter: Waiter = {
         start,
         resolve: resolve as (value: unknown) => void,
         reject,
-      });
+        key,
+        release: noop,
+      };
+      if (signal !== undefined) {
+        const onAbort = (): void => {
+          const index = this.queue.indexOf(waiter);
+          if (index === -1) return;
+          this.queue.splice(index, 1);
+          reject(abortReason(signal));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        waiter.release = () => {
+          signal.removeEventListener('abort', onAbort);
+        };
+      }
+      this.queue.push(waiter);
       if (!this.pumping) void this.pump();
     });
   }
@@ -140,6 +199,12 @@ export class RequestGate implements GateLike {
   pauseUntil(untilMs: number): void {
     if (!Number.isFinite(untilMs)) return;
     this.pausedUntil = Math.max(this.pausedUntil, untilMs);
+  }
+
+  private queuedFor(key: string): number {
+    let count = 0;
+    for (const waiter of this.queue) if (waiter.key === key) count += 1;
+    return count;
   }
 
   /** Start time of a caller joining the queue now, behind everyone queued. */
@@ -193,6 +258,7 @@ export class RequestGate implements GateLike {
           continue;
         }
         const waiter = this.queue.shift()!;
+        waiter.release();
         this.starts.push(now);
         this.lastStart = now;
         this.begin(waiter);
@@ -216,7 +282,10 @@ export class RequestGate implements GateLike {
   }
 
   private rejectAll(error: unknown): void {
-    for (const waiter of this.queue.splice(0)) waiter.reject(error);
+    for (const waiter of this.queue.splice(0)) {
+      waiter.release();
+      waiter.reject(error);
+    }
   }
 }
 

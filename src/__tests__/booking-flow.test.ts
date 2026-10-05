@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from '@jest/globals';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { BOOKING_ROUTES, BookingClient } from '../booking/client.js';
-import { ALTEGIO_ACCEPT } from '../booking/http.js';
+import { GateSaturatedError } from '../booking/gate.js';
+import { ALTEGIO_ACCEPT, type GateLike } from '../booking/http.js';
 import {
   fakeFetch,
   loadFixture,
@@ -17,6 +18,7 @@ import {
   postMcp,
   startApp,
   toolCallBody,
+  waitForLogs,
   type Harness,
   type LogLine,
 } from './helpers/http-harness.js';
@@ -499,5 +501,168 @@ describe('known-business flow from a location id to a pre-selected link (ROADMAP
     const check = tools.find((tool) => tool.name === 'book_check');
     expect(check?.annotations?.readOnlyHint).toBe(true);
     expect(check?.annotations?.destructiveHint).toBe(false);
+  });
+});
+
+// WR-04 (D-01): a client that drops a tools/call stops the work behind it. The
+// fake upstream never answers; once the HTTP request is aborted, the fetch of
+// that tool call must see its signal abort and nothing else may be sent.
+
+async function until(done: () => boolean, limitMs: number): Promise<boolean> {
+  const stop = Date.now() + limitMs;
+  while (!done()) {
+    if (Date.now() > stop) return false;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return true;
+}
+
+describe('a client that disconnects mid tools/call (WR-04)', () => {
+  it('aborts the upstream fetch of that call and sends nothing further', async () => {
+    const stalled = fakeFetch([
+      {
+        method: 'GET',
+        path: `/company/${LOCATION_ID}`,
+        // fakeFetch rejects with the signal's reason when init.signal aborts.
+        reply: () => new Promise<never>(() => undefined),
+      },
+    ]);
+    const signals: AbortSignal[] = [];
+    const recording: typeof fetch = (input, init) => {
+      if (init?.signal) signals.push(init.signal);
+      return stalled.fetch(input, init);
+    };
+    const harness = await startApp({
+      tools: productionTools,
+      toolDeps: {
+        booking: new BookingClient({
+          base: API_BASE,
+          token: CANARY_SECRET,
+          fetch: recording,
+        }),
+      },
+    });
+
+    const hangUp = new AbortController();
+    const request = postMcp(
+      harness.baseUrl,
+      toolCallBody('business_get', { location_id: LOCATION_ID }),
+      {},
+      hangUp.signal
+    ).catch(() => null);
+    expect(await until(() => stalled.calls.length === 1, 2000)).toBe(true);
+
+    setTimeout(() => hangUp.abort(), 100);
+    await request;
+
+    expect(await until(() => signals[0]?.aborted === true, 2000)).toBe(true);
+    // Time for any wrongly started follow-up call to show up.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(stalled.calls).toHaveLength(1);
+    expect(signals).toHaveLength(1);
+  });
+});
+
+// OPS-05 (research Pitfall 17): /health and tools/list stay green while a
+// revoked token fails every real call, so each failed call logs the kind of the
+// Altegio API failure; our own gate turning a call away is a separate field.
+
+function companyReply(reply: FixtureResponse | (() => FixtureResponse)) {
+  return fakeFetch([{ method: 'GET', path: `/company/${LOCATION_ID}`, reply }]);
+}
+
+async function callBusinessGet(
+  booking: BookingClient
+): Promise<{ line: LogLine; isError: boolean }> {
+  const harness = await startApp({
+    tools: productionTools,
+    toolDeps: { booking },
+  });
+  const res = await postMcp(
+    harness.baseUrl,
+    toolCallBody('business_get', { location_id: LOCATION_ID })
+  );
+  const body = (await res.json()) as { result?: { isError?: boolean } };
+  const logs = await waitForLogs(harness, 1);
+  const line = logs.find((entry) => entry.rpc_method === 'tools/call');
+  if (line === undefined) throw new Error('no tools/call log line');
+  return { line, isError: body.result?.isError === true };
+}
+
+function clientFor(upstream: FakeFetch, gate?: GateLike): BookingClient {
+  return new BookingClient({
+    base: API_BASE,
+    token: CANARY_SECRET,
+    fetch: upstream.fetch,
+    gate,
+  });
+}
+
+describe('the call log names the upstream failure kind (OPS-05, T-03-18, T-03-19)', () => {
+  it('logs upstream_kind unauthorized and no limited_by for an upstream 401', async () => {
+    const upstream = companyReply({
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+      body: { success: false, data: null, meta: { message: 'Unauthorized' } },
+    });
+    const { line, isError } = await callBusinessGet(clientFor(upstream));
+    expect(isError).toBe(true);
+    expect(line.outcome).toBe('tool_error');
+    expect(line.upstream_kind).toBe('unauthorized');
+    expect(line.limited_by).toBeNull();
+  });
+
+  it('logs upstream_kind rate_limited for an upstream 429 that repeats after the inline retry', async () => {
+    const upstream = companyReply({
+      status: 429,
+      headers: { 'content-type': 'application/json' },
+      body: { success: false, data: null, meta: { message: 'Too many' } },
+    });
+    const { line } = await callBusinessGet(clientFor(upstream));
+    expect(upstream.calls).toHaveLength(2);
+    expect(line.upstream_kind).toBe('rate_limited');
+    expect(line.limited_by).toBeNull();
+  });
+
+  it('logs limited_by gate and no upstream_kind for a call our own gate turned away', async () => {
+    const upstream = companyReply(loadFixture('company', 'default'));
+    const saturated: GateLike = {
+      run: () => Promise.reject(new GateSaturatedError(3)),
+      pauseUntil: () => undefined,
+    };
+    const { line, isError } = await callBusinessGet(
+      clientFor(upstream, saturated)
+    );
+    expect(isError).toBe(true);
+    expect(upstream.calls).toHaveLength(0);
+    expect(line.limited_by).toBe('gate');
+    expect(line.upstream_kind).toBeNull();
+  });
+
+  it('logs null for both on a successful call', async () => {
+    const upstream = companyReply(loadFixture('company', 'default'));
+    const { line, isError } = await callBusinessGet(clientFor(upstream));
+    expect(isError).toBe(false);
+    expect(line.outcome).toBe('ok');
+    expect(line.upstream_kind).toBeNull();
+    expect(line.limited_by).toBeNull();
+  });
+
+  it('logs null for both on a tool error the Altegio API did not cause', async () => {
+    const upstream = companyReply(loadFixture('company', 'default'));
+    const harness = await startApp({
+      tools: productionTools,
+      toolDeps: { booking: clientFor(upstream) },
+    });
+    const res = await postMcp(
+      harness.baseUrl,
+      toolCallBody('business_get', { location_id: 'not a number' })
+    );
+    expect(res.status).toBe(200);
+    const logs = await waitForLogs(harness, 1);
+    const line = logs.find((entry) => entry.rpc_method === 'tools/call');
+    expect(line?.outcome).toBe('invalid_params');
+    expect(line?.upstream_kind).toBeNull();
+    expect(line?.limited_by).toBeNull();
   });
 });

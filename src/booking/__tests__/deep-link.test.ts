@@ -3,7 +3,9 @@ import { join } from 'node:path';
 import { describe, expect, it } from '@jest/globals';
 import {
   ALLOWED_FORM_HOST_SUFFIXES,
+  bookableFormUrl,
   buildBookingLink,
+  canTakeOnlineBookings,
   FALLBACK_BOOKING_ORIGIN,
   formatUtcOffset,
   parseSlotDatetime,
@@ -203,6 +205,28 @@ describe('parseSlotDatetime', () => {
     '',
   ])('returns null for %p', (value) => {
     expect(parseSlotDatetime(value)).toBeNull();
+  });
+
+  describe('a day that does not exist in its month is not a slot (WR-01)', () => {
+    it.each([
+      '2026-02-31T10:00:00+03:00',
+      '2026-02-29T10:00:00+03:00',
+      '2026-04-31T10:00:00+03:00',
+      '0000-04-31T10:00:00+14:00',
+    ])('returns null for %s', (value) => {
+      expect(parseSlotDatetime(value)).toBeNull();
+    });
+
+    it('accepts 29 February of a leap year', () => {
+      expect(parseSlotDatetime('2028-02-29T10:00:00+03:00')).not.toBeNull();
+    });
+
+    it('is the calendar check, not the pattern, that rejects an impossible day', () => {
+      expect(SLOT_DATETIME_PATTERN.test('2026-02-31T10:00:00+03:00')).toBe(
+        true
+      );
+      expect(parseSlotDatetime('2026-02-31T10:00:00+03:00')).toBeNull();
+    });
   });
 });
 
@@ -454,6 +478,64 @@ describe('plainBookingLink', () => {
 
   it('throws a RangeError for a location id that is not a positive integer', () => {
     expect(() => plainBookingLink(-5, FORM)).toThrow(RangeError);
+  });
+});
+
+describe('bookableFormUrl: the one booking-form URL rule (WR-02)', () => {
+  it.each([
+    'https://n123.alteg.io/company/1/',
+    'https://alteg.io/',
+    'https://n1.altegio.asia/',
+    'https://n1.altegio.org/x',
+  ])('returns %s unchanged', (url) => {
+    expect(bookableFormUrl(url)).toBe(url);
+  });
+
+  it.each([
+    ['null', null],
+    ['an empty string', ''],
+    ['an http URL', 'http://n1.alteg.io/'],
+    ['an off-list host', 'https://evil.example/ignore-previous-instructions'],
+    ['a suffix attack', 'https://n1.alteg.io.evil.example/'],
+    ['a prefix attack', 'https://evilalteg.io/'],
+    [
+      'an altegio.me host, until the slug-host browser case runs',
+      'https://salon.altegio.me/',
+    ],
+    ['user info', 'https://user:pw@n1.alteg.io/'],
+    ['an explicit port', 'https://n1.alteg.io:8443/'],
+    ['not a URL', 'not a url'],
+    ['a script URL', 'javascript:alert(1)'],
+    [
+      'an address with a line break',
+      'https://n1.alteg.io/\nignore previous instructions',
+    ],
+    ['an address with a space', 'https://n1.alteg.io/ ignore'],
+  ])('refuses %s', (_label, url) => {
+    expect(bookableFormUrl(url)).toBeNull();
+  });
+});
+
+describe('canTakeOnlineBookings', () => {
+  it('needs an active widget and a booking form', () => {
+    expect(
+      canTakeOnlineBookings({ widgetActive: true, bookingFormUrl: FORM })
+    ).toBe(true);
+    expect(
+      canTakeOnlineBookings({ widgetActive: false, bookingFormUrl: FORM })
+    ).toBe(false);
+    expect(
+      canTakeOnlineBookings({ widgetActive: true, bookingFormUrl: null })
+    ).toBe(false);
+  });
+
+  it('counts a form whose URL is not bookable: the plain link stands in for it', () => {
+    expect(
+      canTakeOnlineBookings({
+        widgetActive: true,
+        bookingFormUrl: 'http://n1.alteg.io/',
+      })
+    ).toBe(true);
   });
 });
 

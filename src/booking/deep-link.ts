@@ -12,6 +12,8 @@
 // digits of the slot string as the API returned it and never recomputed
 // through a JavaScript date object or converted to UTC.
 
+import { isCalendarDay } from './calendar.js';
+
 /** The slot datetime shape `book_times` returns (milliseconds optional, offset with or without a colon). */
 export const SLOT_DATETIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})$/;
@@ -114,6 +116,8 @@ export function parseSlotDatetime(value: string): SlotParts | null {
   ) {
     return null;
   }
+  // The range checks above allow 31 for every month; the day must exist.
+  if (!isCalendarDay(Number(year), Number(month), Number(day))) return null;
   const offsetMinutes = parseOffset(offset);
   if (offsetMinutes === null) return null;
   return { year, month, day, hour, minute, second, offsetMinutes };
@@ -128,12 +132,19 @@ export function formatUtcOffset(offsetMinutes: number): string {
   return `${sign}${hours}:${minutes}`;
 }
 
+// Whitespace and control characters never belong in an address; the URL parser
+// would silently drop some of them, which hides text the model would then read.
+const UNSAFE_URL_CHARS = /[\s\p{Cc}]/u;
+
 /**
- * The origin of an allow-listed booking-form URL, or null. Accepts https only,
- * no user info, no explicit port, and a host equal to an allowed suffix or a
- * subdomain of one (so `n1.alteg.io.evil.com` is refused).
+ * The one rule for a booking-form URL taken from a business card: the URL
+ * itself when it is https, parses, carries no whitespace or control characters,
+ * no user info and no explicit port, and its host equals an allowed suffix or
+ * is a subdomain of one (so `n1.alteg.io.evil.com` is refused); otherwise null.
+ * Both business_get and book_check hand out only what passes here (T-03-09).
  */
-function allowedFormOrigin(formUrl: string): string | null {
+export function bookableFormUrl(formUrl: string | null): string | null {
+  if (formUrl === null || UNSAFE_URL_CHARS.test(formUrl)) return null;
   let url: URL;
   try {
     url = new URL(formUrl);
@@ -152,7 +163,20 @@ function allowedFormOrigin(formUrl: string): string | null {
   const allowed = ALLOWED_FORM_HOST_SUFFIXES.some(
     (suffix) => host === suffix || host.endsWith(`.${suffix}`)
   );
-  return allowed ? url.origin : null;
+  return allowed ? formUrl : null;
+}
+
+/**
+ * Whether a business takes online bookings: its widget is active and its card
+ * has a booking form. One answer for business_get and book_check. A form whose
+ * URL fails `bookableFormUrl` still counts: both tools then hand out the plain
+ * app.alteg.io link instead of the form's own address.
+ */
+export function canTakeOnlineBookings(card: {
+  widgetActive: boolean;
+  bookingFormUrl: string | null;
+}): boolean {
+  return card.widgetActive && card.bookingFormUrl !== null;
 }
 
 function requireId(value: number, name: string, min: 0 | 1): void {
@@ -184,8 +208,8 @@ export function plainBookingLink(
       reason: 'no_form_url',
     };
   }
-  const origin = allowedFormOrigin(formUrl);
-  if (origin === null) {
+  const allowed = bookableFormUrl(formUrl);
+  if (allowed === null) {
     return {
       kind: 'booking_form',
       url: `${FALLBACK_BOOKING_ORIGIN}/book/${locationId}`,
@@ -194,7 +218,7 @@ export function plainBookingLink(
   }
   return {
     kind: 'booking_form',
-    url: `${origin}/company/${locationId}`,
+    url: `${new URL(allowed).origin}/company/${locationId}`,
     reason: null,
   };
 }

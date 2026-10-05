@@ -1,5 +1,8 @@
 import { z } from 'zod';
+import { UpstreamError, type UpstreamErrorKind } from '../booking/errors.js';
+import { NO_TOOL_CONTEXT, isDeadline, type ToolContext } from './context.js';
 import { textResult, toolErrorResult } from './result.js';
+import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from './untrusted.js';
 
 // Tool factory. SDK-free on purpose: tools return plain objects, and only
 // src/mcp translates them to the MCP SDK (D-04, ADR-0001-D6).
@@ -37,6 +40,51 @@ export interface ToolInvocation {
   result: ToolResult;
   outcome: ToolOutcome;
   errorType: string | null;
+  /** Kind of the Altegio API failure behind a tool error; null otherwise (OPS-05). */
+  upstreamKind: UpstreamErrorKind | null;
+  /** True when our own request gate turned the call away, nothing was sent upstream. */
+  gateLimited: boolean;
+}
+
+/** How many errors down a cause chain is searched for the UpstreamError. */
+const CAUSE_CHAIN_LIMIT = 5;
+
+/**
+ * The Altegio API failure behind a handler error: toToolError keeps the
+ * UpstreamError as the ToolError's cause, so it is found by walking the chain,
+ * never by matching text.
+ */
+function upstreamErrorOf(error: unknown): UpstreamError | null {
+  let current: unknown = error;
+  for (
+    let depth = 0;
+    depth < CAUSE_CHAIN_LIMIT && current instanceof Error;
+    depth += 1
+  ) {
+    if (current instanceof UpstreamError) return current;
+    current = current.cause;
+  }
+  return null;
+}
+
+/**
+ * Splits an API failure for the call log (OPS-05, Pitfall 17): status null with
+ * kind rate_limited is our own gate turning the call away, so it is never read
+ * as upstream throttling. A call that was dropped or ran out of time did not
+ * fail because of the API, and its error_type already says why.
+ */
+function upstreamFields(
+  error: unknown,
+  signal: AbortSignal
+): Pick<ToolInvocation, 'upstreamKind' | 'gateLimited'> {
+  const none = { upstreamKind: null, gateLimited: false } as const;
+  if (signal.aborted) return none;
+  const found = upstreamErrorOf(error);
+  if (found === null) return none;
+  if (found.kind === 'rate_limited' && found.status === null) {
+    return { upstreamKind: null, gateLimited: true };
+  }
+  return { upstreamKind: found.kind, gateLimited: false };
 }
 
 /** Rendered text per call is capped here (research Pitfall 16, A11). */
@@ -87,14 +135,18 @@ export interface ToolDefinition<
   input: I;
   output: O;
   render: (out: z.infer<O>) => string;
-  handler: (ctx: { input: z.infer<I>; deps: D }) => Promise<z.infer<O>>;
+  handler: (ctx: {
+    input: z.infer<I>;
+    deps: D;
+    ctx: ToolContext;
+  }) => Promise<z.infer<O>>;
 }
 
 export interface DefinedTool<D> {
   readonly name: string;
   readonly meta: ToolMeta;
   readonly spec: ToolSpec;
-  invoke(args: unknown, deps: D): Promise<ToolInvocation>;
+  invoke(args: unknown, deps: D, ctx?: ToolContext): Promise<ToolInvocation>;
 }
 
 function withoutSchemaKey(
@@ -104,18 +156,44 @@ function withoutSchemaKey(
   return json;
 }
 
+// The first `end` UTF-16 units, without leaving half of a surrogate pair.
+function headUnits(text: string, end: number): string {
+  const last = text.charCodeAt(end - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? end - 1 : end);
+}
+
 // Keeps at most TEXT_BUDGET_CHARS UTF-16 units without leaving half of a
-// surrogate pair at the cut.
+// surrogate pair at the cut. The cut is fence-aware (WR-05): the business
+// controls how long its fields are, so a cut that lands inside an untrusted
+// block must not drop UNTRUSTED_CLOSE, or the note would read as part of the
+// block. The block body is cut instead, then the fence is closed, then the note
+// follows. A block whose opening marker does not fit is dropped whole.
 function capText(text: string): string {
   if (text.length <= TEXT_BUDGET_CHARS) {
     return text;
   }
-  let end = TEXT_BUDGET_CHARS;
-  const last = text.charCodeAt(end - 1);
-  if (last >= 0xd800 && last <= 0xdbff) {
-    end -= 1;
+
+  const openAt = text.lastIndexOf(UNTRUSTED_OPEN, TEXT_BUDGET_CHARS - 1);
+  if (openAt !== -1) {
+    const closeAt = text.indexOf(
+      UNTRUSTED_CLOSE,
+      openAt + UNTRUSTED_OPEN.length
+    );
+    const closedBeforeCut =
+      closeAt !== -1 && closeAt + UNTRUSTED_CLOSE.length <= TEXT_BUDGET_CHARS;
+    if (!closedBeforeCut) {
+      const bodyStart = openAt + UNTRUSTED_OPEN.length;
+      // Room for the body: the budget minus a line break and the closing fence.
+      const bodyEnd = TEXT_BUDGET_CHARS - UNTRUSTED_CLOSE.length - 1;
+      if (bodyEnd <= bodyStart) {
+        return `${text.slice(0, openAt).trimEnd()}${TRUNCATION_NOTE}`;
+      }
+      const body = headUnits(text, bodyEnd).trimEnd();
+      return `${body}\n${UNTRUSTED_CLOSE}${TRUNCATION_NOTE}`;
+    }
   }
-  return `${text.slice(0, end)}${TRUNCATION_NOTE}`;
+
+  return `${headUnits(text, TEXT_BUDGET_CHARS)}${TRUNCATION_NOTE}`;
 }
 
 export function defineTool<
@@ -144,7 +222,11 @@ export function defineTool<
     name: def.name,
     meta,
     spec,
-    async invoke(args: unknown, deps: D): Promise<ToolInvocation> {
+    async invoke(
+      args: unknown,
+      deps: D,
+      ctx: ToolContext = NO_TOOL_CONTEXT
+    ): Promise<ToolInvocation> {
       const parsedInput = def.input.safeParse(args ?? {});
       if (!parsedInput.success) {
         return toolErrorResult(def.name, parsedInput.error, 'input');
@@ -155,9 +237,23 @@ export function defineTool<
         output = await def.handler({
           input: parsedInput.data,
           deps,
+          ctx,
         });
       } catch (error) {
-        return toolErrorResult(def.name, error, 'handler');
+        const failed = {
+          ...toolErrorResult(def.name, error, 'handler'),
+          ...upstreamFields(error, ctx.signal),
+        };
+        // The call log names why the call ended early; the text stays the one
+        // the error mapping produced.
+        return ctx.signal.aborted
+          ? {
+              ...failed,
+              errorType: isDeadline(ctx.signal)
+                ? 'DeadlineExceeded'
+                : 'ClientGone',
+            }
+          : failed;
       }
 
       const parsedOutput = def.output.safeParse(output);
@@ -181,6 +277,8 @@ export function defineTool<
           },
           outcome: 'tool_error',
           errorType: 'OutputTooLarge',
+          upstreamKind: null,
+          gateLimited: false,
         };
       }
 
@@ -194,6 +292,8 @@ export function defineTool<
         result: textResult(capText(text), data),
         outcome: 'ok',
         errorType: null,
+        upstreamKind: null,
+        gateLimited: false,
       };
     },
   };

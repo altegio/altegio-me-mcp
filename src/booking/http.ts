@@ -1,6 +1,11 @@
+import {
+  createStaticSecretSource,
+  type SecretSource,
+} from '../config/secret-source.js';
 import { scrubSecrets } from '../observability/redact.js';
 import { UpstreamError, type UpstreamErrorKind } from './errors.js';
 import {
+  abortReason,
   DEFAULT_RETRY_AFTER_SECONDS,
   GateSaturatedError,
   INLINE_RETRY_MAX_SECONDS,
@@ -11,19 +16,36 @@ import {
 // envelope parsing and status mapping. Matches Altegio.Pro MCP (D-10): the
 // v2 Accept header and the partner token as a Bearer credential. The token
 // travels only in the Authorization header, never in the URL.
+//
+// The token comes from a SecretSource, so a rotation by the platform reaches
+// the running process without a restart (OPS-04): the Authorization header is
+// built from the source's current value on every attempt, an upstream 401 or
+// 403 forces one re-read and, when the token changed, one retry, and upstream
+// messages are scrubbed with the current and the previous token.
 
 export const ALTEGIO_ACCEPT = 'application/vnd.api.v2+json';
 export const UPSTREAM_TIMEOUT_MS = 10_000;
 
+/** What one upstream call tells the gate about its caller. */
+export interface UpstreamCallOptions {
+  /** Aborts the call: a queued call leaves the gate, a started one stops. */
+  signal?: AbortSignal;
+  /** Caller identity for the per-key queue cap; null or missing is uncapped. */
+  key?: string | null;
+}
+
 /** Admission control for upstream calls; the throttle implements it. */
 export interface GateLike {
-  run<T>(start: () => Promise<T>): Promise<T>;
+  run<T>(start: () => Promise<T>, opts?: UpstreamCallOptions): Promise<T>;
   pauseUntil(untilMs: number): void;
 }
 
 /** Runs every call at once and ignores pauses. */
 export const PASS_THROUGH_GATE: GateLike = Object.freeze({
-  run<T>(start: () => Promise<T>): Promise<T> {
+  run<T>(start: () => Promise<T>, opts?: UpstreamCallOptions): Promise<T> {
+    if (opts?.signal?.aborted === true) {
+      return Promise.reject(abortReason(opts.signal));
+    }
     return start();
   },
   pauseUntil(): void {
@@ -33,7 +55,10 @@ export const PASS_THROUGH_GATE: GateLike = Object.freeze({
 
 export interface BookingHttpOptions {
   base: string;
-  token: string;
+  /** A plain token, wrapped in a static source. Exactly one of token and tokenSource. */
+  token?: string;
+  /** A token that can change while the process runs. */
+  tokenSource?: SecretSource;
   fetch?: typeof fetch;
   gate?: GateLike;
   timeoutMs?: number;
@@ -41,7 +66,7 @@ export interface BookingHttpOptions {
   now?: () => number;
 }
 
-export interface UpstreamCallSpec {
+export interface UpstreamCallSpec extends UpstreamCallOptions {
   method: 'GET' | 'POST';
   /** Route template, for example '/company/{location_id}'. */
   route: string;
@@ -77,6 +102,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isTimeout(error: unknown): boolean {
   return isRecord(error) && error.name === 'TimeoutError';
+}
+
+/**
+ * The tool call ended before the API answered: its deadline passed or its
+ * client went away. Never worded like the per-fetch timeout, so the log tells
+ * the three apart.
+ */
+function cancelledError(route: string, signal: AbortSignal): UpstreamError {
+  const reason: unknown = signal.reason;
+  return new UpstreamError('unavailable', route, {
+    cause: new Error(
+      isTimeout(reason)
+        ? 'Altegio API call stopped: the tool call ran out of time'
+        : 'Altegio API call cancelled: the tool call was dropped',
+      { cause: reason }
+    ),
+  });
 }
 
 /** envelope.data of a 2xx body; null for an empty body. */
@@ -138,7 +180,7 @@ interface RawReply {
 
 export class BookingHttp {
   private readonly base: string;
-  private readonly token: string;
+  private readonly tokenSource: SecretSource;
   private readonly fetchImpl: typeof fetch;
   private readonly gate: GateLike;
   private readonly timeoutMs: number;
@@ -148,7 +190,11 @@ export class BookingHttp {
     this.base = options.base.endsWith('/')
       ? options.base.slice(0, -1)
       : options.base;
-    this.token = options.token;
+    if ((options.token === undefined) === (options.tokenSource === undefined)) {
+      throw new Error('BookingHttp needs exactly one of token and tokenSource');
+    }
+    this.tokenSource =
+      options.tokenSource ?? createStaticSecretSource(options.token ?? '');
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.gate = options.gate ?? PASS_THROUGH_GATE;
     this.timeoutMs = options.timeoutMs ?? UPSTREAM_TIMEOUT_MS;
@@ -165,30 +211,60 @@ export class BookingHttp {
     }
 
     const hasBody = call.body !== undefined;
-    const headers: Record<string, string> = {
-      Accept: ALTEGIO_ACCEPT,
-      Authorization: `Bearer ${this.token}`,
-    };
-    if (hasBody) headers['Content-Type'] = 'application/json';
-    const init: RequestInit = {
-      method: call.method,
-      headers,
-      body: hasBody ? JSON.stringify(call.body) : undefined,
-      // A redirect would carry the partner token to another URL; it is
-      // reported as an unexpected status instead.
-      redirect: 'manual',
+    const body = hasBody ? JSON.stringify(call.body) : undefined;
+    // Built per attempt: a retry after a rotation carries the new token.
+    const initFor = (token: string): RequestInit => {
+      const headers: Record<string, string> = {
+        Accept: ALTEGIO_ACCEPT,
+        Authorization: `Bearer ${token}`,
+      };
+      if (hasBody) headers['Content-Type'] = 'application/json';
+      return {
+        method: call.method,
+        headers,
+        body,
+        // A redirect would carry the partner token to another URL; it is
+        // reported as an unexpected status instead.
+        redirect: 'manual',
+      };
     };
 
-    let reply = await this.attempt(call.route, url, init);
+    const caller: UpstreamCallOptions = { signal: call.signal, key: call.key };
+    const sentToken = this.tokenSource.current();
+    let reply = await this.attempt(call.route, url, initFor(sentToken), caller);
+    if (reply.status === 401 || reply.status === 403) {
+      // The partner token may have been rotated: re-read it once (at most once
+      // per 60 s) and, when it differs from the one just refused, send the call
+      // once more. A call that was dropped meanwhile is not retried. The token
+      // is compared as well as the re-read result, so a call that was refused
+      // with the old token after another call already refreshed it still
+      // retries.
+      const changed = await this.tokenSource.refresh();
+      const next = this.tokenSource.current();
+      if (changed || next !== sentToken) {
+        if (call.signal?.aborted === true) {
+          throw cancelledError(call.route, call.signal);
+        }
+        reply = await this.attempt(call.route, url, initFor(next), caller);
+      }
+    }
     let retryAfter: number | null = null;
     if (reply.status === 429) {
       retryAfter = this.pauseFor(reply.headers);
       // At most one retry, and only for a short advised wait. The upstream
       // did not process a rate-limited request, so sending it again is safe,
       // the book_check POST included. The gate holds the retry until the
-      // pause ends.
+      // pause ends. A call that was dropped meanwhile is not retried.
       if (retryAfter <= INLINE_RETRY_MAX_SECONDS) {
-        reply = await this.attempt(call.route, url, init);
+        if (call.signal?.aborted === true) {
+          throw cancelledError(call.route, call.signal);
+        }
+        reply = await this.attempt(
+          call.route,
+          url,
+          initFor(this.tokenSource.current()),
+          caller
+        );
         if (reply.status === 429) retryAfter = this.pauseFor(reply.headers);
       }
     }
@@ -206,22 +282,33 @@ export class BookingHttp {
   private async attempt(
     route: string,
     url: URL,
-    init: RequestInit
+    init: RequestInit,
+    caller: UpstreamCallOptions
   ): Promise<RawReply> {
+    const callSignal = caller.signal;
     try {
-      return await this.gate.run(async () => {
-        // The timeout starts when the gate admits the call, so time spent
-        // waiting in the gate does not count against it.
-        const response = await this.fetchImpl(url, {
-          ...init,
-          signal: AbortSignal.timeout(this.timeoutMs),
-        });
-        return {
-          status: response.status,
-          headers: response.headers,
-          text: await response.text(),
-        };
-      });
+      return await this.gate.run(
+        async () => {
+          // The per-fetch timeout starts when the gate admits the call, so
+          // time spent waiting in the gate does not count against it. The
+          // tool call's own signal (disconnect or deadline) stops the fetch
+          // too (WR-04).
+          const timeout = AbortSignal.timeout(this.timeoutMs);
+          const response = await this.fetchImpl(url, {
+            ...init,
+            signal:
+              callSignal === undefined
+                ? timeout
+                : AbortSignal.any([timeout, callSignal]),
+          });
+          return {
+            status: response.status,
+            headers: response.headers,
+            text: await response.text(),
+          };
+        },
+        { signal: callSignal, key: caller.key }
+      );
     } catch (error) {
       if (error instanceof UpstreamError) throw error;
       if (error instanceof GateSaturatedError) {
@@ -232,6 +319,9 @@ export class BookingHttp {
           retryAfterSeconds: error.retryAfterSeconds,
           cause: error,
         });
+      }
+      if (callSignal?.aborted === true) {
+        throw cancelledError(route, callSignal);
       }
       throw new UpstreamError('unavailable', route, {
         cause: isTimeout(error)
@@ -266,7 +356,9 @@ export class BookingHttp {
       // Scrubbed before anything else touches it (WR-04): later sanitising
       // or truncation could otherwise split the token past the scrubber.
       upstreamMessage:
-        meta.message === null ? null : scrubSecrets(meta.message, [this.token]),
+        meta.message === null
+          ? null
+          : scrubSecrets(meta.message, this.tokenSource.known()),
     });
   }
 }

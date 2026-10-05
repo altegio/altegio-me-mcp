@@ -10,20 +10,33 @@ import { parseSlotDatetime } from './deep-link.js';
 const flag = z.union([z.boolean(), z.number()]);
 const text = z.string().nullish();
 
+/** A decimal number written out: no hex, no exponent, no sign other than a leading minus. */
+const DECIMAL_PATTERN = /^-?\d+(?:\.\d+)?$/;
+
+/** The widest real UTC offsets, in hours. */
+const MAX_UTC_OFFSET_HOURS = 14;
+
 /**
  * UTC offset in hours, may be fractional. The backend sends a number, or a
- * numeric string such as "5.5"; anything else is unknown (null).
+ * decimal string such as "5.5"; anything else, or a value outside [-14, 14],
+ * is unknown (null).
  */
 const utcOffsetHours = z
   .union([z.number(), z.string()])
   .nullish()
   .transform((value): number | null => {
-    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-    if (typeof value === 'string' && value.trim() !== '') {
-      const parsed = Number(value);
-      return Number.isFinite(parsed) ? parsed : null;
+    let parsed: number | null = null;
+    if (typeof value === 'number') {
+      parsed = value;
+    } else if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (DECIMAL_PATTERN.test(trimmed)) parsed = Number(trimmed);
     }
-    return null;
+    return parsed !== null &&
+      Number.isFinite(parsed) &&
+      Math.abs(parsed) <= MAX_UTC_OFFSET_HOURS
+      ? parsed
+      : null;
   });
 
 const bookformSchema = z.looseObject({
@@ -74,11 +87,7 @@ export type CompanyData = z.infer<typeof companyDataSchema>;
 /** A JSON number, or a string holding a decimal number ("1500", "4.5"). */
 const numeric = z.union([
   z.number(),
-  z
-    .string()
-    .trim()
-    .regex(/^-?\d+(?:\.\d+)?$/)
-    .transform(Number),
+  z.string().trim().regex(DECIMAL_PATTERN).transform(Number),
 ]);
 
 const bookServiceSchema = z.looseObject({
@@ -126,7 +135,10 @@ const bookStaffSchema = z.looseObject({
   bookable: flag.nullish(),
   /** 0 when the business hides ratings in its widget. */
   show_rating: flag.nullish(),
+  /** 0 both when nobody has rated the team member and when ratings are hidden. */
   rating: numeric.nullish(),
+  /** How many clients rated the team member; absent in older payloads. */
+  votes_count: numeric.nullish(),
   /** Next date with a free slot, Y-m-d. */
   seance_date: text,
 });

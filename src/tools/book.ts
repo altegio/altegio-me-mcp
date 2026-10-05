@@ -8,6 +8,7 @@ import {
 import {
   SLOT_DATETIME_PATTERN,
   buildBookingLink,
+  canTakeOnlineBookings,
   formatUtcOffset,
   parseSlotDatetime,
   plainBookingLink,
@@ -27,6 +28,7 @@ import {
   uniqueServiceIds,
   untrustedText,
 } from './business.js';
+import type { ToolContext } from './context.js';
 import { ToolError } from './errors.js';
 import { defineTool } from './factory.js';
 import type { ToolDeps } from './registry.js';
@@ -61,6 +63,13 @@ export const NOTE_PREPAYMENT =
 export const NOTE_NAMES_UNAVAILABLE =
   'Service or team member names could not be loaded; the booking widget shows them.';
 
+/**
+ * The slot check's own share of the call deadline (WR-04, D-01): when it is
+ * spent, book_check answers unverified with the plain link instead of failing,
+ * and the rest of the 25 s deadline is left for the card read.
+ */
+export const BOOK_CHECK_STEP_MS = 12_000;
+
 const bookCheckInput = z.strictObject({
   location_id: locationIdInput,
   service_ids: uniqueServiceIds(
@@ -83,7 +92,9 @@ type BookCheckInput = z.infer<typeof bookCheckInput>;
 
 const selectedServiceSchema = z.strictObject({
   id: z.number().int().describe('Service id.'),
-  title: untrustedText('Service title, or null when it could not be loaded.'),
+  title: untrustedText(
+    'Service title, an empty string when the business gave none, or null when it could not be loaded.'
+  ),
   price: z
     .strictObject({
       min: z.number().describe('Lowest price.'),
@@ -205,9 +216,9 @@ const NO_BOOKING_WIDGET = {
     'tell the user to contact the business directly, using the contact details from business_get.',
 } as const;
 
-/** The card must show an active widget with a booking form; otherwise a link would lead nowhere. */
+/** The same predicate as business_get's `enabled`: an active widget and a booking form; otherwise a link would lead nowhere. */
 function requireBookingWidget(card: BusinessCard): void {
-  if (card.bookingFormUrl === null || !card.widgetActive) {
+  if (!canTakeOnlineBookings(card)) {
     throw new ToolError(
       NO_BOOKING_WIDGET.message,
       NO_BOOKING_WIDGET.nextAction
@@ -258,7 +269,10 @@ function selectedServices(
     }
     return {
       id,
-      title: sanitizeUntrusted(service.title, { maxChars: LABEL_MAX_CHARS }),
+      // null means "not loaded" (see servicePriceText), so a service the
+      // catalog does carry keeps an empty title when its title cleans to nothing.
+      title:
+        sanitizeUntrusted(service.title, { maxChars: LABEL_MAX_CHARS }) ?? '',
       // 0 and 0 is no price set (price on request); prices stay unrounded.
       price:
         service.priceMin === 0 && service.priceMax === 0
@@ -328,22 +342,28 @@ function output(
 /** After a 201: the card, the services and the named team member, in parallel through the gate. */
 async function verified(
   input: BookCheckInput,
-  deps: ToolDeps
+  deps: ToolDeps,
+  ctx: ToolContext
 ): Promise<BookCheckOutput> {
   const id = input.location_id;
+  const call = { signal: ctx.signal, key: ctx.clientKey };
   const [cardResult, catalogResult, membersResult] = await Promise.allSettled([
-    deps.booking.company(id),
-    deps.booking.services(id),
+    deps.booking.company(id, call),
+    deps.booking.services(id, {}, call),
     input.team_member_id > 0
-      ? deps.booking.teamMembers(id)
+      ? deps.booking.teamMembers(id, {}, call)
       : Promise.resolve(null),
   ]);
   if (cardResult.status === 'rejected') {
-    throw new ToolError(
-      'The slot is free, but the booking link could not be prepared.',
-      'call book_check again in a few seconds.',
-      { cause: cardResult.reason }
-    );
+    // The kind decides the advice: a 429 keeps its advised wait, a 404 says the
+    // business was not found. Only a transient failure asks for a quick repeat.
+    throw toToolError(cardResult.reason, {
+      unavailable: {
+        message:
+          'The slot check passed, but the booking link could not be prepared.',
+        nextAction: 'call book_check again in a few seconds.',
+      },
+    });
   }
   const card = cardResult.value;
   requireBookingWidget(card);
@@ -395,11 +415,15 @@ async function verified(
 async function unverified(
   input: BookCheckInput,
   deps: ToolDeps,
+  ctx: ToolContext,
   checkError: UpstreamError
 ): Promise<BookCheckOutput> {
   let card: BusinessCard;
   try {
-    card = await deps.booking.company(input.location_id);
+    card = await deps.booking.company(input.location_id, {
+      signal: ctx.signal,
+      key: ctx.clientKey,
+    });
   } catch {
     throw toToolError(checkError);
   }
@@ -420,6 +444,7 @@ async function unverified(
 
 function servicePriceText(service: SelectedService): string {
   if (service.price !== null) return priceText(service.price);
+  // A null title is only ever a service that was not read from the catalog.
   return service.title === null ? 'price not loaded' : 'price on request';
 }
 
@@ -469,7 +494,8 @@ export const bookCheck = defineTool<
   description:
     "Checks with the business that the chosen services, team member and time can still be booked, without booking anything, and returns a link to the business's booking widget with that selection already made. The client completes the booking in the widget.",
   // D-04: the validation route creates no record and no hold, so the tool is
-  // read-only although its first call is a POST (plan 02-09 confirms live).
+  // read-only although its first call is a POST. Confirmed live by the "D-04"
+  // test in src/booking/__tests__/client.live.test.ts (plan 02-09).
   annotations: {
     readOnlyHint: true,
     destructiveHint: false,
@@ -485,23 +511,38 @@ export const bookCheck = defineTool<
   input: bookCheckInput,
   output: bookCheckOutput,
   render: renderBookCheck,
-  handler: async ({ input, deps }) => {
+  handler: async ({ input, deps, ctx }) => {
     try {
-      await deps.booking.check(input.location_id, {
-        serviceIds: input.service_ids,
-        teamMemberId: input.team_member_id,
-        datetime: input.datetime,
-      });
+      await deps.booking.check(
+        input.location_id,
+        {
+          serviceIds: input.service_ids,
+          teamMemberId: input.team_member_id,
+          datetime: input.datetime,
+        },
+        {
+          // The check has its own budget inside the call deadline, so a slow
+          // check leaves time for the card read (WR-04, D-01).
+          signal: AbortSignal.any([
+            ctx.signal,
+            ctx.timeout(BOOK_CHECK_STEP_MS),
+          ]),
+          key: ctx.clientKey,
+        }
+      );
     } catch (error) {
       if (
         error instanceof UpstreamError &&
         (error.kind === 'unavailable' || error.kind === 'contract_drift')
       ) {
-        return unverified(input, deps, error);
+        // A call that ended (deadline or disconnect) gets its mapped error and
+        // no further upstream call; only a spent step budget degrades.
+        if (ctx.signal.aborted) throw toToolError(error);
+        return unverified(input, deps, ctx, error);
       }
       // A taken or rejected slot gets no link at all (D-06).
       throw toToolError(error, CHECK_ERRORS);
     }
-    return verified(input, deps);
+    return verified(input, deps, ctx);
   },
 });

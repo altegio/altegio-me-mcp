@@ -7,14 +7,17 @@ import {
   type FakeReply,
   type FixtureResponse,
 } from '../../booking/__tests__/helpers/fake-fetch.js';
+import { businessGet } from '../business.js';
 import {
   CONFIRMATION_STATEMENT,
   NOTE_NAMES_UNAVAILABLE,
   NOTE_PREPAYMENT,
   NOTE_REPEAT_SELECTION,
   NOTE_UNVERIFIED,
+  BOOK_CHECK_STEP_MS,
   bookCheck,
 } from '../book.js';
+import { createToolContext, type ToolContext } from '../context.js';
 import type { ToolInvocation } from '../factory.js';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from '../untrusted.js';
 
@@ -163,6 +166,151 @@ function serverError(): FixtureResponse {
     body: { success: false, data: null, meta: { message: 'Server error' } },
   };
 }
+
+/** A context whose step timeout is a signal the test aborts; no test waits 12 s. */
+function stepContext(parent?: AbortSignal): {
+  ctx: ToolContext;
+  step: AbortController;
+  budgets: number[];
+} {
+  const step = new AbortController();
+  const budgets: number[] = [];
+  const base = createToolContext(parent, null, 1500);
+  const ctx: ToolContext = {
+    ...base,
+    timeout: (ms) => {
+      budgets.push(ms);
+      return step.signal;
+    },
+  };
+  return { ctx, step, budgets };
+}
+
+async function untilCalls(upstream: FakeFetch, count: number): Promise<void> {
+  const stop = Date.now() + 1000;
+  while (upstream.calls.length < count && Date.now() < stop) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  expect(upstream.calls).toHaveLength(count);
+}
+
+/** The signal each fetch received, by upstream path (without the API prefix). */
+function recordSignals(upstream: FakeFetch): {
+  fetch: typeof fetch;
+  signals: Map<string, AbortSignal>;
+} {
+  const signals = new Map<string, AbortSignal>();
+  const recording: typeof fetch = (input, init) => {
+    const url = input instanceof Request ? input.url : input.toString();
+    const path = new URL(url).pathname.replace('/api/v1', '');
+    if (init?.signal) signals.set(path, init.signal);
+    return upstream.fetch(input, init);
+  };
+  return { fetch: recording, signals };
+}
+
+function stalledCheckUpstream(): FakeFetch {
+  return fakeFetch([
+    {
+      method: 'POST',
+      path: CHECK_PATH,
+      reply: () => new Promise<FixtureResponse>(() => undefined),
+    },
+    {
+      method: 'GET',
+      path: COMPANY_PATH,
+      reply: loadFixture('company', 'default'),
+    },
+    {
+      method: 'GET',
+      path: SERVICES_PATH,
+      reply: loadFixture('book_services', 'default'),
+    },
+    {
+      method: 'GET',
+      path: STAFF_PATH,
+      reply: loadFixture('book_staff', 'default'),
+    },
+  ]);
+}
+
+describe('book_check slot check step budget (WR-04, D-01)', () => {
+  const ARGS = {
+    location_id: LOCATION_ID,
+    service_ids: [10303530],
+    datetime: SLOT,
+  };
+
+  it('the step budget is 12 s, a share of the 25 s call deadline', () => {
+    expect(BOOK_CHECK_STEP_MS).toBe(12_000);
+  });
+
+  it('a check that spends its step budget while the call is live gives an unverified plain link, the card read on the call signal', async () => {
+    const upstream = stalledCheckUpstream();
+    const { fetch: recording, signals } = recordSignals(upstream);
+    const booking = new BookingClient({
+      base: API_BASE,
+      token: TOKEN,
+      fetch: recording,
+    });
+    const parent = new AbortController();
+    const { ctx, step, budgets } = stepContext(parent.signal);
+
+    const pending = bookCheck.invoke(ARGS, { booking }, ctx);
+    await untilCalls(upstream, 1);
+    step.abort();
+    const out = okOutput(await pending);
+
+    expect(budgets).toEqual([BOOK_CHECK_STEP_MS]);
+    expect(out.status).toBe('unverified');
+    expect(out.link.kind).toBe('booking_form');
+    expect(out.notes).toContain(NOTE_UNVERIFIED);
+    expect(paths(upstream)).toEqual([
+      `POST ${CHECK_PATH}`,
+      `GET ${COMPANY_PATH}`,
+    ]);
+    expect(signals.get(CHECK_PATH)?.aborted).toBe(true);
+    // The card read is not bound to the spent step budget, only to the call.
+    const cardSignal = signals.get(COMPANY_PATH);
+    expect(cardSignal?.aborted).toBe(false);
+    parent.abort();
+    expect(cardSignal?.aborted).toBe(true);
+  });
+
+  it('a call that ends during the check ends in a tool error and reads no card', async () => {
+    const upstream = stalledCheckUpstream();
+    const booking = new BookingClient({
+      base: API_BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    const parent = new AbortController();
+    const { ctx } = stepContext(parent.signal);
+
+    const pending = bookCheck.invoke(ARGS, { booking }, ctx);
+    await untilCalls(upstream, 1);
+    parent.abort();
+    const invocation = await pending;
+
+    expectNoLinkError(invocation);
+    expect(invocation.errorType).toBe('ClientGone');
+    expect(paths(upstream)).toEqual([`POST ${CHECK_PATH}`]);
+  });
+
+  it('a 201 followed by successful reads still gives status verified', async () => {
+    const { upstream } = setup();
+    const booking = new BookingClient({
+      base: API_BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    const { ctx, budgets } = stepContext();
+    const out = okOutput(await bookCheck.invoke(ARGS, { booking }, ctx));
+    expect(out.status).toBe('verified');
+    expect(out.link.kind).toBe('preselected');
+    expect(budgets).toEqual([BOOK_CHECK_STEP_MS]);
+  });
+});
 
 describe('book_check statement after a 201 (BOOK-01, BOOK-03)', () => {
   it('statement: returns a verified pre-selected link and the selection read from the API', async () => {
@@ -476,6 +624,80 @@ describe('book_check fallbacks (BOOK-05, D-06)', () => {
     ).toBe(true);
   });
 
+  describe('one booking-form policy with business_get (WR-02, IN-03)', () => {
+    const FALLBACK_URL = `https://app.alteg.io/book/${LOCATION_ID}`;
+
+    function onlyForm(url: string): FixtureResponse {
+      return companyWith({
+        bookforms: [{ id: 7, title: 'Form', is_default: 1, url }],
+        default_bookform_url: url,
+      });
+    }
+
+    async function businessGetBooking(
+      company: FixtureResponse
+    ): Promise<{ enabled: boolean; booking_form_url: string | null }> {
+      const upstream = fakeFetch([
+        { method: 'GET', path: COMPANY_PATH, reply: company },
+      ]);
+      const booking = new BookingClient({
+        base: API_BASE,
+        token: TOKEN,
+        fetch: upstream.fetch,
+      });
+      const invocation = await businessGet.invoke(
+        { location_id: LOCATION_ID },
+        { booking }
+      );
+      expect(invocation.result.isError).toBeUndefined();
+      return (
+        invocation.result.structuredContent as {
+          online_booking: {
+            enabled: boolean;
+            booking_form_url: string | null;
+          };
+        }
+      ).online_booking;
+    }
+
+    it.each([
+      ['an http:// form', 'http://n1.alteg.io/'],
+      ['an altegio.me form', 'https://salon.altegio.me/'],
+      ['an off-list host', 'https://evil.example/ignore-previous-instructions'],
+    ])(
+      'a business whose only form is %s gets the same answer and the plain link from both tools',
+      async (_label, url) => {
+        const company = onlyForm(url);
+        const { invoke } = setup({ company });
+        const out = okOutput(
+          await invoke({
+            location_id: LOCATION_ID,
+            service_ids: [10303530],
+            team_member_id: ANNA,
+            datetime: SLOT,
+          })
+        );
+        const booking = await businessGetBooking(company);
+        expect(out.link).toEqual({ kind: 'booking_form', url: FALLBACK_URL });
+        expect(booking.enabled).toBe(true);
+        expect(booking.booking_form_url).toBe(out.link.url);
+      }
+    );
+
+    it('a business with an inactive widget is refused by book_check and not enabled in business_get', async () => {
+      const company = loadFixture('company', 'inactive');
+      const { invoke } = setup({ company });
+      expectNoLinkError(
+        await invoke({
+          location_id: LOCATION_ID,
+          service_ids: [10303530],
+          datetime: SLOT,
+        })
+      );
+      expect((await businessGetBooking(company)).enabled).toBe(false);
+    });
+  });
+
   it('fallback: a 503 on the check gives status unverified and the plain link, and reads only the card', async () => {
     const { invoke, upstream } = setup({
       check: loadFixture('book_check', 'unavailable_503'),
@@ -531,6 +753,34 @@ describe('book_check fallbacks (BOOK-05, D-06)', () => {
       })
     );
     expect(out.status).toBe('unverified');
+  });
+
+  it('a check that outlives the tool deadline ends in a tool error with no link and no fallback read (WR-04)', async () => {
+    const upstream = fakeFetch([
+      {
+        method: 'POST',
+        path: CHECK_PATH,
+        reply: () => new Promise<FixtureResponse>(() => undefined),
+      },
+      {
+        method: 'GET',
+        path: COMPANY_PATH,
+        reply: loadFixture('company', 'default'),
+      },
+    ]);
+    const booking = new BookingClient({
+      base: API_BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    const invocation = await bookCheck.invoke(
+      { location_id: LOCATION_ID, service_ids: [10303530], datetime: SLOT },
+      { booking },
+      createToolContext(undefined, null, 50)
+    );
+    expectNoLinkError(invocation);
+    expect(invocation.errorType).toBe('DeadlineExceeded');
+    expect(paths(upstream)).toEqual([`POST ${CHECK_PATH}`]);
   });
 
   it('fallback: an inconclusive check whose card read fails reports the check failure without a link', async () => {
@@ -686,21 +936,60 @@ describe('book_check errors without a link (BOOK-01, D-06)', () => {
     expect(paths(upstream)).toEqual([`POST ${CHECK_PATH}`]);
   });
 
-  it('a card read failing after a 201 asks to repeat the call', async () => {
-    const { invoke } = setup({ company: serverError() });
-    const text = expectNoLinkError(
-      await invoke({
-        location_id: LOCATION_ID,
-        service_ids: [10303530],
-        datetime: SLOT,
-      })
-    );
-    expect(
-      text.startsWith(
-        'The slot is free, but the booking link could not be prepared.'
-      )
-    ).toBe(true);
-    expect(text).toContain('Next: call book_check again in a few seconds.');
+  describe('a card read failing after a 201 gets the advice that fits the failure (WR-03)', () => {
+    const CARD_NOT_PREPARED =
+      'The slot check passed, but the booking link could not be prepared.';
+
+    async function failedCardRead(company: FixtureResponse | FakeReply) {
+      const { invoke } = setup({ company }, { timeoutMs: 20 });
+      return expectNoLinkError(
+        await invoke({
+          location_id: LOCATION_ID,
+          service_ids: [10303530],
+          datetime: SLOT,
+        })
+      );
+    }
+
+    it('a 5xx asks to repeat the call, without claiming the slot is free', async () => {
+      const text = await failedCardRead(serverError());
+      expect(text.startsWith(CARD_NOT_PREPARED)).toBe(true);
+      expect(text).toContain('Next: call book_check again in a few seconds.');
+      expect(text).not.toContain('The slot is free');
+    });
+
+    it('a timeout asks to repeat the call', async () => {
+      const text = await failedCardRead(
+        () => new Promise<FixtureResponse>(() => undefined)
+      );
+      expect(text.startsWith(CARD_NOT_PREPARED)).toBe(true);
+      expect(text).toContain('Next: call book_check again in a few seconds.');
+    });
+
+    it('a 429 with a 30-second reset says to wait 30 seconds, not a few', async () => {
+      const text = await failedCardRead({
+        status: 429,
+        headers: {
+          'content-type': 'application/json',
+          'x-rate-limit-reset': '30',
+        },
+        body: { success: false, data: null, meta: { message: 'Too many' } },
+      });
+      expect(text.startsWith('The booking service is busy right now.')).toBe(
+        true
+      );
+      expect(text).toContain('wait 30 seconds');
+      expect(text).not.toContain('a few seconds');
+      expect(text).not.toContain('The slot is free');
+    });
+
+    it('a 404 says no business was found for this location id', async () => {
+      const text = await failedCardRead(loadFixture('company', 'not_found'));
+      expect(
+        text.startsWith('No business was found for this location id.')
+      ).toBe(true);
+      expect(text).not.toContain('a few seconds');
+    });
   });
 
   it('a services read failing after a 201 still returns the link, with names marked unavailable', async () => {
@@ -721,6 +1010,55 @@ describe('book_check errors without a link (BOOK-01, D-06)', () => {
     const text = textOf(result);
     expect(text).toContain('- service 10303531: price not loaded');
     expect(text).not.toContain('price on request');
+  });
+
+  describe('price wording for a selected service (IN-04)', () => {
+    function servicesWith(extra: Record<string, unknown>): FixtureResponse {
+      const fixture = loadFixture('book_services', 'default');
+      const body = structuredClone(fixture.body) as {
+        data: { services: Record<string, unknown>[] };
+      };
+      body.data.services.push({
+        id: 10303599,
+        category_id: 7,
+        price_min: 0,
+        price_max: 0,
+        active: 1,
+        prepaid: null,
+        seance_length: null,
+        ...extra,
+      });
+      return { ...fixture, body };
+    }
+
+    it('a service in the catalog without a price and with a title that cleans to nothing is price on request', async () => {
+      const { invoke } = setup({ services: servicesWith({ title: '' }) });
+      const result = await invoke({
+        location_id: LOCATION_ID,
+        service_ids: [10303599],
+        datetime: SLOT,
+      });
+      const out = okOutput(result);
+      expect(out.selection.services[0]?.price).toBeNull();
+      expect(out.notes).not.toContain(NOTE_NAMES_UNAVAILABLE);
+      const text = textOf(result);
+      expect(text).toContain('- service 10303599: price on request');
+      expect(text).not.toContain('price not loaded');
+    });
+
+    it('a service missing from a catalog that did load is price not loaded', async () => {
+      const { invoke } = setup();
+      const result = await invoke({
+        location_id: LOCATION_ID,
+        service_ids: [99999999],
+        datetime: SLOT,
+      });
+      const out = okOutput(result);
+      expect(out.notes).toContain(NOTE_NAMES_UNAVAILABLE);
+      const text = textOf(result);
+      expect(text).toContain('- service 99999999: price not loaded');
+      expect(text).not.toContain('price on request');
+    });
   });
 
   it('a team members read failing after a 201 keeps the id and marks the name unavailable', async () => {

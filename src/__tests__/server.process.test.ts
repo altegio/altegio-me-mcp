@@ -1,9 +1,22 @@
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { createServer as createHttpServer, type Server } from 'node:http';
 import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from '@jest/globals';
+import { loadFixture } from '../booking/__tests__/helpers/fake-fetch.js';
+import { PROXY_AUTH_HEADER } from '../security/proxy-auth.js';
 import { PACKAGE_VERSION } from '../util/package-metadata.js';
+import { signProxyRequest } from './helpers/sign-request.js';
 
 const ROOT = process.cwd();
 const DIST = join(ROOT, 'dist');
@@ -25,6 +38,7 @@ interface RunningServer {
 }
 
 const children: ChildProcess[] = [];
+const tempDirs: string[] = [];
 
 function parseDotenv(text: string): Record<string, string> {
   const values: Record<string, string> = {};
@@ -144,6 +158,10 @@ async function validEnv(): Promise<Record<string, string>> {
     ...envExampleValues(),
     PORT: String(await freePort()),
     ALTEGIO_API_TOKEN: CANARY,
+    // Explicit, so no case relies on the check being off by default (it is
+    // required by default). The fail-closed startup cases build their own
+    // environment with productionEnv().
+    PROXY_AUTH: 'off',
   };
 }
 
@@ -188,6 +206,9 @@ afterEach(() => {
       child.kill('SIGKILL');
     }
   }
+  for (const directory of tempDirs.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 describe('build output', () => {
@@ -224,6 +245,7 @@ describe('node dist/server.js', () => {
       expect(await health.json()).toEqual({
         status: 'ok',
         version: PACKAGE_VERSION,
+        commit: null,
       });
 
       const list = await fetch(`${base}/mcp`, {
@@ -241,6 +263,37 @@ describe('node dist/server.js', () => {
       expect((body.result?.tools ?? []).map((tool) => tool.name)).toContain(
         'business_get'
       );
+
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'serves the claude.ai and claude.com origins and refuses another with 403',
+    async () => {
+      const env = await validEnv();
+      const server = startServer(env);
+      await within(server.firstStdoutLine(), 10_000);
+      const base = `http://127.0.0.1:${env.PORT ?? ''}`;
+      const status = async (origin: string | null): Promise<number> => {
+        const res = await fetch(`${base}/mcp`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json, text/event-stream',
+            ...(origin === null ? {} : { origin }),
+          },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+        });
+        await res.text();
+        return res.status;
+      };
+      expect(await status('https://claude.ai')).toBe(200);
+      expect(await status('https://claude.com')).toBe(200);
+      expect(await status(null)).toBe(200);
+      expect(await status('https://evil.example')).toBe(403);
 
       server.child.kill('SIGTERM');
       await within(server.exited, SHUTDOWN_WINDOW_MS);
@@ -325,7 +378,9 @@ describe('node dist/server.js', () => {
       await within(server.exited, SHUTDOWN_WINDOW_MS);
 
       const warnings = stdoutRecords(server).filter(
-        (record) => record.event === 'config_warning'
+        (record) =>
+          record.event === 'config_warning' &&
+          record.setting === 'ALTEGIO_API_TOKEN'
       );
       expect(warnings).toHaveLength(1);
       expect(warnings[0]?.setting).toBe('ALTEGIO_API_TOKEN');
@@ -342,7 +397,14 @@ describe('node dist/server.js', () => {
       await waitForStdout(server, '"event":"server_started"', 10_000);
       server.child.kill('SIGTERM');
       await within(server.exited, SHUTDOWN_WINDOW_MS);
-      expect(server.stdout()).not.toContain('config_warning');
+      // PROXY_AUTH=off logs its own config_warning; only the token one is checked here.
+      expect(
+        stdoutRecords(server).filter(
+          (record) =>
+            record.event === 'config_warning' &&
+            record.setting === 'ALTEGIO_API_TOKEN'
+        )
+      ).toEqual([]);
     },
     TEST_TIMEOUT_MS
   );
@@ -377,6 +439,528 @@ describe('node dist/server.js', () => {
       expect(status.code).toBe(1);
       expect(server.stderr()).toContain('  - PORT:');
       expect(server.stderr()).not.toContain('abc');
+    },
+    TEST_TIMEOUT_MS
+  );
+});
+
+// A production-like environment: the check is on by its default, no key
+// setting is present, so every case names the key source it gives the server.
+async function productionEnv(): Promise<Record<string, string>> {
+  const env = await validEnv();
+  env.NODE_ENV = 'production';
+  delete env.PROXY_AUTH;
+  delete env.MCP_PROXY_BACKEND_KEY;
+  delete env.MCP_PROXY_BACKEND_KEY_FILE;
+  return env;
+}
+
+function newKey(): string {
+  return randomBytes(32).toString('hex');
+}
+
+function keyFile(content: string): string {
+  const directory = mkdtempSync(join(tmpdir(), 'proxy-key-'));
+  tempDirs.push(directory);
+  const path = join(directory, 'key');
+  writeFileSync(path, content, { mode: 0o600 });
+  return path;
+}
+
+const MCP_HEADERS = {
+  'content-type': 'application/json',
+  accept: 'application/json, text/event-stream',
+};
+
+function postMcp(base: string, key: string | null): Promise<Response> {
+  const headers: Record<string, string> = { ...MCP_HEADERS };
+  if (key !== null) {
+    headers[PROXY_AUTH_HEADER] = signProxyRequest({
+      key,
+      method: 'POST',
+      path: '/mcp',
+    });
+  }
+  return fetch(`${base}/mcp`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+  });
+}
+
+describe('node dist/server.js: the proxy check fails closed (OPS-03, OPS-04)', () => {
+  it.each([
+    ['PROXY_AUTH unset', undefined],
+    ['PROXY_AUTH=required', 'required'],
+  ])(
+    'exits 1 in production with no key setting (%s), names MCP_PROXY_BACKEND_KEY and starts nothing',
+    async (_label, mode) => {
+      const env = await productionEnv();
+      if (mode !== undefined) env.PROXY_AUTH = mode;
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain('Invalid configuration:');
+      expect(server.stderr()).toContain('MCP_PROXY_BACKEND_KEY');
+      expect(server.stdout()).toBe('');
+      expect(server.stderr()).not.toContain(CANARY);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'exits 1 for a key file that holds a 20-character key, names the setting and prints no value',
+    async () => {
+      const shortKey = 'k7q2m9x4b1n8v5c3z6w0';
+      expect(shortKey).toHaveLength(20);
+      const env: Record<string, string> = {
+        ...(await productionEnv()),
+        MCP_PROXY_BACKEND_KEY_FILE: keyFile(`${shortKey}\n`),
+      };
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain('MCP_PROXY_BACKEND_KEY_FILE');
+      expect(server.stdout()).toBe('');
+      expect(server.stdout()).not.toContain(shortKey);
+      expect(server.stderr()).not.toContain(shortKey);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'exits 1 for a key file that does not exist, naming the setting',
+    async () => {
+      const env: Record<string, string> = {
+        ...(await productionEnv()),
+        MCP_PROXY_BACKEND_KEY_FILE: join(tmpdir(), 'no-such-dir', 'key'),
+      };
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain('MCP_PROXY_BACKEND_KEY_FILE');
+      expect(server.stdout()).toBe('');
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'exits 1 for an empty key file',
+    async () => {
+      const env: Record<string, string> = {
+        ...(await productionEnv()),
+        MCP_PROXY_BACKEND_KEY_FILE: keyFile('\n'),
+      };
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain('MCP_PROXY_BACKEND_KEY_FILE');
+      expect(server.stdout()).toBe('');
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'exits 1 for a plain MCP_PROXY_BACKEND_KEY of 20 characters, without printing it',
+    async () => {
+      const shortKey = 'p3d8r1y6t4u9e2w7s5a0';
+      const env: Record<string, string> = {
+        ...(await productionEnv()),
+        MCP_PROXY_BACKEND_KEY: shortKey,
+      };
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain('  - MCP_PROXY_BACKEND_KEY:');
+      expect(server.stderr()).not.toContain(shortKey);
+      expect(server.stdout()).toBe('');
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'starts with a readable 64-character key file, answers /health unsigned and /mcp only when signed',
+    async () => {
+      const key = newKey();
+      expect(key).toHaveLength(64);
+      const env: Record<string, string> = {
+        ...(await productionEnv()),
+        MCP_PROXY_BACKEND_KEY_FILE: keyFile(`${key}\n`),
+      };
+      const server = startServer(env);
+      await within(server.firstStdoutLine(), 10_000);
+      const base = `http://127.0.0.1:${env.PORT ?? ''}`;
+
+      expect((await fetch(`${base}/health`)).status).toBe(200);
+
+      const unsigned = await postMcp(base, null);
+      expect(unsigned.status).toBe(401);
+      expect(await unsigned.json()).toEqual({
+        error: 'proxy_auth_required',
+        error_description: 'requests must come through mcp-proxy',
+      });
+      const wrongKey = await postMcp(base, newKey());
+      expect(wrongKey.status).toBe(401);
+      const signed = await postMcp(base, key);
+      expect(signed.status).toBe(200);
+
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(server.stdout()).not.toContain(key);
+      expect(server.stderr()).not.toContain(key);
+      expect(
+        stdoutRecords(server).filter(
+          (record) =>
+            record.event === 'config_warning' && record.setting === 'PROXY_AUTH'
+        )
+      ).toEqual([]);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'verifies requests signed with either key of an old,new rotation payload',
+    async () => {
+      const oldKey = newKey();
+      const newerKey = newKey();
+      const env: Record<string, string> = {
+        ...(await productionEnv()),
+        MCP_PROXY_BACKEND_KEY_FILE: keyFile(`${oldKey},${newerKey}\n`),
+      };
+      const server = startServer(env);
+      await within(server.firstStdoutLine(), 10_000);
+      const base = `http://127.0.0.1:${env.PORT ?? ''}`;
+
+      expect((await postMcp(base, oldKey)).status).toBe(200);
+      expect((await postMcp(base, newerKey)).status).toBe(200);
+      expect((await postMcp(base, newKey())).status).toBe(401);
+
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(server.stdout()).not.toContain(oldKey);
+      expect(server.stdout()).not.toContain(newerKey);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'starts with PROXY_AUTH=off, logs one config_warning naming PROXY_AUTH and serves /mcp unsigned',
+    async () => {
+      const env = await validEnv();
+      const server = startServer(env);
+      await waitForStdout(server, '"event":"config_warning"', 10_000);
+      const base = `http://127.0.0.1:${env.PORT ?? ''}`;
+      expect((await postMcp(base, null)).status).toBe(200);
+
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+      const warnings = stdoutRecords(server).filter(
+        (record) =>
+          record.event === 'config_warning' && record.setting === 'PROXY_AUTH'
+      );
+      expect(warnings).toHaveLength(1);
+      expect(JSON.stringify(warnings[0])).not.toContain(CANARY);
+    },
+    TEST_TIMEOUT_MS
+  );
+});
+
+describe('node dist/server.js: GET /health commit (OPS-02)', () => {
+  it(
+    'reports the COMMIT_SHA the process was given',
+    async () => {
+      const env: Record<string, string> = {
+        ...(await validEnv()),
+        COMMIT_SHA: '0123abc4567def',
+      };
+      const server = startServer(env);
+      await within(server.firstStdoutLine(), 10_000);
+      const health = await fetch(`http://127.0.0.1:${env.PORT ?? ''}/health`);
+      expect(await health.json()).toEqual({
+        status: 'ok',
+        version: PACKAGE_VERSION,
+        commit: '0123abc4567def',
+      });
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'reports null when no COMMIT_SHA is given',
+    async () => {
+      const env = await validEnv();
+      env.COMMIT_SHA = '';
+      const server = startServer(env);
+      await within(server.firstStdoutLine(), 10_000);
+      const health = await fetch(`http://127.0.0.1:${env.PORT ?? ''}/health`);
+      expect(((await health.json()) as { commit: unknown }).commit).toBeNull();
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'exits 1 for a COMMIT_SHA that is not 7 to 40 lowercase hex characters, without printing it',
+    async () => {
+      const env: Record<string, string> = {
+        ...(await validEnv()),
+        COMMIT_SHA: 'Not-A-Commit',
+      };
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain('  - COMMIT_SHA:');
+      expect(server.stderr()).not.toContain('Not-A-Commit');
+    },
+    TEST_TIMEOUT_MS
+  );
+});
+
+// OPS-04: production mounts the shared partner token as a file. The process
+// reads it at startup (fail closed), prefers it over a plain value, and a
+// rotation reaches the running process through the forced re-read on a 401.
+const TOKEN_A = 'file-partner-token-AAAA-1f3e5d7c9b';
+const TOKEN_B = 'file-partner-token-BBBB-2a4c6e8d0f';
+const LOCATION = 722227;
+
+interface FakeUpstream {
+  base: string;
+  /** The Authorization header of every request, in order. */
+  sent: string[];
+  close: () => Promise<void>;
+}
+
+// The Altegio API as the process sees it: only the tokens in `accepts()` get
+// the company fixture. Any other token gets `rejection(presented)`.
+async function startUpstream(
+  accepts: () => readonly string[],
+  rejection: (presented: string) => { status: number; body: unknown }
+): Promise<FakeUpstream> {
+  const sent: string[] = [];
+  const server: Server = createHttpServer((req, res) => {
+    const header = req.headers.authorization ?? '';
+    sent.push(header);
+    const presented = header.replace(/^Bearer /, '');
+    const ok = accepts().includes(presented);
+    const reply = ok
+      ? { status: 200, body: loadFixture('company', 'default').body }
+      : rejection(presented);
+    res.writeHead(reply.status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(reply.body));
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address !== 'object') {
+    throw new Error('fake upstream has no port');
+  }
+  return {
+    base: `http://127.0.0.1:${String(address.port)}/api/v1`,
+    sent,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+        server.closeAllConnections();
+      }),
+  };
+}
+
+function callBusinessGet(base: string): Promise<Response> {
+  return fetch(`${base}/mcp`, {
+    method: 'POST',
+    headers: MCP_HEADERS,
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 7,
+      method: 'tools/call',
+      params: { name: 'business_get', arguments: { location_id: LOCATION } },
+    }),
+  });
+}
+
+async function tokenFileEnv(
+  token: string
+): Promise<{ env: Record<string, string>; path: string }> {
+  const env = await validEnv();
+  delete env.ALTEGIO_API_TOKEN;
+  const path = keyFile(`${token}\n`);
+  env.ALTEGIO_API_TOKEN_FILE = path;
+  return { env, path };
+}
+
+describe('node dist/server.js: the partner token from ALTEGIO_API_TOKEN_FILE (OPS-04)', () => {
+  it(
+    'starts from a readable token file with no ALTEGIO_API_TOKEN, answers /health and never prints the token',
+    async () => {
+      const { env } = await tokenFileEnv(TOKEN_A);
+      const server = startServer(env);
+      await within(server.firstStdoutLine(), 10_000);
+      const health = await fetch(`http://127.0.0.1:${env.PORT ?? ''}/health`);
+      expect(health.status).toBe(200);
+      server.child.kill('SIGTERM');
+      await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(server.stdout()).not.toContain(TOKEN_A);
+      expect(server.stderr()).not.toContain(TOKEN_A);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it.each([
+    [
+      'a path that does not exist',
+      (): string => join(tmpdir(), 'no-such-dir', 'token'),
+    ],
+    ['an empty file', (): string => keyFile('\n')],
+  ])(
+    'exits 1 for %s, names ALTEGIO_API_TOKEN_FILE and prints no value, even with a plain ALTEGIO_API_TOKEN set',
+    async (_label, path) => {
+      const env = {
+        ...(await validEnv()),
+        ALTEGIO_API_TOKEN_FILE: path(),
+      };
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain('ALTEGIO_API_TOKEN_FILE');
+      expect(server.stdout()).toBe('');
+      // The plain value is never a fallback for an unusable file (T-03-22).
+      expect(server.stderr()).not.toContain(CANARY);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'exits 1 and names both settings when neither is set',
+    async () => {
+      const env = await validEnv();
+      delete env.ALTEGIO_API_TOKEN;
+      const server = startServer(env);
+      const status = await within(server.exited, SHUTDOWN_WINDOW_MS);
+      expect(status.code).toBe(1);
+      expect(server.stderr()).toContain(
+        'Partner API token is required (ALTEGIO_API_TOKEN or ALTEGIO_API_TOKEN_FILE)'
+      );
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'sends the file token, not the plain ALTEGIO_API_TOKEN, to the Altegio API',
+    async () => {
+      const upstream = await startUpstream(
+        () => [TOKEN_A],
+        () => ({ status: 401, body: { success: false, meta: {} } })
+      );
+      try {
+        const { env } = await tokenFileEnv(TOKEN_A);
+        env.ALTEGIO_API_TOKEN = CANARY;
+        env.ALTEGIO_API_BASE = upstream.base;
+        const server = startServer(env);
+        await within(server.firstStdoutLine(), 10_000);
+
+        const response = await callBusinessGet(
+          `http://127.0.0.1:${env.PORT ?? ''}`
+        );
+        const body = (await response.json()) as {
+          result?: { isError?: boolean };
+        };
+
+        expect(body.result?.isError).not.toBe(true);
+        expect(upstream.sent).toEqual([`Bearer ${TOKEN_A}`]);
+        server.child.kill('SIGTERM');
+        await within(server.exited, SHUTDOWN_WINDOW_MS);
+      } finally {
+        await upstream.close();
+      }
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'picks up a rotated token without a restart: the 401 forces a re-read and the call succeeds with the new token',
+    async () => {
+      const upstream = await startUpstream(
+        () => [TOKEN_B],
+        () => ({ status: 401, body: { success: false, meta: {} } })
+      );
+      try {
+        const { env, path } = await tokenFileEnv(TOKEN_A);
+        env.ALTEGIO_API_BASE = upstream.base;
+        const server = startServer(env);
+        await within(server.firstStdoutLine(), 10_000);
+
+        // The platform rotates the secret while the process runs.
+        writeFileSync(path, `${TOKEN_B}\n`);
+        const response = await callBusinessGet(
+          `http://127.0.0.1:${env.PORT ?? ''}`
+        );
+        const body = (await response.json()) as {
+          result?: { isError?: boolean };
+        };
+
+        expect(body.result?.isError).not.toBe(true);
+        expect(upstream.sent).toEqual([
+          `Bearer ${TOKEN_A}`,
+          `Bearer ${TOKEN_B}`,
+        ]);
+        server.child.kill('SIGTERM');
+        await within(server.exited, SHUTDOWN_WINDOW_MS);
+        expect(server.stdout()).not.toContain(TOKEN_A);
+        expect(server.stdout()).not.toContain(TOKEN_B);
+        expect(server.stderr()).not.toContain(TOKEN_B);
+      } finally {
+        await upstream.close();
+      }
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    'redacts both the rotated-out and the current token from a tool result that an upstream message quotes',
+    async () => {
+      const upstream = await startUpstream(
+        () => [],
+        (presented) =>
+          presented === TOKEN_A
+            ? { status: 401, body: { success: false, meta: {} } }
+            : {
+                status: 400,
+                body: {
+                  success: false,
+                  meta: { message: `was ${TOKEN_A}, now ${TOKEN_B}, rejected` },
+                },
+              }
+      );
+      try {
+        const { env, path } = await tokenFileEnv(TOKEN_A);
+        env.ALTEGIO_API_BASE = upstream.base;
+        const server = startServer(env);
+        await within(server.firstStdoutLine(), 10_000);
+
+        writeFileSync(path, `${TOKEN_B}\n`);
+        const response = await callBusinessGet(
+          `http://127.0.0.1:${env.PORT ?? ''}`
+        );
+        const text = await response.text();
+
+        expect(upstream.sent).toEqual([
+          `Bearer ${TOKEN_A}`,
+          `Bearer ${TOKEN_B}`,
+        ]);
+        expect(text).toContain('[redacted]');
+        expect(text).not.toContain(TOKEN_A);
+        expect(text).not.toContain(TOKEN_B);
+        server.child.kill('SIGTERM');
+        await within(server.exited, SHUTDOWN_WINDOW_MS);
+      } finally {
+        await upstream.close();
+      }
     },
     TEST_TIMEOUT_MS
   );

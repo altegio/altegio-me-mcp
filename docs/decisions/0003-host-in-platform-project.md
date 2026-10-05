@@ -109,3 +109,35 @@ Resource names:
 - Ownership splits as it does for Pro. The platform team runs the project, the proxy and its own
   monitoring. We own the service: its code, its alerts and its incidents.
 - If the platform team declines, fall back to ADR 0001 D3 as written: a project of our own.
+
+## Implementation (Phase 3)
+
+Status of this decision stays accepted. Phase 3 built the setup in the repository; nothing has
+been run live yet (the first deploy waits for the platform team, I5 and I6).
+
+- One-time setup: [`scripts/gcp/bootstrap.sh`](../../scripts/gcp/bootstrap.sh), idempotent, with
+  `--print` as the review artifact for the platform engineer.
+- Deploy pipeline: [`cloudbuild.yaml`](../../cloudbuild.yaml), run by the trigger
+  `altegio-me-mcp-deploy` on a merge to `main`. The README table "Deployed settings" is tested
+  against it.
+- Operations: [`docs/runbooks/gcp-hosting.md`](../runbooks/gcp-hosting.md) (resources, access,
+  deploy flow, rollback, rotation, monitoring, drill, known limits, deployment record).
+
+Two findings from building it:
+
+1. **Labels.** The label `app=altegio-me-mcp` named in the table above can be set only on the Cloud
+   Run service, the uptime checks and the alert policies. Service accounts, the trigger, the
+   repository link, secrets and log-based metrics cannot carry it, so cost by label covers Cloud
+   Run only and the other resources are found by name (the runbook lists each).
+2. **Registry rights.** `roles/artifactregistry.writer` on the shared repository `cloud-run` is
+   repository-wide, so the build account could overwrite another image's tag there. The residual
+   risk is held down by the trigger running only on `main` behind the required `test` check, and
+   by pushing only the commit-SHA tag. If the platform objects, the fallback is a repository of our
+   own.
+
+Two open points of the Consequences list are settled. A rotation of `ALTEGIO_API_TOKEN` reaches
+the service without a restart: both secrets are mounted as files and re-read within 60 seconds.
+Closing the `run.app` address to everything except the proxy is not possible: internal ingress
+admits only callers inside the project's network and an IAM invoker rule needs an ID token the
+proxy does not send, so the service runs with `--ingress=all` and relies on the proxy signature
+on `/mcp`.

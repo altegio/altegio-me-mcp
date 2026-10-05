@@ -7,10 +7,14 @@ import {
   type TeamMember,
   type TimeSlot,
 } from '../booking/client.js';
+import { calendarDayNumber } from '../booking/calendar.js';
 import {
   SLOT_DATETIME_PATTERN,
+  bookableFormUrl,
+  canTakeOnlineBookings,
   formatUtcOffset,
   parseSlotDatetime,
+  plainBookingLink,
 } from '../booking/deep-link.js';
 import { defineTool, type ToolHints } from './factory.js';
 import {
@@ -47,10 +51,17 @@ export function untrustedText(label: string) {
   return z.string().nullable().describe(`${label} ${UNTRUSTED_NOTE}`);
 }
 
+/** Like untrustedText for a field that is always present. */
+function untrustedString(label: string) {
+  return z.string().describe(`${label} ${UNTRUSTED_NOTE}`);
+}
+
 const bookingFormSchema = z.strictObject({
   id: z.number().int().describe('Booking form id.'),
   title: untrustedText('Booking form title.'),
-  url: z.string().describe('Booking form address.'),
+  url: untrustedString(
+    'Booking form address, only on a host Altegio uses for booking forms.'
+  ),
   is_default: z.boolean().describe('Whether this is the default form.'),
 });
 
@@ -88,10 +99,9 @@ const businessCardSchema = z.strictObject({
       .boolean()
       .describe('Whether a client may book without choosing a team member.'),
     prepayment_policy: untrustedText('Prepayment policy type.'),
-    booking_form_url: z
-      .string()
-      .nullable()
-      .describe('Address of the default booking form.'),
+    booking_form_url: untrustedText(
+      'Address of the default booking form, or the plain booking link app.alteg.io/book/{location_id} when the form is not on a host Altegio uses for booking forms; null when there is no form.'
+    ),
     booking_forms: z.array(bookingFormSchema),
   }),
   next_free_slot: z
@@ -106,21 +116,6 @@ type BusinessCardOutput = z.infer<typeof businessCardSchema>;
 
 /** Cap on the business name, in code points; other text fields use the default. */
 export const NAME_MAX_CHARS = 200;
-
-/**
- * A booking-form address we may hand to a client: an https URL that parses
- * and needed no cleaning. Anything else is dropped (T-02-38).
- */
-function httpsUrl(value: string | null): string | null {
-  if (value === null) return null;
-  const text = sanitizeUntrusted(value);
-  if (text === null || text !== value) return null;
-  try {
-    return new URL(text).protocol === 'https:' ? text : null;
-  } catch {
-    return null;
-  }
-}
 
 function renderPhoneConfirmation(required: boolean | null): string {
   if (required === null) return 'unknown';
@@ -183,16 +178,19 @@ export const businessGet = defineTool<
   input: businessGetInput,
   output: businessCardSchema,
   render: renderCard,
-  handler: async ({ input, deps }) => {
+  handler: async ({ input, deps, ctx }) => {
     let card: BusinessCard;
     try {
-      card = await deps.booking.company(input.location_id);
+      card = await deps.booking.company(input.location_id, {
+        signal: ctx.signal,
+        key: ctx.clientKey,
+      });
     } catch (error) {
       // Every upstream failure becomes an in-band error that names the next action (BAPI-01).
       throw toToolError(error);
     }
     const forms = card.bookingForms.flatMap((form) => {
-      const url = httpsUrl(form.url);
+      const url = bookableFormUrl(form.url);
       return url === null
         ? []
         : [
@@ -205,12 +203,16 @@ export const businessGet = defineTool<
           ];
     });
     // The client's precedence (default form, default_bookform_url, first
-    // form), restricted to https addresses.
+    // form), restricted to the addresses book_check would also link to. A card
+    // with a form but no such address gets the plain link book_check falls back
+    // to, so both tools name the same place (WR-02, IN-03).
     const formUrl =
       forms.find((form) => form.is_default)?.url ??
-      httpsUrl(card.bookingFormUrl) ??
+      bookableFormUrl(card.bookingFormUrl) ??
       forms[0]?.url ??
-      null;
+      (card.bookingFormUrl === null
+        ? null
+        : plainBookingLink(card.locationId, card.bookingFormUrl).url);
     const nextSlot =
       card.nextFreeSlot !== null &&
       SLOT_DATETIME_PATTERN.test(card.nextFreeSlot)
@@ -231,7 +233,7 @@ export const businessGet = defineTool<
       },
       currency: sanitizeUntrusted(card.currency),
       online_booking: {
-        enabled: card.widgetActive && formUrl !== null,
+        enabled: canTakeOnlineBookings(card),
         widget_active: card.widgetActive,
         phone_confirmation: card.phoneConfirmation,
         any_team_member_allowed: card.anyTeamMemberAllowed,
@@ -260,6 +262,9 @@ const DATETIME_FILTER_DESCRIPTION =
 const datetimeFilter = z
   .string()
   .regex(SLOT_DATETIME_PATTERN)
+  .refine((value) => parseSlotDatetime(value) !== null, {
+    message: 'must be a slot datetime with a valid date, time and offset',
+  })
   .optional()
   .describe(DATETIME_FILTER_DESCRIPTION);
 
@@ -451,17 +456,24 @@ export const businessListServices = defineTool<
   input: servicesInput,
   output: servicesOutput,
   render: renderServices,
-  handler: async ({ input, deps }) => {
+  handler: async ({ input, deps, ctx }) => {
     let card: BusinessCard;
     let catalog: ServiceCatalog;
     try {
       // The currency is on the card; both reads go through the shared gate.
       [card, catalog] = await Promise.all([
-        deps.booking.company(input.location_id),
-        deps.booking.services(input.location_id, {
-          teamMemberId: input.team_member_id,
-          datetime: input.datetime,
+        deps.booking.company(input.location_id, {
+          signal: ctx.signal,
+          key: ctx.clientKey,
         }),
+        deps.booking.services(
+          input.location_id,
+          {
+            teamMemberId: input.team_member_id,
+            datetime: input.datetime,
+          },
+          { signal: ctx.signal, key: ctx.clientKey }
+        ),
       ]);
     } catch (error) {
       throw toToolError(
@@ -583,13 +595,17 @@ export const businessListTeamMembers = defineTool<
   input: teamMembersInput,
   output: teamMembersOutput,
   render: renderTeamMembers,
-  handler: async ({ input, deps }) => {
+  handler: async ({ input, deps, ctx }) => {
     let members: TeamMember[];
     try {
-      members = await deps.booking.teamMembers(input.location_id, {
-        serviceIds: input.service_ids,
-        datetime: input.datetime,
-      });
+      members = await deps.booking.teamMembers(
+        input.location_id,
+        {
+          serviceIds: input.service_ids,
+          datetime: input.datetime,
+        },
+        { signal: ctx.signal, key: ctx.clientKey }
+      );
     } catch (error) {
       throw toToolError(
         error,
@@ -616,25 +632,6 @@ export const businessListTeamMembers = defineTool<
 
 /** Widest date range business_list_dates asks for, in days (02-RESEARCH Pitfall 6). */
 export const MAX_DATE_RANGE_DAYS = 62;
-
-/** Day number of a YYYY-MM-DD date that exists in the calendar, else null. */
-function calendarDayNumber(value: string): number | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  const [, year, month, day] = match ?? [];
-  if (year === undefined || month === undefined || day === undefined) {
-    return null;
-  }
-  const ms = Date.UTC(Number(year), Number(month) - 1, Number(day));
-  const date = new Date(ms);
-  if (
-    date.getUTCFullYear() !== Number(year) ||
-    date.getUTCMonth() !== Number(month) - 1 ||
-    date.getUTCDate() !== Number(day)
-  ) {
-    return null;
-  }
-  return ms / 86_400_000;
-}
 
 function calendarDate(description: string) {
   return z
@@ -779,15 +776,19 @@ export const businessListDates = defineTool<
   input: datesInput,
   output: datesOutput,
   render: renderDates,
-  handler: async ({ input, deps }) => {
+  handler: async ({ input, deps, ctx }) => {
     let dates: string[];
     try {
-      dates = await deps.booking.dates(input.location_id, {
-        serviceIds: input.service_ids,
-        teamMemberId: input.team_member_id,
-        dateFrom: input.date_from,
-        dateTo: input.date_to,
-      });
+      dates = await deps.booking.dates(
+        input.location_id,
+        {
+          serviceIds: input.service_ids,
+          teamMemberId: input.team_member_id,
+          dateFrom: input.date_from,
+          dateTo: input.date_to,
+        },
+        { signal: ctx.signal, key: ctx.clientKey }
+      );
     } catch (error) {
       throw toToolError(error, {
         not_found: {
@@ -950,14 +951,15 @@ export const businessListTimeSlots = defineTool<
   input: timeSlotsInput,
   output: timeSlotsOutput,
   render: renderTimeSlots,
-  handler: async ({ input, deps }) => {
+  handler: async ({ input, deps, ctx }) => {
     let slots: TimeSlot[];
     try {
       slots = await deps.booking.timeSlots(
         input.location_id,
         input.team_member_id,
         input.date,
-        input.service_ids
+        input.service_ids,
+        { signal: ctx.signal, key: ctx.clientKey }
       );
     } catch (error) {
       throw toToolError(error, {

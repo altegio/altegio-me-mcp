@@ -1,0 +1,155 @@
+# Deploy pipeline for the Cloud Run service altegio-me-mcp (OPS-02).
+#
+# Production changes reach Cloud Run only through the Cloud Build trigger on a
+# merge to main. Nobody runs `gcloud run deploy` by hand. Rollback is a revert
+# PR through the same trigger; an emergency traffic move by hand needs the
+# owner's approval (runbook in plan 03-11).
+#
+# Flow: build, push the commit tag, deploy a revision that takes no traffic,
+# smoke-test that revision on its tag URL, then move traffic to it and drop the
+# tag. A revision that fails its smoke test, or is no longer the newest one,
+# never takes traffic.
+#
+# Built-ins used: $PROJECT_ID, $SHORT_SHA and $COMMIT_SHA are trigger values.
+# A manual `gcloud builds submit` must pass them itself. Inside a bash script
+# a literal shell variable is written $$VAR so Cloud Build leaves it alone.
+#
+# No secret value is here. The two secrets reach the revision as mounted files
+# (--set-secrets); the server re-reads them (plans 03-05 and 03-08).
+substitutions:
+  _REGION: europe-west1
+  _SERVICE: altegio-me-mcp
+  _IMAGE: europe-west1-docker.pkg.dev/$PROJECT_ID/cloud-run/altegio-me-mcp
+  _RUNTIME_SA: altegio-me-mcp-runtime
+  _TOKEN_SECRET: MARKETPLACE_PARTNER_TOKEN
+  _PROXY_KEY_SECRET: MCP_PROXY_BACKEND_KEY_ME
+  _PUBLIC_BASE_URL: https://mcp.alteg.io/me
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args: [build, -t, '${_IMAGE}:$SHORT_SHA', .]
+
+  # Only the commit tag is pushed: the repository is shared with the platform's
+  # images, so a moving tag such as :latest could overwrite someone else's.
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: [push, '${_IMAGE}:$SHORT_SHA']
+
+  # A failed earlier run can leave a tag, and a tagged revision with a
+  # revision-level minimum stays running and billed. Clear them first.
+  - id: clear-stale-tags
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:587.0.0
+    entrypoint: gcloud
+    args:
+      - run
+      - services
+      - update-traffic
+      - ${_SERVICE}
+      - --region=${_REGION}
+      - --clear-tags
+
+  # The service itself is created once by the bootstrap (plan 03-11), which
+  # also turns the invoker check off; later deploys keep both. --set-env-vars
+  # and --set-secrets replace the whole set, so this file is the one place that
+  # declares them.
+  - id: deploy-tagged
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:587.0.0
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_IMAGE}:$SHORT_SHA
+      - --region=${_REGION}
+      - --no-traffic
+      - --tag=b$SHORT_SHA
+      - --service-account=${_RUNTIME_SA}@$PROJECT_ID.iam.gserviceaccount.com
+      - --ingress=all
+      - --min-instances=1
+      - --max-instances=1
+      - --cpu=1
+      - --memory=512Mi
+      - --concurrency=80
+      - --timeout=60
+      - --cpu-boost
+      - --cpu-throttling
+      - --labels=app=altegio-me-mcp
+      - --set-env-vars=NODE_ENV=production,PUBLIC_BASE_URL=${_PUBLIC_BASE_URL},LOG_LEVEL=info,COMMIT_SHA=$COMMIT_SHA,ALTEGIO_API_TOKEN_FILE=/secrets/altegio-api/token,MCP_PROXY_BACKEND_KEY_FILE=/secrets/proxy-key/key
+      - --set-secrets=/secrets/altegio-api/token=${_TOKEN_SECRET}:latest,/secrets/proxy-key/key=${_PROXY_KEY_SECRET}:latest
+
+  # /health must report this build's commit and an unsigned POST /mcp must be
+  # refused with 401: that proves start-up config, both secret mounts and the
+  # anonymous run.app path. The build account cannot read the proxy key, so a
+  # signed call is not possible here; scripts/smoke.sh proved it on the image.
+  - id: smoke-tagged
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:587.0.0
+    entrypoint: bash
+    env:
+      - TAG=b$SHORT_SHA
+    args:
+      - -euo
+      - pipefail
+      - -c
+      - |
+        gcloud run services describe ${_SERVICE} --region=${_REGION} --format=json > /workspace/service.json
+        URL=$$(python3 -c '
+        import json, os, sys
+        tag = os.environ["TAG"]
+        with open("/workspace/service.json") as f:
+            service = json.load(f)
+        for entry in service.get("status", {}).get("traffic", []):
+            if entry.get("tag") == tag and entry.get("url"):
+                print(entry["url"])
+                sys.exit(0)
+        sys.exit("no traffic entry with tag " + tag)
+        ')
+        echo "smoke-testing $$URL"
+        bash scripts/smoke-url.sh "$$URL" "$COMMIT_SHA"
+
+  # Two merges in quick succession run two builds. Only the newest revision may
+  # take traffic, or the older commit could land last and sit in production.
+  - id: shift
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:587.0.0
+    entrypoint: bash
+    env:
+      - TAG=b$SHORT_SHA
+    args:
+      - -euo
+      - pipefail
+      - -c
+      - |
+        gcloud run services describe ${_SERVICE} --region=${_REGION} --format=json > /workspace/service.json
+        python3 -c '
+        import json, os, sys
+        tag = os.environ["TAG"]
+        with open("/workspace/service.json") as f:
+            service = json.load(f)
+        latest = service.get("status", {}).get("latestCreatedRevisionName")
+        for entry in service.get("status", {}).get("traffic", []):
+            if entry.get("tag") == tag:
+                if entry.get("revisionName") != latest:
+                    sys.exit("revision " + str(entry.get("revisionName")) + " is no longer the latest created revision (" + str(latest) + "); a newer build exists, traffic is not moved")
+                sys.exit(0)
+        sys.exit("no traffic entry with tag " + tag)
+        '
+        gcloud run services update-traffic ${_SERVICE} --region=${_REGION} --to-tags=$$TAG=100
+
+  # The tag has done its job. Left in place it would keep a second instance
+  # running next to the serving one.
+  - id: untag
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:587.0.0
+    entrypoint: gcloud
+    args:
+      - run
+      - services
+      - update-traffic
+      - ${_SERVICE}
+      - --region=${_REGION}
+      - --remove-tags=b$SHORT_SHA
+
+options:
+  # Required when the trigger runs as a user-specified service account.
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1200s

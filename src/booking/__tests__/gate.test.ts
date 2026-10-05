@@ -1,3 +1,4 @@
+import { getEventListeners } from 'node:events';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import {
   DEFAULT_GATE_OPTIONS,
@@ -9,6 +10,7 @@ import {
   retryAfterSeconds,
   type RequestGateOptions,
 } from '../gate.js';
+import { PASS_THROUGH_GATE } from '../http.js';
 import { createFakeClock, type FakeClock } from './helpers/fake-clock.js';
 
 // The outbound throttle (BAPI-02, D-03): at most one start every 250 ms, at
@@ -64,6 +66,7 @@ describe('throttle constants (D-03)', () => {
       perMinute: 180,
       maxWaitMs: 10_000,
       maxQueue: 40,
+      maxQueuePerKey: 8,
     });
     expect(Object.isFrozen(DEFAULT_GATE_OPTIONS)).toBe(true);
     expect(DEFAULT_RETRY_AFTER_SECONDS).toBe(2);
@@ -274,6 +277,281 @@ describe('RequestGate bounded wait (BAPI-02, T-02-19)', () => {
     expect(fast).toBe(T0 + 250);
     release();
     await expect(slow).resolves.toBe('slow');
+  });
+});
+
+describe('RequestGate abortable waiters (WR-04, T-03-16)', () => {
+  it('rejects at once with the signal reason, and starts nothing, for an already aborted signal', async () => {
+    const clock = createFakeClock(T0);
+    const gate = gateOn(clock);
+    const reason = new Error('client went away');
+    const controller = new AbortController();
+    controller.abort(reason);
+    const start = jest.fn(() => Promise.resolve('started'));
+
+    await expect(gate.run(start, { signal: controller.signal })).rejects.toBe(
+      reason
+    );
+    expect(start).not.toHaveBeenCalled();
+    expect(clock.sleeps).toEqual([]);
+    // The gate is untouched: the next caller starts with no wait.
+    expect(await gate.run(() => Promise.resolve(clock.now()))).toBe(T0);
+  });
+
+  it('checks the signal before the saturation checks', async () => {
+    const clock = createFakeClock(T0);
+    const gate = gateOn(clock);
+    gate.pauseUntil(T0 + 30_000);
+    const reason = new Error('gone');
+    const controller = new AbortController();
+    controller.abort(reason);
+
+    await expect(
+      gate.run(() => Promise.resolve(1), { signal: controller.signal })
+    ).rejects.toBe(reason);
+  });
+
+  it('removes a waiter whose signal aborts while queued and never starts it', async () => {
+    const clock = createFakeClock(T0);
+    const gate = gateOn(clock);
+    gate.pauseUntil(T0 + 1000);
+    const starts: string[] = [];
+    const run = (name: string, signal?: AbortSignal): Promise<number> =>
+      gate.run(
+        () => {
+          starts.push(name);
+          return Promise.resolve(clock.now());
+        },
+        { signal }
+      );
+    const controller = new AbortController();
+    const reason = new Error('client went away');
+
+    const first = run('first');
+    const abandoned = run('abandoned', controller.signal);
+    const third = run('third');
+    controller.abort(reason);
+
+    await expect(abandoned).rejects.toBe(reason);
+    // The abandoned call frees its place at once: the third caller starts one
+    // spacing after the first, not two.
+    expect(await first).toBe(T0 + 1000);
+    expect(await third).toBe(T0 + 1250);
+    expect(starts).toEqual(['first', 'third']);
+  });
+
+  it('shrinks the projected wait of the next caller when a queued call is abandoned', async () => {
+    const clock = createFakeClock(T0);
+    const gate = gateOn(clock, { maxWaitMs: 1400 });
+    gate.pauseUntil(T0 + 1000);
+    const controllers = Array.from({ length: 6 }, () => new AbortController());
+    const queued = controllers.map((controller) =>
+      gate.run(() => Promise.resolve(clock.now()), {
+        signal: controller.signal,
+      })
+    );
+    // The clock sits at the pause end once the gate sleeps; a seventh caller
+    // would start 1500 ms later, past the 1400 ms bound.
+    const late = gate.run(() => Promise.resolve(0));
+    await expect(late).rejects.toBeInstanceOf(GateSaturatedError);
+
+    for (const controller of controllers.slice(1)) controller.abort();
+    await Promise.allSettled(queued);
+    const admitted = await gate.run(() => Promise.resolve(clock.now()));
+    expect(admitted).toBe(T0 + 1250);
+  });
+
+  it('does not cancel a start the gate already admitted when its signal aborts later', async () => {
+    const clock = createFakeClock(T0);
+    const gate = gateOn(clock);
+    const controller = new AbortController();
+    let release: () => void = () => undefined;
+    const call = gate.run(
+      () =>
+        new Promise<string>((resolve) => {
+          release = () => resolve('finished');
+        }),
+      { signal: controller.signal }
+    );
+    controller.abort(new Error('late'));
+    release();
+    await expect(call).resolves.toBe('finished');
+  });
+
+  it('leaves no abort listener on the signal after the waiter started or was removed', async () => {
+    const clock = createFakeClock(T0);
+    const gate = gateOn(clock);
+    gate.pauseUntil(T0 + 1000);
+    const started = new AbortController();
+    const removed = new AbortController();
+
+    const first = gate.run(() => Promise.resolve(1), {
+      signal: started.signal,
+    });
+    const second = gate.run(() => Promise.resolve(2), {
+      signal: removed.signal,
+    });
+    expect(getEventListeners(started.signal, 'abort')).toHaveLength(1);
+    removed.abort();
+    await expect(second).rejects.toBeDefined();
+    await first;
+    expect(getEventListeners(started.signal, 'abort')).toHaveLength(0);
+    expect(getEventListeners(removed.signal, 'abort')).toHaveLength(0);
+  });
+
+  it('keeps FIFO order for the callers that stay when others abandon', async () => {
+    const clock = createFakeClock(T0);
+    const gate = gateOn(clock);
+    gate.pauseUntil(T0 + 500);
+    const order: number[] = [];
+    const controllers = Array.from({ length: 5 }, () => new AbortController());
+    const calls = controllers.map((controller, index) =>
+      gate.run(
+        () => {
+          order.push(index);
+          return Promise.resolve(index);
+        },
+        { signal: controller.signal }
+      )
+    );
+    controllers[1]!.abort();
+    controllers[3]!.abort();
+    await Promise.allSettled(calls);
+    expect(order).toEqual([0, 2, 4]);
+  });
+});
+
+describe('RequestGate per-key queue cap (IN-06, T-03-17)', () => {
+  it('turns away the 9th queued call of one key while other keys and unkeyed calls are admitted', async () => {
+    const clock = createFakeClock(T0);
+    const gate = gateOn(clock);
+    gate.pauseUntil(T0 + 1000);
+    const queuedA = Array.from({ length: 8 }, (_, index) =>
+      gate.run(() => Promise.resolve(index), { key: 'a' })
+    );
+    const start = jest.fn(() => Promise.resolve(-1));
+
+    const error = await saturation(gate.run(start, { key: 'a' }));
+    expect(error.retryAfterSeconds).toBeGreaterThanOrEqual(1);
+    expect(start).not.toHaveBeenCalled();
+
+    const other = gate.run(() => Promise.resolve('b'), { key: 'b' });
+    const unkeyed = gate.run(() => Promise.resolve('none'));
+    const nullKey = gate.run(() => Promise.resolve('null'), { key: null });
+    expect(await Promise.all([...queuedA, other, unkeyed, nullKey])).toEqual([
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      'b',
+      'none',
+      'null',
+    ]);
+  });
+
+  it('admits a new call of the key again once one of its calls has started', async () => {
+    const clock = createFakeClock(T0);
+    const gate = gateOn(clock);
+    gate.pauseUntil(T0 + 1000);
+    let again: Promise<string> | null = null;
+    const calls = Array.from({ length: 8 }, (_, index) =>
+      gate.run(
+        () => {
+          if (index === 0) {
+            again = gate.run(() => Promise.resolve('again'), { key: 'a' });
+          }
+          return Promise.resolve(String(index));
+        },
+        { key: 'a' }
+      )
+    );
+    await Promise.all(calls);
+    expect(again).not.toBeNull();
+    await expect(again).resolves.toBe('again');
+  });
+
+  it('frees a place when a queued call of the key is abandoned', async () => {
+    const clock = createFakeClock(T0);
+    const gate = gateOn(clock);
+    gate.pauseUntil(T0 + 1000);
+    const controller = new AbortController();
+    const calls = Array.from({ length: 8 }, (_, index) =>
+      gate.run(() => Promise.resolve(index), {
+        key: 'a',
+        signal: index === 7 ? controller.signal : undefined,
+      })
+    );
+    controller.abort();
+    const replacement = gate.run(() => Promise.resolve('replacement'), {
+      key: 'a',
+    });
+    await Promise.allSettled(calls);
+    await expect(replacement).resolves.toBe('replacement');
+  });
+
+  it('honours a custom maxQueuePerKey', async () => {
+    const clock = createFakeClock(T0);
+    const gate = gateOn(clock, { maxQueuePerKey: 2 });
+    gate.pauseUntil(T0 + 1000);
+    const queued = [1, 2].map(() =>
+      gate.run(() => Promise.resolve('ok'), { key: 'a' })
+    );
+    await saturation(gate.run(() => Promise.resolve('no'), { key: 'a' }));
+    await Promise.all(queued);
+  });
+
+  it('starts keyed and unkeyed calls in arrival order; the cap never reorders the queue', async () => {
+    const clock = createFakeClock(T0);
+    const gate = gateOn(clock);
+    gate.pauseUntil(T0 + 500);
+    const order: string[] = [];
+    const run = (name: string, key: string | null): Promise<unknown> =>
+      gate.run(
+        () => {
+          order.push(name);
+          return Promise.resolve(name);
+        },
+        { key }
+      );
+    const calls = [
+      run('a1', 'a'),
+      run('b1', 'b'),
+      run('n1', null),
+      run('a2', 'a'),
+      run('b2', 'b'),
+    ];
+    await Promise.all(calls);
+    expect(order).toEqual(['a1', 'b1', 'n1', 'a2', 'b2']);
+  });
+});
+
+describe('PASS_THROUGH_GATE with a call signal (WR-04)', () => {
+  it('rejects an already aborted signal without starting', async () => {
+    const reason = new Error('gone');
+    const controller = new AbortController();
+    controller.abort(reason);
+    const start = jest.fn(() => Promise.resolve('started'));
+
+    await expect(
+      PASS_THROUGH_GATE.run(start, { signal: controller.signal })
+    ).rejects.toBe(reason);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('runs the start at once otherwise', async () => {
+    await expect(
+      PASS_THROUGH_GATE.run(() => Promise.resolve('ok'), {
+        signal: new AbortController().signal,
+        key: 'a',
+      })
+    ).resolves.toBe('ok');
+    await expect(
+      PASS_THROUGH_GATE.run(() => Promise.resolve('ok'))
+    ).resolves.toBe('ok');
   });
 });
 
