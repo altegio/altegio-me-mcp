@@ -8,7 +8,7 @@ import {
 // The bounded tier 3 run (OPS-07, D-03), for plan 03-16 only. It reads through
 // the deployed service with the five read-only tools that make exactly one
 // upstream call each (never book_check, which makes up to four), one request at
-// a time, at no more than 2.7 calls a second: 90% of the gate's ceiling, so
+// a time, at no more than 1.35 calls a second: 90% of the gate's ceiling, so
 // Altegio.Pro MCP, which shares the partner token, keeps its share. Requests
 // carry no signature: the platform proxy in front of the service signs them.
 //

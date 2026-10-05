@@ -117,62 +117,27 @@ function envVars(): Map<string, string> {
 }
 
 describe('cloudbuild.yaml steps', () => {
-  it('runs build, push, clear-stale-tags, deploy-tagged, smoke-tagged, shift, untag in that order', () => {
+  it('checks the built image before pushing and releasing', () => {
     expect(steps().map((candidate) => candidate.id)).toEqual([
       'build',
+      'signed-https-gate',
       'push',
-      'clear-stale-tags',
       'deploy-tagged',
-      'smoke-tagged',
-      'shift',
-      'untag',
     ]);
+    expect(step('signed-https-gate')).toContain('scripts/image-gate.sh');
   });
 
-  it('deploys without traffic under a tag derived from the commit', () => {
-    const args = deployArgs();
-    expect(args).toContain('--no-traffic');
-    expect(args).toContain('--tag=b$SHORT_SHA');
-  });
-
-  it('clears stale tags before the deploy and removes its own tag after the shift', () => {
-    expect(step('clear-stale-tags')).toContain('--clear-tags');
-    expect(step('untag')).toContain('--remove-tags=b$SHORT_SHA');
-  });
-
-  it('smoke-tests the tagged URL with scripts/smoke-url.sh and the build commit', () => {
-    const smoke = step('smoke-tagged');
-    expect(smoke).toContain('bash scripts/smoke-url.sh');
-    expect(smoke).toContain('"$COMMIT_SHA"');
-    expect(smoke).toContain('TAG=b$SHORT_SHA');
-  });
-
-  it('moves traffic only in the shift step, and only to the build tag', () => {
-    const shift = step('shift');
-    expect(shift).toContain('--to-tags=$$TAG=100');
-    for (const candidate of steps()) {
-      if (candidate.id !== 'shift') {
-        expect(candidate.text).not.toContain('--to-tags');
-        expect(candidate.text).not.toContain('--to-latest');
-        expect(candidate.text).not.toContain('--to-revisions');
-      }
-    }
-  });
-
-  it('guards the shift: only the latest created revision may take traffic', () => {
-    const shift = step('shift');
-    expect(shift).toContain('latestCreatedRevisionName');
-    const guardAt = shift.indexOf('latestCreatedRevisionName');
-    const shiftAt = shift.indexOf('update-traffic');
-    expect(guardAt).toBeGreaterThan(-1);
-    expect(shiftAt).toBeGreaterThan(guardAt);
-    expect(shift).toContain('sys.exit(');
-  });
-
-  it('fails the build on a shell error in the script steps', () => {
-    for (const id of ['smoke-tagged', 'shift']) {
-      expect(step(id)).toMatch(/- -euo\n\s+- pipefail\n\s+- -c/);
-    }
+  it('delegates the entire no-traffic rollout to the serialized release controller', () => {
+    expect(deployArgs()).toContain('--no-traffic');
+    expect(step('deploy-tagged')).toContain('scripts/release.py');
+    expect(step('deploy-tagged')).toContain('$BUILD_ID');
+    expect(step('deploy-tagged')).toContain('$COMMIT_SHA');
+    expect(code).not.toContain('--clear-tags');
+    expect(code).not.toContain('--to-latest');
+    expect(read('scripts/release.py')).toContain("'etag': service['etag']");
+    expect(read('scripts/release.py')).toContain(
+      "entry.get('tag') != self.tag"
+    );
   });
 
   it('writes logs to Cloud Logging only and bounds the build time', () => {
@@ -196,7 +161,9 @@ describe('cloudbuild.yaml deploy flags', () => {
     const args = deployArgs();
     expect(flagValue('--region')).toBe('europe-west1');
     expect(flagValue('--ingress')).toBe('all');
-    expect(flagValue('--min-instances')).toBe('1');
+    expect(flagValue('--min-instances')).toBe('0');
+    expect(flagValue('--min')).toBe('1');
+    expect(flagValue('--max')).toBe('1');
     expect(flagValue('--max-instances')).toBe('1');
     expect(flagValue('--cpu')).toBe('1');
     expect(flagValue('--memory')).toBe('512Mi');

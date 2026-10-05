@@ -59,7 +59,7 @@ describe('the live scenario guard', () => {
     expect(args.notes).toEqual([]);
   });
 
-  it('caps the duration at 180 s and the rate at 2.7 calls a second, and says so', () => {
+  it('caps the duration at 180 s and the rate at 1.35 calls a second, and says so', () => {
     const args = parseArgs([
       '--scenario=live',
       '--target=https://svc.example',
@@ -70,7 +70,7 @@ describe('the live scenario guard', () => {
     expect(args.durationSec).toBe(LIVE_MAX_DURATION_SEC);
     expect(args.durationSec).toBe(180);
     expect(args.rate).toBe(LIVE_MAX_RATE_PER_SEC);
-    expect(args.rate).toBe(2.7);
+    expect(args.rate).toBe(1.35);
     expect(args.notes).toHaveLength(2);
   });
 

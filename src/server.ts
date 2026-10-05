@@ -2,7 +2,7 @@ import type { Server } from 'node:http';
 import type { Logger } from 'pino';
 import { allowedOriginsFor, createApp } from './app.js';
 import { BookingClient } from './booking/client.js';
-import { RequestGate } from './booking/gate.js';
+import { RequestGate, PRODUCTION_GATE_OPTIONS } from './booking/gate.js';
 import {
   createFileSecretSource,
   createStaticSecretSource,
@@ -118,7 +118,11 @@ async function buildProxyKeySource(config: Config): Promise<SecretSource> {
 
 async function main(): Promise<void> {
   const config = loadConfigOrExit();
-  const logger = createLogger({ level: config.LOG_LEVEL });
+  const logger = createLogger({ level: config.LOG_LEVEL }).child({
+    service: PACKAGE_NAME,
+    version: PACKAGE_VERSION,
+    commit: config.COMMIT_SHA ?? null,
+  });
   const tokenSource = await buildTokenSource(config, logger);
 
   let proxyAuth: { keys: () => readonly string[] } | null = null;
@@ -182,6 +186,7 @@ async function main(): Promise<void> {
         // One gate per process, shared by every request and session: all
         // upstream calls stay below the API limits together (BAPI-02).
         gate: new RequestGate({
+          ...PRODUCTION_GATE_OPTIONS,
           maxQueuePerKey: config.GATE_MAX_QUEUE_PER_KEY,
         }),
       }),

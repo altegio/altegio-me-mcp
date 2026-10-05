@@ -153,21 +153,24 @@ repositories on a second-generation connection), create the trigger in the Conso
 
 ## Deploy flow
 
-Merge to `main`, then the trigger runs `cloudbuild.yaml` as the build account:
+The trigger remains main-push under `altegio-me-mcp-build`; its production path
+is `cloudbuild.yaml`. Read [the operational contract](operations.md) before a
+release, rollback, scaling change or public-route publication.
 
-| Step | What it does | If it fails |
-| --- | --- | --- |
-| `build`, `push` | Builds the image and pushes only the commit tag `:$SHORT_SHA` into `cloud-run` | The Dockerfile or the repository rights are wrong. No traffic is affected |
-| `clear-stale-tags` | Removes tags left by an earlier failed run | The service is missing or the build account lacks `run.developer`. Run the bootstrap `--plan` |
-| `deploy-tagged` | Deploys a revision with `--no-traffic` under the tag `b$SHORT_SHA`, with the runtime account and the two secrets mounted as files | A flag or a secret mount is rejected. If the message is about validating `--set-secrets`, see the `secretmanager.viewer` note in `## Bootstrap` |
-| `smoke-tagged` | `scripts/smoke-url.sh` on the tag URL: `/health` reports this commit, and an unsigned `POST /mcp` is refused with 401 | The revision started wrong: a missing secret mount, a wrong commit, or the proxy check off. The revision gets no traffic; fix and merge again |
-| `shift` | Moves traffic to the tag only if that revision is still the latest created one | "No longer the latest created revision" means a newer build exists; that build will shift traffic. Nothing to do |
-| `untag` | Removes the tag so no second instance keeps running | A leftover tag keeps a second instance running and billed until the next build's first step clears it |
+1. Increment `release.json.sequence` for operational/runtime changes; CI verifies
+   forward order. Release-script changes need this root file because the trigger
+   ignores `scripts/**`.
+2. Build and require the signed HTTPS image gate, then push the commit-tag image.
+3. Acquire a Cloud Run service annotation lock with v2 etag; serialize candidate
+   deployment, smoke test, explicit revision promotion and candidate-only cleanup.
+4. Verify tagged liveness/commit and direct unsigned 401 before promotion. Verify
+   production liveness after promotion; automatically restore previous traffic
+   if it fails. Real signed protocol and read-only canary are separate signals.
 
-A failed run never takes traffic. If a failed run leaves a tag and you do not want to wait for the
-next merge, clearing it by hand (`gcloud run services update-traffic altegio-me-mcp --clear-tags
---region=europe-west1 --project=altegio-mcp`) needs the owner's approval, like any manual change
-to the service. Note the date and the reason in `## Deployment record`.
+Older completed release numbers cannot shift traffic. Failed candidates retain
+no revision minimum and only their own tag is removed. A terminated build or
+unknown operation retains the lock until its terminal status is verified; see
+operations.md for recovery. Never use `--clear-tags` on a shared release surface.
 
 ## Rollback
 
@@ -287,12 +290,12 @@ Run these once the platform's `/me` route exists, in this order.
 
 ## Live load run
 
-The live scenario spends the partner token that the Altegio.Pro MCP also uses.
+The live scenario spends developer 2630 quota shared with platform marketplace confirmations; Pro uses a different token.
 
-- Announce the run to the Altegio.Pro MCP maintainers first, with the time window.
+- Coordinate the run with marketplace confirmation maintainers first, with the time window.
 - `npm run loadtest -- --scenario=live --confirm-announced` refuses to start without
   `--confirm-announced`. It uses the read-only tools without `book_check`, on location 726120, runs
-  at most 180 seconds, and is capped at 2.7 upstream calls per second (90 percent of the gate).
+  at most 180 seconds, and is capped at 1.35 upstream calls per second (90 percent of the gate).
 - Hard stop: the run ends at the first busy or not-accepted tool error and at the first HTTP 401,
   429 or 5xx. Do not rerun after a stop without finding the cause and telling the maintainers.
 - The results file goes under the ignored `loadtest-output/` directory; summarize it in the
@@ -312,9 +315,11 @@ The live scenario spends the partner token that the Altegio.Pro MCP also uses.
   commit-SHA tag. If the platform objects, the fallback is a repository of our own.
 - **No static egress IP.** Cloud Run egress uses dynamic Google addresses, so Altegio's per-IP
   limits cannot be relied on to be per service; the gate's budget is shared and conservative.
-- **One instance and the rollout overlap.** The service runs with a minimum and a maximum of one
-  instance, so the request gate and the edge limiter are exact. During a rollout the tagged revision
-  runs next to the serving one for a short time, and two gates briefly share the upstream budget.
+- **Scaling and rollout overlap.** Service and revision max are 1, service min is 1,
+  revision min is 0. Production gates allocate 90 starts/minute and 2/second per
+  process, reserving two processes during serialized rollout. Cloud Run maxima
+  can be temporarily exceeded; they are not a hard distributed quota. See
+  operations.md for marketplace reserve, monitoring and scaling restrictions.
 - **The shared proxy key** widens who holds it. The service has no VPC egress, so it cannot reach
   the platform's VM backends, which bounds the impact; a key issued for this route is preferred.
 

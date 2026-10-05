@@ -46,6 +46,16 @@ jobs:
           npx commitlint --from "$BASE" --to "$HEAD" --verbose
           printf '%s\n' "$TITLE" | npx commitlint --verbose
 
+      - name: Release order
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/check-release.py "$BASE" "$HEAD"
+
+      - name: Release race and rollback tests
+        run: python3 -m unittest discover -s scripts/tests -v
+
       - name: Lint
         run: npm run lint
 

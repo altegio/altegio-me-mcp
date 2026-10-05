@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Request, RequestHandler, Response } from 'express';
 import type { Logger } from 'pino';
 import type { UpstreamErrorKind } from '../booking/errors.js';
@@ -103,19 +104,22 @@ function clientOf(
   method: RpcMethod,
   body: unknown
 ): string | null {
+  let name = req.headers['user-agent'];
   if (
     method === 'initialize' &&
     isPlainObject(body) &&
     isPlainObject(body.params)
   ) {
-    const clientInfo = body.params.clientInfo;
-    if (isPlainObject(clientInfo) && typeof clientInfo.name === 'string') {
-      const name = printable(clientInfo.name);
-      if (name !== null) return name;
-    }
+    const info = body.params.clientInfo;
+    if (isPlainObject(info) && typeof info.name === 'string') name = info.name;
   }
-  const userAgent = req.headers['user-agent'];
-  return typeof userAgent === 'string' ? printable(userAgent) : null;
+  if (typeof name !== 'string') return null;
+  // Closed categories retain client diagnostics without logging arbitrary user
+  // text, IP addresses or credentials embedded in clientInfo/User-Agent.
+  const lower = name.toLowerCase();
+  if (lower.includes('claude') || lower.includes('anthropic')) return 'claude';
+  if (lower.includes('chatgpt') || lower.includes('openai')) return 'chatgpt';
+  return 'other';
 }
 
 function toolOf(
@@ -279,6 +283,8 @@ export function createCallLogMiddleware(
   let suppressedRejections = 0;
 
   return (req, res, next) => {
+    const requestId = randomUUID();
+    res.setHeader('x-request-id', requestId);
     const record = createCallRecord();
     res.locals.callRecord = record;
     const startedAt = performance.now();
@@ -313,6 +319,8 @@ export function createCallLogMiddleware(
       );
       const line = {
         event: 'mcp_call',
+        request_id: requestId,
+        route: '/mcp',
         rpc_method: method,
         tool: toolOf(record, method, body, toolNames),
         mcp_client: clientOf(req, method, body),
@@ -320,7 +328,7 @@ export function createCallLogMiddleware(
         http_status: status,
         latency_ms: Math.round(performance.now() - startedAt),
         outcome,
-        error_type: record.error_type,
+        error_type: record.error_type ?? (outcome === 'ok' ? null : outcome),
         auth_reason: record.auth_reason,
         limited_by: record.limited_by,
         upstream_kind: record.upstream_kind,

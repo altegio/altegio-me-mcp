@@ -2,6 +2,7 @@ import { getEventListeners } from 'node:events';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import {
   DEFAULT_GATE_OPTIONS,
+  PRODUCTION_GATE_OPTIONS,
   DEFAULT_RETRY_AFTER_SECONDS,
   GateSaturatedError,
   INLINE_RETRY_MAX_SECONDS,
@@ -661,5 +662,32 @@ describe('retryAfterSeconds (BAPI-02, 02-RESEARCH Pitfall 10)', () => {
     expect(read({ 'Retry-After': '9'.repeat(400) })).toBe(300);
     const far = new Date(T0 + 86_400_000).toUTCString();
     expect(read({ 'Retry-After': far })).toBe(300);
+  });
+});
+
+describe('production rollout allocation', () => {
+  it('keeps two process windows below the ME allocation and reserves marketplace capacity', async () => {
+    const runs = [0, 1].map(async () => {
+      const clock = createFakeClock(T0);
+      const { done, starts } = burst(
+        gateOn(clock, {
+          ...PRODUCTION_GATE_OPTIONS,
+          maxQueue: 200,
+          maxWaitMs: 120_000,
+        }),
+        clock,
+        91
+      );
+      await done;
+      expect(starts[90]).toBe(T0 + 60_000);
+      for (let index = 1; index < starts.length; index += 1) {
+        expect(starts[index]! - starts[index - 1]!).toBeGreaterThanOrEqual(500);
+      }
+      return starts;
+    });
+    const starts = (await Promise.all(runs)).flat();
+    expect(starts.filter((at) => at < T0 + 60_000)).toHaveLength(180);
+    expect(PRODUCTION_GATE_OPTIONS.perMinute * 2 + 20).toBe(200);
+    expect((1000 / PRODUCTION_GATE_OPTIONS.minSpacingMs) * 2 + 1).toBe(5);
   });
 });
