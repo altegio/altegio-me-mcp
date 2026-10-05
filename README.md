@@ -7,7 +7,8 @@ business card (`business_get`), services (`business_list_services`), team member
 (`book_check`). They call the Altegio public booking API through a throttled client
 (`src/booking`), and a live suite has checked that client against a real business. The hosting
 setup (a Cloud Run pipeline behind the platform proxy, edge limits, secrets as files, alerts) is
-in the repository and nothing is deployed yet, see [Deploy](#deploy). The catalog of bookable
+in the repository and live on Cloud Run since 2026-10-05, see [Deploy](#deploy); the public `/me`
+route on the platform proxy is still being built. The catalog of bookable
 businesses and search come next. Decisions and research are in [`docs/`](docs/).
 
 A remote [MCP](https://modelcontextprotocol.io) server that lets clients of businesses using
@@ -262,13 +263,12 @@ the pull request title.
 
 ## Deploy
 
-Status: nothing is deployed yet. The pipeline (`cloudbuild.yaml`), the one-time setup script
-(`scripts/gcp/bootstrap.sh`), the alerts and the runbook are in the repository and tested against
-stubs. The first deploy waits for the platform team's access in project `altegio-mcp` (open
-question I6) and for the anonymous `/me` route on their proxy (I5). Both were asked on 2026-10-05
-in one Slack message in `#dev-ai-coding`, addressed to Yri Petrou. This line changes at the first
-deploy; what ran live, with dates and revisions, goes into the deployment record in
-[`docs/runbooks/gcp-hosting.md`](docs/runbooks/gcp-hosting.md).
+Status: deployed on the `run.app` address. The first git-only deploy ran on 2026-10-05: the merge of
+PR #5 (commit `c73ecb7`) started the trigger, which built, smoke-tested and shifted traffic to
+revision `altegio-me-mcp-00002-kih`, version 0.2.0. The public address `https://mcp.alteg.io/me` is
+not live yet: the anonymous `/me` route on the platform proxy is being built by pull request in
+`altegio-mcp-platform` (open question I5). What ran live, with dates and revisions, is in the
+deployment record in [`docs/runbooks/gcp-hosting.md`](docs/runbooks/gcp-hosting.md).
 
 Deploys go only through git: a merge to `main` starts the Cloud Build trigger
 `altegio-me-mcp-deploy` in the platform's GCP project `altegio-mcp` (ADR 0003), which deploys the
