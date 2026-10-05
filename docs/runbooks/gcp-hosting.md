@@ -19,8 +19,8 @@ platform owns it. The label `app=altegio-me-mcp` goes where the resource type su
 | Cloud Build trigger | `altegio-me-mcp-deploy` | `altegio-mcp`, `europe-west1` | this project | no: triggers have tags, not labels, and the script sets none |
 | Repository link | `altegio-altegio-me-mcp` on connection `Altegio` (the owner-repo id the platform asked for) | `europe-west1` | this project (the connection is the platform's) | no |
 | Artifact Registry repository | `cloud-run` | `europe-west1` | the platform | no |
-| Secret, partner token | `ALTEGIO_API_TOKEN` (the name is the `--token-secret` parameter) | Secret Manager | the platform | no |
-| Secret, proxy key | `MCP_PROXY_BACKEND_KEY` (the name is the `--proxy-key-secret` parameter) | Secret Manager | the platform | no |
+| Secret, partner token | `MARKETPLACE_PARTNER_TOKEN` (the name is the `--token-secret` parameter; it holds the account-2630 token, verified by hash 2026-10-05) | Secret Manager | the platform | no |
+| Secret, proxy key | `MCP_PROXY_BACKEND_KEY_ME` (the name is the `--proxy-key-secret` parameter; the key issued for the `/me` route, read by this service and by the customer proxy) | Secret Manager | this project (created 2026-10-05) | yes (`--labels`) |
 | E-mail channel | `altegio-me-mcp-owner` | Cloud Monitoring | this project | yes (`--user-labels`) |
 | Uptime check, service | `altegio-me-mcp-health` | Cloud Monitoring | this project | yes |
 | Uptime check, public route | `altegio-me-mcp-public` (only with `--public-check`) | Cloud Monitoring | this project | yes |
@@ -53,9 +53,9 @@ grants the rights.
 
 The script never enables an API, never changes the log bucket, and never reads a secret payload.
 Also ask the platform: whether the `cloud-run` repository may be shared (see
-`## Known limits`), which developer account issued the token in `ALTEGIO_API_TOKEN` (the
-expected answer is account 2630; if it is another account, stop and tell the owner), and what the
-real `_Default` log retention is.
+`## Known limits`), which secret holds the account-2630 token (answered 2026-10-05:
+`MARKETPLACE_PARTNER_TOKEN`, verified by hash; `ALTEGIO_API_TOKEN` is Altegio.Pro MCP's token), and
+what the real `_Default` log retention is (30 days, read 2026-10-05).
 
 ## Bootstrap
 
@@ -87,9 +87,9 @@ group, and the preflight blocks when the component is missing.
    bash scripts/gcp/bootstrap.sh --apply --owner-email ADDRESS
    ```
 
-Parameters: `--token-secret NAME` (default `ALTEGIO_API_TOKEN`; the answer to which secret holds
-the account 2630 token, set on both the runtime binding and the trigger substitution
-`_TOKEN_SECRET`), `--proxy-key-secret NAME` (default `MCP_PROXY_BACKEND_KEY`), `--project`,
+Parameters: `--token-secret NAME` (default `MARKETPLACE_PARTNER_TOKEN`, the secret that holds the
+account 2630 token, set on both the runtime binding and the trigger substitution
+`_TOKEN_SECRET`), `--proxy-key-secret NAME` (default `MCP_PROXY_BACKEND_KEY_ME`), `--project`,
 `--region`, `--skip-secret-bindings` (a platform engineer binds the two secrets separately; the
 script then prints and runs no secret binding), `--public-check` (after the platform route is
 live), `--drill`, `--drill-cleanup`. The owner's address is a parameter only. It is not written to
@@ -190,11 +190,13 @@ it, which would bring the bad code back if the revert is not in. Record the move
 
 Both secrets are mounted as files and the service re-reads them; nothing is restarted.
 
-- **Partner token** (`ALTEGIO_API_TOKEN` or the secret named by `--token-secret`): the file is
+- **Partner token** (`MARKETPLACE_PARTNER_TOKEN` or the secret named by `--token-secret`): the file is
   re-read lazily within 60 seconds of a request. A 401 or 403 from Altegio forces one re-read (at
   most once per 60 seconds) and one retry with the new value. To rotate, add a new secret version.
-  The token is shared with the Altegio.Pro MCP; the platform coordinates its rotation.
-- **Proxy key** (`MCP_PROXY_BACKEND_KEY` or the secret named by `--proxy-key-secret`): the file
+  The customer proxy uses the same token for marketplace confirmations, so the platform coordinates
+  its rotation. Altegio.Pro MCP runs under a different token (`ALTEGIO_API_TOKEN`).
+- **Proxy key** (`MCP_PROXY_BACKEND_KEY_ME`, issued for this route, or the secret named by
+  `--proxy-key-secret`): the file
   holds a comma-separated list during a rotation. Follow the platform's sequence: `old,new` (both
   accepted), then the platform's proxy switches to signing with the new key (`new,old`), then
   `new` alone once nothing signs with the old one. Each key is at least 32 characters.
@@ -319,8 +321,10 @@ The live scenario spends the partner token that the Altegio.Pro MCP also uses.
 ## Deployment record
 
 Filled in at each live step (first bootstrap, first deploy, drill, public route, live load run,
-rollbacks and manual changes). Empty until the first live run.
+rollbacks and manual changes).
 
 | Date | Step | Revision | Commit | Who ran it | Result |
 | --- | --- | --- | --- | --- | --- |
-|  |  |  |  |  |  |
+| 2026-10-05 | Pre-work by the platform owner: build account `altegio-me-mcp-build` with `roles/logging.logWriter` (project) and `roles/artifactregistry.writer` (`cloud-run`) | none | none | the platform owner | found by the script and skipped |
+| 2026-10-05 | Repository link `altegio-altegio-me-mcp` on connection `Altegio` (the platform owner's command, by hand); secret `MCP_PROXY_BACKEND_KEY_ME` created (64 hex characters) with `secretAccessor` for `mcp-proxy-customer-sa` | none | 6f2996e | the owner, with `roles/owner` granted by the platform owner the same day | both present; the GitHub App already saw the repository |
+| 2026-10-05 | Bootstrap `--apply`, three runs | `altegio-me-mcp-00001-lvh` (placeholder image) | e32e83b | the owner | run 1 stopped at the first metric policy (`COMPARISON_GE` rejected, fixed in c5e9b92); run 2 stopped there again (a new log-based metric is not visible to Monitoring for a few minutes, retry added in e32e83b); run 3 finished. `--plan` after: 0 writes, 0 blockers. `_Default` retention 30 days. Owner channel created; its verification status was not reported |

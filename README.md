@@ -120,7 +120,7 @@ values) when one is missing or invalid.
 |---|---|---|---|
 | `PORT` | HTTP port (Cloud Run sets it) | `8080` | no |
 | `ALTEGIO_API_BASE` | Base URL of the Altegio public API; must be https when NODE_ENV is production | `https://api.alteg.io/api/v1` | no |
-| `ALTEGIO_API_TOKEN` | Partner API token of developer account 2630 "Altegio AI" (shared with Altegio.Pro MCP). Local runs use this plain form | none | this or `ALTEGIO_API_TOKEN_FILE`, non-empty |
+| `ALTEGIO_API_TOKEN` | Partner API token of developer account 2630 "Altegio AI" (in production the Secret Manager secret `MARKETPLACE_PARTNER_TOKEN`). Local runs use this plain form | none | this or `ALTEGIO_API_TOKEN_FILE`, non-empty |
 | `ALTEGIO_API_TOKEN_FILE` | Absolute path of a mounted file that holds the partner token; wins over `ALTEGIO_API_TOKEN` and is re-read lazily every 60 s, so a rotation of the shared secret needs no restart. An upstream 401 or 403 forces one re-read (at most once per 60 s) and one retry. An unreadable or empty file stops startup | none | this or `ALTEGIO_API_TOKEN` |
 | `PUBLIC_BASE_URL` | Public URL of the server; its origin is the allowed browser `Origin` | none | yes, http(s) URL |
 | `LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent` | `info` | no |
@@ -315,8 +315,9 @@ the signature is the access control there. The edge limits in the table above (i
 address, shared pool) apply per client address as the proxy signs it.
 
 **Secrets.** No secret is in the image, in git or in an environment variable. The partner token
-(the platform's existing secret `ALTEGIO_API_TOKEN`, shared with Altegio.Pro MCP) and the proxy
-key (`MCP_PROXY_BACKEND_KEY`) are mounted as Secret Manager volumes, the `latest` version of each.
+(the platform's secret `MARKETPLACE_PARTNER_TOKEN`, which holds the account-2630 token; Altegio.Pro
+MCP runs under a different token) and the proxy key issued for this route
+(`MCP_PROXY_BACKEND_KEY_ME`) are mounted as Secret Manager volumes, the `latest` version of each.
 The server re-reads them within 60 seconds, so a rotation needs no restart, and an Altegio 401 or
 403 forces one re-read (at most once per 60 seconds).
 
