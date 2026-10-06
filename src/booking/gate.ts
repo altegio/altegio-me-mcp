@@ -1,4 +1,4 @@
-import type { GateLike, UpstreamCallOptions } from './http.js';
+import type { GateCallOptions, GateLike } from './http.js';
 
 // Developer 2630 is shared with platform marketplace confirmations, not Pro.
 // Production reserves two process allocations for the serialized rollout:
@@ -154,7 +154,7 @@ export class RequestGate implements GateLike {
    * and frees its place; a call already started is left to its own fetch
    * signal. `opts.key` caps how many calls one caller can have queued.
    */
-  run<T>(start: () => Promise<T>, opts: UpstreamCallOptions = {}): Promise<T> {
+  run<T>(start: () => Promise<T>, opts: GateCallOptions = {}): Promise<T> {
     const { signal } = opts;
     const key = opts.key ?? null;
     if (signal?.aborted === true) return Promise.reject(abortReason(signal));

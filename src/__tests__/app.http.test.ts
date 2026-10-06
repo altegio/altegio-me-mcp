@@ -17,6 +17,7 @@ import {
   namedEchoTool,
   postMcp,
   startApp,
+  stubPartnerValidator,
   toolCallBody,
   toolsListBody,
   waitForLogs,
@@ -121,6 +122,7 @@ describe('stateless MCP over POST /mcp (tracer)', () => {
           'request_id',
           'route',
           'auth_reason',
+          'caller',
           'error_type',
           'event',
           'forwarded_for_count',
@@ -130,6 +132,7 @@ describe('stateless MCP over POST /mcp (tracer)', () => {
           'mcp_client',
           'origin_host',
           'outcome',
+          'partner_id',
           'protocol_version',
           'rpc_method',
           'suppressed',
@@ -429,6 +432,7 @@ describe('independence and registry behaviour', () => {
         secrets: [],
         allowedOrigins: [],
         allowLoopbackOrigins: false,
+        callerAuth: { mode: 'required', validator: stubPartnerValidator() },
       })
     ).toThrow('Duplicate tool name: demo_echo_items');
   });

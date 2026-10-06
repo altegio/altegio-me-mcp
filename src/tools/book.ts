@@ -28,7 +28,7 @@ import {
   uniqueServiceIds,
   untrustedText,
 } from './business.js';
-import type { ToolContext } from './context.js';
+import { upstreamCall, type ToolContext } from './context.js';
 import { ToolError } from './errors.js';
 import { defineTool } from './factory.js';
 import type { ToolDeps } from './registry.js';
@@ -346,7 +346,7 @@ async function verified(
   ctx: ToolContext
 ): Promise<BookCheckOutput> {
   const id = input.location_id;
-  const call = { signal: ctx.signal, key: ctx.clientKey };
+  const call = upstreamCall(ctx);
   const [cardResult, catalogResult, membersResult] = await Promise.allSettled([
     deps.booking.company(id, call),
     deps.booking.services(id, {}, call),
@@ -420,10 +420,7 @@ async function unverified(
 ): Promise<BookCheckOutput> {
   let card: BusinessCard;
   try {
-    card = await deps.booking.company(input.location_id, {
-      signal: ctx.signal,
-      key: ctx.clientKey,
-    });
+    card = await deps.booking.company(input.location_id, upstreamCall(ctx));
   } catch {
     throw toToolError(checkError);
   }
@@ -521,13 +518,13 @@ export const bookCheck = defineTool<
           datetime: input.datetime,
         },
         {
+          ...upstreamCall(ctx),
           // The check has its own budget inside the call deadline, so a slow
           // check leaves time for the card read (WR-04, D-01).
           signal: AbortSignal.any([
             ctx.signal,
             ctx.timeout(BOOK_CHECK_STEP_MS),
           ]),
-          key: ctx.clientKey,
         }
       );
     } catch (error) {

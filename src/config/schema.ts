@@ -1,5 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
+import { CALLER_AUTH_MODES } from '../security/caller-auth.js';
 import { isValidCidr } from '../security/client-ip.js';
 import {
   MIN_PROXY_KEY_LENGTH,
@@ -23,6 +24,7 @@ export const CONFIG_KEYS = [
   'PROXY_AUTH',
   'MCP_PROXY_BACKEND_KEY',
   'MCP_PROXY_BACKEND_KEY_FILE',
+  'CALLER_AUTH',
   'COMMIT_SHA',
   'TRUSTED_PROXY_HOPS',
   'SHARED_EGRESS_CIDRS',
@@ -137,6 +139,10 @@ const ConfigSchema = z
       .string()
       .refine((path) => isAbsolute(path))
       .optional(),
+    // 'required' is the default and fails closed: no partner token, no
+    // service (ADR 0004). 'optional' keeps serving callers without one with
+    // our own token, for the rollout of the proxy lane only.
+    CALLER_AUTH: z.enum(CALLER_AUTH_MODES).default('required'),
     COMMIT_SHA: z.string().regex(COMMIT_SHA_FORMAT).optional(),
     // How many proxies sit between the caller and us, counted from the right of
     // X-Forwarded-For. 1 is the platform proxy; 0 is a deployment with none.
@@ -279,6 +285,10 @@ const MESSAGES: Readonly<
     missing:
       'is required when PROXY_AUTH is required: set it to the path of the mounted proxy key file (or set MCP_PROXY_BACKEND_KEY; local runs set PROXY_AUTH=off)',
     invalid: 'must be an absolute file path',
+  },
+  CALLER_AUTH: {
+    missing: 'is required (see .env.example)',
+    invalid: `must be one of ${CALLER_AUTH_MODES.join(', ')}`,
   },
   COMMIT_SHA: {
     missing: 'is required (see .env.example)',

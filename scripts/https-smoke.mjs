@@ -53,15 +53,36 @@ const proxy = https.createServer(
     const seconds = Math.floor(Date.now() / 1000);
     const requestId = randomUUID();
     signedIds.push(requestId);
+    // The /me lane (ADR 0004): a caller's Bearer becomes the signed partner
+    // token header, and Authorization never reaches the backend.
+    const identity = { 'x-mcp-auth-request-id': requestId };
+    const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? '');
+    if (bearer !== null) {
+      identity['x-mcp-auth-kind'] = 'partner';
+      identity['x-mcp-auth-altegio-partner-token'] = bearer[1];
+    }
+    const lines = Object.keys(identity)
+      .sort()
+      .map((name) => `${name}:${identity[name]}`);
     const mac = createHmac('sha256', key)
       .update(
-        `mcp-proxy-auth/v1\n${seconds}\n${req.method}\n${req.url}\nx-mcp-auth-request-id:${requestId}`
+        [
+          'mcp-proxy-auth/v1',
+          String(seconds),
+          req.method,
+          req.url,
+          ...lines,
+        ].join('\n')
       )
       .digest('hex');
-    // Drop caller-supplied identity and signature before signing our upstream.
+    // Drop caller-supplied identity, signature and credential before signing
+    // our upstream.
     const headers = Object.fromEntries(
       Object.entries(req.headers).filter(
-        ([name]) => !name.startsWith('x-mcp-') && name !== 'host'
+        ([name]) =>
+          !name.startsWith('x-mcp-') &&
+          name !== 'host' &&
+          name !== 'authorization'
       )
     );
     const upstream = http.request(
@@ -73,7 +94,7 @@ const proxy = https.createServer(
         headers: {
           ...headers,
           'x-forwarded-proto': 'https',
-          'x-mcp-auth-request-id': requestId,
+          ...identity,
           'x-mcp-proxy-auth': `v1:${seconds}:${mac}`,
         },
       },
@@ -88,7 +109,7 @@ const proxy = https.createServer(
 );
 await new Promise((resolve) => proxy.listen(0, '127.0.0.1', resolve));
 const port = proxy.address().port;
-function post(body) {
+function post(body, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const req = https.request(
       {
@@ -101,6 +122,7 @@ function post(body) {
         headers: {
           'content-type': 'application/json',
           accept: 'application/json, text/event-stream',
+          ...extraHeaders,
         },
       },
       (res) => {
@@ -138,6 +160,14 @@ try {
   assert.equal(init.headers['mcp-session-id'], undefined);
   const list = await post({ jsonrpc: '2.0', id: 102, method: 'tools/list' });
   assert.equal(list.status, 200);
+  // The caller check is wired: a partner token of an impossible shape is
+  // refused as invalid without any upstream call (ADR 0004).
+  const refused = await post(
+    { jsonrpc: '2.0', id: 103, method: 'tools/list' },
+    { authorization: 'Bearer short' }
+  );
+  assert.equal(refused.status, 401);
+  assert.equal(refused.body.error, 'invalid_token');
   assert.equal(list.headers['x-request-id'], signedIds[1]);
   assert.equal(list.headers['mcp-session-id'], undefined);
   assert.deepEqual(list.body.result.tools.map((tool) => tool.name).sort(), [

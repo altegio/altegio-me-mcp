@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Request, RequestHandler, Response } from 'express';
 import type { Logger } from 'pino';
 import type { UpstreamErrorKind } from '../booking/errors.js';
+import type { Caller, CallerAuthReason } from '../security/caller-auth.js';
 import type { ProxyAuthReason } from '../security/proxy-auth.js';
 import type { ToolOutcome } from '../tools/factory.js';
 
@@ -27,7 +28,11 @@ export interface CallRecord {
   tool: string | null;
   outcome: CallOutcome | null;
   error_type: string | null;
-  auth_reason: ProxyAuthReason | null;
+  auth_reason: ProxyAuthReason | CallerAuthReason | null;
+  /** Who was served (ADR 0004); null until the caller check has run. */
+  caller: Caller['kind'] | null;
+  /** Pseudonym of the caller's partner token; never the token. */
+  partner_id: string | null;
   limited_by: 'inflight' | 'ip' | 'pool' | 'gate' | null;
   upstream_kind: UpstreamErrorKind | null;
   origin_host: string | null;
@@ -65,6 +70,8 @@ export function createCallRecord(): CallRecord {
     outcome: null,
     error_type: null,
     auth_reason: null,
+    caller: null,
+    partner_id: null,
     limited_by: null,
     upstream_kind: null,
     origin_host: null,
@@ -331,6 +338,8 @@ export function createCallLogMiddleware(
         outcome,
         error_type: record.error_type ?? (outcome === 'ok' ? null : outcome),
         auth_reason: record.auth_reason,
+        caller: record.caller,
+        partner_id: record.partner_id,
         limited_by: record.limited_by,
         upstream_kind: record.upstream_kind,
         origin_host: record.origin_host,

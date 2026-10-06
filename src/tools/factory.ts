@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { UpstreamError, type UpstreamErrorKind } from '../booking/errors.js';
 import { NO_TOOL_CONTEXT, isDeadline, type ToolContext } from './context.js';
+import { SCOPE_READ, type Scope } from './scopes.js';
 import { textResult, toolErrorResult } from './result.js';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from './untrusted.js';
 
@@ -108,6 +109,8 @@ export interface UpstreamCall {
 export interface ToolMeta {
   kind: 'single' | 'list';
   upstream: readonly UpstreamCall[];
+  /** Scopes a caller needs to run the tool, checked in tools/call (ADR 0004). */
+  scopes: readonly Scope[];
 }
 
 export interface ToolSpec {
@@ -132,6 +135,12 @@ export interface ToolDefinition<
   kind?: 'list';
   /** Upstream calls this tool makes, for the read-only route check (R7). */
   upstream?: readonly UpstreamCall[];
+  /**
+   * Scopes the caller needs (ADR 0004). Defaults to the base tier, so no tool
+   * is ever callable without a partner token; a tool that acts for a signed-in
+   * client adds SCOPE_BOOK (compliance rule R14).
+   */
+  scopes?: readonly Scope[];
   input: I;
   output: O;
   render: (out: z.infer<O>) => string;
@@ -216,6 +225,9 @@ export function defineTool<
   const meta: ToolMeta = Object.freeze({
     kind: def.kind ?? 'single',
     upstream: Object.freeze([...(def.upstream ?? [])]),
+    scopes: Object.freeze([
+      ...new Set<Scope>([SCOPE_READ, ...(def.scopes ?? [])]),
+    ]),
   });
 
   return {

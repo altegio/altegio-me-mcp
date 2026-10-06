@@ -16,6 +16,7 @@ import {
   parseSlotDatetime,
   plainBookingLink,
 } from '../booking/deep-link.js';
+import { upstreamCall } from './context.js';
 import { defineTool, type ToolHints } from './factory.js';
 import {
   listOutputSchema,
@@ -181,10 +182,7 @@ export const businessGet = defineTool<
   handler: async ({ input, deps, ctx }) => {
     let card: BusinessCard;
     try {
-      card = await deps.booking.company(input.location_id, {
-        signal: ctx.signal,
-        key: ctx.clientKey,
-      });
+      card = await deps.booking.company(input.location_id, upstreamCall(ctx));
     } catch (error) {
       // Every upstream failure becomes an in-band error that names the next action (BAPI-01).
       throw toToolError(error);
@@ -462,17 +460,14 @@ export const businessListServices = defineTool<
     try {
       // The currency is on the card; both reads go through the shared gate.
       [card, catalog] = await Promise.all([
-        deps.booking.company(input.location_id, {
-          signal: ctx.signal,
-          key: ctx.clientKey,
-        }),
+        deps.booking.company(input.location_id, upstreamCall(ctx)),
         deps.booking.services(
           input.location_id,
           {
             teamMemberId: input.team_member_id,
             datetime: input.datetime,
           },
-          { signal: ctx.signal, key: ctx.clientKey }
+          upstreamCall(ctx)
         ),
       ]);
     } catch (error) {
@@ -604,7 +599,7 @@ export const businessListTeamMembers = defineTool<
           serviceIds: input.service_ids,
           datetime: input.datetime,
         },
-        { signal: ctx.signal, key: ctx.clientKey }
+        upstreamCall(ctx)
       );
     } catch (error) {
       throw toToolError(
@@ -787,7 +782,7 @@ export const businessListDates = defineTool<
           dateFrom: input.date_from,
           dateTo: input.date_to,
         },
-        { signal: ctx.signal, key: ctx.clientKey }
+        upstreamCall(ctx)
       );
     } catch (error) {
       throw toToolError(error, {
@@ -959,7 +954,7 @@ export const businessListTimeSlots = defineTool<
         input.team_member_id,
         input.date,
         input.service_ids,
-        { signal: ctx.signal, key: ctx.clientKey }
+        upstreamCall(ctx)
       );
     } catch (error) {
       throw toToolError(error, {

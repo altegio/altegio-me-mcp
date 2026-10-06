@@ -343,6 +343,21 @@ function toTeamMember(member: TeamMembersData[number]): TeamMember {
 
 export type BookingClientOptions = BookingHttpOptions;
 
+/**
+ * The call that tells whether a partner token is real (ADR 0004): the first
+ * page of the public business list, one entry. It names no business, so no
+ * location can disappear from under it, and it answers 401 for any token
+ * Altegio does not know. Not a tool route: compliance rule R7 never sees it.
+ */
+export const PARTNER_PROBE = Object.freeze({
+  method: 'GET',
+  route: '/companies',
+  query: Object.freeze({ count: 1, page: 1 }),
+} as const);
+
+/** What the probe says about a partner token. */
+export type PartnerTokenVerdict = 'valid' | 'invalid' | 'unavailable';
+
 export class BookingClient {
   private readonly http: BookingHttp;
 
@@ -549,6 +564,33 @@ export class BookingClient {
       throw new UpstreamError('contract_drift', route, {
         status: reply.status,
       });
+    }
+  }
+
+  /**
+   * Whether Altegio accepts `partnerToken`: 'invalid' only for a 401 or 403,
+   * 'unavailable' for anything that says nothing about the token (a timeout,
+   * a 429 or 5xx, a gate that turned the call away, an unexpected status).
+   */
+  async probePartnerToken(
+    partnerToken: string,
+    call?: Omit<UpstreamCallOptions, 'partnerToken'>
+  ): Promise<PartnerTokenVerdict> {
+    try {
+      await this.http.send({
+        method: PARTNER_PROBE.method,
+        route: PARTNER_PROBE.route,
+        path: PARTNER_PROBE.route,
+        query: PARTNER_PROBE.query,
+        ...call,
+        partnerToken,
+      });
+      return 'valid';
+    } catch (error) {
+      if (error instanceof UpstreamError && error.kind === 'unauthorized') {
+        return 'invalid';
+      }
+      return 'unavailable';
     }
   }
 

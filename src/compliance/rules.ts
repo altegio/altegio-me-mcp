@@ -2,13 +2,15 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
 import type { ToolMeta, ToolSpec } from '../tools/factory.js';
+import { SCOPE_BOOK, SCOPE_READ } from '../tools/scopes.js';
 import {
   INVISIBLE_RANGES,
   UNTRUSTED_CLOSE,
   UNTRUSTED_OPEN,
 } from '../tools/untrusted.js';
 
-// Directory-compliance rules R1-R13 (ADR-0001-D7, ADR-0001-D2; SEC-01, SEC-02).
+// Directory-compliance rules R1-R14 (ADR-0001-D7, ADR-0001-D2, ADR 0004;
+// SEC-01, SEC-02).
 // Pure functions over tool specs, so the same rules run against the production
 // registry and against deliberately bad fixtures. Not part of the build output
 // (tsconfig.build.json excludes src/compliance).
@@ -26,7 +28,8 @@ export type RuleId =
   | 'R10'
   | 'R11'
   | 'R12'
-  | 'R13';
+  | 'R13'
+  | 'R14';
 
 export interface Violation {
   rule: RuleId;
@@ -424,6 +427,18 @@ export function checkTool(
   // R13 strict input
   if (inputSchema.additionalProperties !== false) {
     add('R13', 'inputSchema.additionalProperties must be false');
+  }
+
+  // R14 access tier (ADR 0004): no tool runs without a partner token, and a
+  // tool that writes acts for one signed-in client, so it needs that tier.
+  const scopes: readonly string[] = Array.isArray(meta.scopes)
+    ? meta.scopes
+    : [];
+  if (!scopes.includes(SCOPE_READ)) {
+    add('R14', `scopes must include ${SCOPE_READ}`);
+  }
+  if (annotations.readOnlyHint !== true && !scopes.includes(SCOPE_BOOK)) {
+    add('R14', `a tool that writes must require ${SCOPE_BOOK}`);
   }
 
   return sorted(out);
