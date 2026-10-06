@@ -230,6 +230,16 @@ All four policies notify only the owner's e-mail channel `altegio-me-mcp-owner`.
 attaches no other channel, and the platform's autoheal channel must never be attached: a fault in
 our service must not reset the platform's VMs.
 
+**Changed by the platform owner on 2026-10-05 ("identical to Pro"):** every policy now also
+notifies the platform's `mcp-proxy oncall` e-mail channel, and `altegio-me-mcp-upstream-rate-limited`
+is disabled (its metric stays). The script creates policies with the owner's channel only and does not
+reconcile channels afterwards; **do not run `--public-check` until the down-policy update preserves
+the policy's existing channels**, or the on-call channel would be dropped from `altegio-me-mcp-down`.
+The public path is probed by the platform's `mcp-public-surface` check (altegio-monitoring, every
+15 minutes, anonymous `tools/list` on `https://mcp.alteg.io/me`) and by `mcp-customer-runtime`
+(our `/health` and a signed `business_get(722227)` canary), so a public uptime check of our own is a
+decision for the owner, not a gap.
+
 Cost: about $3 a month for two checks at 5 minutes (about 51,840 executions a month at roughly
 $0.30 per 1,000, with the project's free tier already used by the platform's own checks). One
 minute would cost about 12 times as much (about $140 a month), which is why the period is 5.
@@ -266,6 +276,13 @@ Record the date and the result in `## Deployment record`.
 ## Public route checks
 
 Run these once the platform's `/me` route exists, in this order.
+
+Results on 2026-10-05, after altegio-mcp-platform #250 deployed the customer proxy (build 794c5e05,
+15:35 UTC): (1) the live metric selects `resource.labels.service_name="mcp-proxy-internal"` only, so
+`/me` and `/me/mcp` are outside it without an exclusion; (2) `smoke-url.sh --public` PASS, and both
+discovery forms answer 404; (3) the unsigned direct call answers 401 (`scripts/verify-backend.py`,
+which also proves the signed protocol, the `business_get(722227)` canary and request correlation);
+(4) the public uptime check is not created yet, see `## Monitoring`.
 
 1. Before the first public request, confirm that the platform's log-based metric
    `mcp_proxy_upstream_502` excludes both `/me` and `/me/mcp`. A fault in our service must not feed
@@ -335,3 +352,8 @@ rollbacks and manual changes).
 | 2026-10-05 | Bootstrap `--apply`, three runs | `altegio-me-mcp-00001-lvh` (placeholder image) | e32e83b | the owner | run 1 stopped at the first metric policy (`COMPARISON_GE` rejected, fixed in c5e9b92); run 2 stopped there again (a new log-based metric is not visible to Monitoring for a few minutes, retry added in e32e83b); run 3 finished. `--plan` after: 0 writes, 0 blockers. `_Default` retention 30 days. Owner channel created; its verification status was not reported |
 | 2026-10-05 | First trigger build `9ff5912c` on the merge of PR #4 | none | c5477f8 | the trigger, as `altegio-me-mcp-build` | FAILURE at step `build`: `$PROJECT_ID` inside the `_IMAGE` substitution value was not expanded, so the image tag was invalid; fixed by writing the project into `_IMAGE`; traffic stayed on the placeholder |
 | 2026-10-05 | First git-only deploy: trigger build `0c0fae37` on the merge of PR #5 | `altegio-me-mcp-00002-kih` (version 0.2.0) | c73ecb7 | the trigger, as `altegio-me-mcp-build` | SUCCESS, all seven steps in 2 min 49 s: smoke PASS on the tag URL, traffic shifted to 100%, tag removed; `/health` reports the merge commit and 0.2.0; `smoke-url.sh` PASS on `run.app`; the placeholder revision `00001-lvh` stays at 0% |
+| 2026-10-05 | Alert policies changed by the platform owner (14:42 UTC, `y@alteg.io`) | none | none | the platform owner | the `mcp-proxy oncall` e-mail channel added to all four policies; `altegio-me-mcp-upstream-rate-limited` disabled, metric kept; "identical to Pro" |
+| 2026-10-05 | Release pipeline reworked by the platform owner (PR #7, merge 56ca858): `release.json` sequence, `scripts/release.py`, signed HTTPS image gate | none | 56ca858 | the trigger, as `altegio-me-mcp-build` | build `5c3f284f` FAILED after the image gate and push: polling a regional Cloud Run operation answered 403 under the service-scoped build account; no revision or traffic change, `00002-kih` kept serving; the orphan release lock was cleared by the platform owner |
+| 2026-10-05 | Second release through the new pipeline (PR #8, merge 4c781e6): service-GET reconciliation instead of operation polling, signed `x-mcp-auth-request-id` correlation | `altegio-me-mcp-b32ak5r5qmvb57g246qju3odyua` (version 0.2.0, release sequence 2) | 4c781e6 | the trigger, as `altegio-me-mcp-build` | build `de80aec7` SUCCESS at 15:01 UTC; 100% explicit traffic, no candidate tag or lock left; `verify-backend.py` PASS (liveness and commit, signed initialize and six-tool list, `business_get(722227)`, correlation, unsigned 401) |
+| 2026-10-05 | Public route live: altegio-mcp-platform #250 (built on our #248) merged 15:32 UTC, customer proxy build `794c5e05` at 15:35 UTC | unchanged | ce32a45 (platform) | the platform owner | `https://mcp.alteg.io/me`: anonymous `tools/list` 200 with six tools, discovery 404 in both forms, `GET /` lists `/me` with `auth: none`; `smoke-url.sh --public` PASS; monitoring #39 deployed before publication (`me_monitoring_ready=true`) |
+| 2026-10-05 | Alert drill (`bootstrap.sh --drill`, plan 03-15 H6/H8) | none | 7e03c8c | the owner | the throwaway check `altegio-me-mcp-alert-drill` (period 1 minute, impossible matcher) failed from all three regions within minutes; the drill policy opened an incident and the owner's e-mail channel delivered the ALERT mail at 05:16 UTC and the RESOLVED mail at 05:27 UTC, after the script deleted both objects at 05:26 UTC; nothing left behind (`list-configs` and `policies list` empty for the drill name); the real check and policy were not touched |

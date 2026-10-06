@@ -99,3 +99,15 @@ Two further points for the ask:
 - The own-domain fallback of ADR 0001 D3 stays deliverable without a code change on our side. It
   is configuration: `PROXY_AUTH=off` (no proxy-origin check) and `TRUSTED_PROXY_HOPS=0` (no proxy
   in front, so no forwarded address is trusted).
+
+## Resolution (2026-10-05)
+
+The anonymous `/me` lane was built by us in `altegio/altegio-mcp-platform` (PR #248, design note
+`docs/superflow/specs/2026-10-05-me-anonymous-lane-design.md`) and shipped by the platform owner as
+PR #250, which took #248 as its base and added anonymous admission caps, signed request ids and an
+operational registry. The customer proxy deployed at 15:35 UTC and `https://mcp.alteg.io/me` passed
+the acceptance checks the same day: anonymous `tools/list` answers 200 with the six tools, the
+discovery document is 404 in both forms, and an unsigned direct `POST /mcp` on `run.app` answers 401.
+The route signs with its own key `MCP_PROXY_BACKEND_KEY_ME`, carries the client address in
+`x-mcp-auth-client-ip` and a correlation id in `x-mcp-auth-request-id`, and is outside the VM
+autoheal metric, which selects the internal proxy only. The own-domain fallback was not needed.
