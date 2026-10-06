@@ -361,3 +361,18 @@ rollbacks and manual changes).
 | 2026-10-05 | Public route live: altegio-mcp-platform #250 (built on our #248) merged 15:32 UTC, customer proxy build `794c5e05` at 15:35 UTC | unchanged | ce32a45 (platform) | the platform owner | `https://mcp.alteg.io/me`: anonymous `tools/list` 200 with six tools, discovery 404 in both forms, `GET /` lists `/me` with `auth: none`; `smoke-url.sh --public` PASS; monitoring #39 deployed before publication (`me_monitoring_ready=true`) |
 | 2026-10-05 | Alert drill (`bootstrap.sh --drill`, plan 03-15 H6/H8) | none | 7e03c8c | the owner | the throwaway check `altegio-me-mcp-alert-drill` (period 1 minute, impossible matcher) failed from all three regions within minutes; the drill policy opened an incident and the owner's e-mail channel delivered the ALERT mail at 05:16 UTC and the RESOLVED mail at 05:27 UTC, after the script deleted both objects at 05:26 UTC; nothing left behind (`list-configs` and `policies list` empty for the drill name); the real check and policy were not touched |
 | 2026-10-06 | claude.ai connector run (plan 03-16, OPS-08): the owner added `https://mcp.alteg.io/me` as a custom connector in the Altegio organization's Claude account and ran the six-prompt known-business flow on location 726120 | `altegio-me-mcp-b32ak5r5qmvb57g246qju3odyua` (version 0.2.0) | 4c781e6 | the owner | all six tools answered (`http_status` 200, `outcome` ok, 15:28:25 to 15:31:20 UTC) and the returned link opened the widget with the selection pre-filled; no 401, 403 or 429 at our edge, `origin_host` empty, `forwarded_for_count` 1; claude.ai first sent MCP protocol version 2026-07-28, the SDK 1.32.0 answered 400 and the client fell back to 2025-11-25 (follow-up: SDK upgrade before directory submission). Record: [`docs/research/claude-connector-run.md`](../research/claude-connector-run.md#connector-run-results) |
+
+## Related changes in other repositories
+
+Opened on 2026-10-06 as kondamih after the owner approved the exact diffs (plan 03-17). Both are
+open for the owning teams to review; neither is merged by us.
+
+- [altegio-mcp-platform #251](https://github.com/altegio/altegio-mcp-platform/pull/251): lists our
+  monitoring objects in `ops/MONITORING.md` (D-05), with petroff as reviewer. The `/me` lane itself
+  is not in that PR: it landed through altegio-mcp-platform #250, which absorbed our earlier #248.
+  The PR also notes that the live `mcp_proxy_upstream_502` filter lacks the `NOT ... /me/mcp$` line
+  the doc and the metric YAML show; this is harmless, because the filter is pinned to
+  `mcp-proxy-internal`, and is for the platform owner to reconcile.
+- [gen-ai-shared-skills #10](https://github.com/altegio/gen-ai-shared-skills/pull/10): adds the GCP
+  inventory row (project `altegio-mcp`, service `altegio-me-mcp`) to `knowledge/servers.md`, as the
+  company inventory policy requires.
