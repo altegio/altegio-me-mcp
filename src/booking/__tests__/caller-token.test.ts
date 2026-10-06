@@ -104,6 +104,39 @@ describe('BookingHttp with the caller partner token', () => {
     expect(source.refreshes()).toBe(1);
   });
 
+  it('leaves the shared gate alone on a 429 for the caller token', async () => {
+    const pauses: number[] = [];
+    const upstream = fakeFetch([
+      {
+        method: 'GET',
+        path: CALL.path,
+        reply: {
+          status: 429,
+          headers: { 'Retry-After': '2' },
+          body: { success: false, meta: { message: 'Too many requests' } },
+        },
+      },
+    ]);
+    const http = new BookingHttp({
+      base: BASE,
+      tokenSource: spySource(),
+      fetch: upstream.fetch,
+      gate: {
+        run: (start) => start(),
+        pauseUntil: (until) => {
+          pauses.push(until);
+        },
+      },
+    });
+    const error = (await http
+      .send({ ...CALL, partnerToken: CALLER_TOKEN })
+      .catch((caught: unknown) => caught)) as UpstreamError;
+    expect(error.kind).toBe('rate_limited');
+    expect(error.retryAfterSeconds).toBe(2);
+    expect(upstream.calls).toHaveLength(1);
+    expect(pauses).toEqual([]);
+  });
+
   it('words a refused caller token as the connection token, not our access', () => {
     const caller = toToolError(
       new UpstreamError('unauthorized', CALL.route, {

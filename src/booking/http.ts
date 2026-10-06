@@ -268,7 +268,13 @@ export class BookingHttp {
       }
     }
     let retryAfter: number | null = null;
-    if (reply.status === 429) {
+    if (reply.status === 429 && callerToken !== undefined) {
+      // Most likely the caller's own per-partner limit: the caller waits and
+      // nobody else does. Our egress stays below the per-address limit, so the
+      // shared gate is not paused and the call is not retried inline; one
+      // partner exhausting its budget never slows another (ADR 0004).
+      retryAfter = this.advisedWait(reply.headers);
+    } else if (reply.status === 429) {
       retryAfter = this.pauseFor(reply.headers);
       // At most one retry, and only for a short advised wait. The upstream
       // did not process a rate-limited request, so sending it again is safe,
@@ -360,10 +366,16 @@ export class BookingHttp {
 
   /** Pauses the shared gate for the advised wait of a 429 and returns it in seconds. */
   private pauseFor(headers: Headers): number {
-    const now = this.now();
-    const wait = retryAfterSeconds(headers, now) ?? DEFAULT_RETRY_AFTER_SECONDS;
-    this.gate.pauseUntil(now + wait * 1000);
+    const wait = this.advisedWait(headers);
+    this.gate.pauseUntil(this.now() + wait * 1000);
     return wait;
+  }
+
+  /** The advised wait of a 429 in seconds, without pausing anybody. */
+  private advisedWait(headers: Headers): number {
+    return (
+      retryAfterSeconds(headers, this.now()) ?? DEFAULT_RETRY_AFTER_SECONDS
+    );
   }
 
   private statusError(

@@ -57,7 +57,9 @@ anyway (D3). The proxy only requires a credential and forwards it signed.
 **D3. Upstream calls use the caller's token,** as Pro's UC2 does. Altegio then applies its
 per-partner limits, anti-fraud rules and attribution to that partner, and partners no longer
 spend account 2630's shared budget. A 401 or 403 on the caller's token is the caller's to fix: it
-is never retried with our token, and the tool error says the connection's token was refused. The
+is never retried with our token, and the tool error says the connection's token was refused. A
+429 on the caller's token is answered with the advised wait and pauses nobody else: one partner
+exhausting its budget never slows another. The
 process-wide request gate stays, because all partners share our egress address and its per-address
 limit; its numbers were sized for the 2630 budget and are revisited once partner traffic is
 measured.
