@@ -1,7 +1,7 @@
 # ME operational contract
 
 ME is stateless and admits callers by their own Altegio partner token (ADR 0004;
-`CALLER_AUTH=optional` while the proxy's `/me` lane is still anonymous); Pro is
+`CALLER_AUTH=required` in production since 2026-10-06); Pro is
 authenticated/stateful. All six ME tools remain user reads; `book_check` hands
 confirmation to the booking widget. No OAuth, booking write, catalog search or
 customer VM autoheal is introduced here.
