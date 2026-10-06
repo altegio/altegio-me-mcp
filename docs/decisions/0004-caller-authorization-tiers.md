@@ -109,6 +109,10 @@ sender's to choose.
 
 Rollback is the reverse order: step 4 first, then step 2.
 
+All four steps shipped on 2026-10-06 (altegio-me-mcp #11, altegio-mcp-platform #252,
+altegio-monitoring #44, then this server's switch); the release log in
+[the GCP hosting runbook](../runbooks/gcp-hosting.md) records each one.
+
 ## Consequences
 
 - Partners register a developer account; the API licence binds them (client consent, GDPR).

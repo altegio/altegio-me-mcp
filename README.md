@@ -354,11 +354,11 @@ admits only callers inside the project's network and the proxy comes in over pub
 the signature is the access control there. The edge limits in the table above (in flight, per
 address, shared pool) apply per client address as the proxy signs it.
 
-**Caller access.** The deployed revision runs with `CALLER_AUTH=optional` while the proxy's `/me`
-lane is still anonymous: a call without a partner token is served with the account-2630 token, as
-before, and a partner token that the proxy forwards signed is checked and used. Once the proxy
-requires a partner token on `/me` and the platform monitor sends one, `cloudbuild.yaml` switches to
-`CALLER_AUTH=required` (rollout in [ADR 0004](docs/decisions/0004-caller-authorization-tiers.md)).
+**Caller access.** The deployed revision runs with `CALLER_AUTH=required` (since 2026-10-06): the
+proxy's `/me` lane refuses a call without a partner token, and this server refuses a signed call
+that does not carry one, so the account-2630 token no longer serves anonymous callers (rollout in
+[ADR 0004](docs/decisions/0004-caller-authorization-tiers.md)). The platform monitor's canary sends
+the account-2630 partner token.
 
 **Secrets.** No secret is in the image, in git or in an environment variable. The partner token
 (the platform's secret `MARKETPLACE_PARTNER_TOKEN`, which holds the account-2630 token; Altegio.Pro
