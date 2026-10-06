@@ -23,7 +23,7 @@ platform owns it. The label `app=altegio-me-mcp` goes where the resource type su
 | Secret, proxy key | `MCP_PROXY_BACKEND_KEY_ME` (the name is the `--proxy-key-secret` parameter; the key issued for the `/me` route, read by this service and by the customer proxy) | Secret Manager | this project (created 2026-10-05) | yes (`--labels`) |
 | E-mail channel | `altegio-me-mcp-owner` | Cloud Monitoring | this project | yes (`--user-labels`) |
 | Uptime check, service | `altegio-me-mcp-health` | Cloud Monitoring | this project | yes |
-| Uptime check, public route | `altegio-me-mcp-public` (only with `--public-check`) | Cloud Monitoring | this project | yes |
+| Uptime check, public route | `altegio-me-mcp-public` (only with `--public-check`; not created, see "Monitoring") | Cloud Monitoring | this project | yes |
 | Alert policy, down | `altegio-me-mcp-down` | Cloud Monitoring | this project | yes (`userLabels`) |
 | Log-based metrics | `altegio_me_mcp_upstream_unauthorized`, `altegio_me_mcp_upstream_rate_limited`, `altegio_me_mcp_upstream_unavailable` | Cloud Logging | this project | no: the metric has a description that names the app |
 | Alert policies, upstream | `altegio-me-mcp-upstream-unauthorized`, `altegio-me-mcp-upstream-rate-limited`, `altegio-me-mcp-upstream-unavailable` | Cloud Monitoring | this project | yes |
@@ -210,12 +210,13 @@ Both secrets are mounted as files and the service re-reads them; nothing is rest
 
 ## Monitoring
 
-Two uptime checks run every 5 minutes from three regions (`europe`, `usa-iowa`, `asia-pacific`)
-and call no Altegio API:
+The script can create two uptime checks, every 5 minutes from three regions (`europe`,
+`usa-iowa`, `asia-pacific`), and neither calls an Altegio API. Only the first exists (read from
+the project on 2026-10-06; the owner decided the same day to keep no public check of our own):
 
 - `altegio-me-mcp-health`: `GET /health` on the `run.app` host, content `"status":"ok"`. It tests
   our service alone, so it separates a failing service from a failing proxy.
-- `altegio-me-mcp-public` (created with `--public-check` after the platform route is live): `POST
+- `altegio-me-mcp-public` (created only with `--public-check`; not created): `POST
   tools/list` to `https://mcp.alteg.io/me` with `Accept: application/json, text/event-stream`,
   content `business_get`. It tests the proxy, the route, the signature and the service together.
 
@@ -237,13 +238,14 @@ reconcile channels afterwards; **do not run `--public-check` until the down-poli
 the policy's existing channels**, or the on-call channel would be dropped from `altegio-me-mcp-down`.
 The public path is probed by the platform's `mcp-public-surface` check (altegio-monitoring, every
 15 minutes, anonymous `tools/list` on `https://mcp.alteg.io/me`) and by `mcp-customer-runtime`
-(our `/health` and a signed `business_get(722227)` canary), so a public uptime check of our own is a
-decision for the owner, not a gap.
+(our `/health` and a signed `business_get(722227)` canary). The owner decided on 2026-10-06 that
+we keep no public uptime check of our own, because the platform's monitors cover `/me`; the
+`--public-check` option stays in the script for a later change of that decision.
 
-Cost: about $3 a month for two checks at 5 minutes (about 51,840 executions a month at roughly
-$0.30 per 1,000, with the project's free tier already used by the platform's own checks). One
-minute would cost about 12 times as much (about $140 a month), which is why the period is 5.
-Detection takes 5 to 10 minutes.
+Cost: nothing for the one check at 5 minutes (25,920 executions a month, inside the free monthly
+executions the platform's own checks leave, about 41,000). Both checks would run 51,840 executions
+and cost about $3 a month. At 1 minute the one check would cost about $27 a month, which is why
+the period is 5. Detection takes 5 to 10 minutes.
 
 An unverified e-mail channel may need the owner to confirm a mail. The step 7 report shows its
 verification status; the drill proves delivery.
@@ -302,8 +304,9 @@ which also proves the signed protocol, the `business_get(722227)` canary and req
    route is 404).
 3. The direct `run.app` address must refuse an unsigned call with 401:
    `bash scripts/smoke-url.sh <run.app URL> <commit>` checks `/health` and that refusal.
-4. Create the public check and add it to the down policy by running the bootstrap again with
-   `--public-check`.
+4. Optional, and not done: create the public check and add it to the down policy by running the
+   bootstrap again with `--public-check`. The owner decided on 2026-10-06 to keep no public check
+   of our own (see `## Monitoring`).
 
 ## Live load run
 
@@ -357,3 +360,4 @@ rollbacks and manual changes).
 | 2026-10-05 | Second release through the new pipeline (PR #8, merge 4c781e6): service-GET reconciliation instead of operation polling, signed `x-mcp-auth-request-id` correlation | `altegio-me-mcp-b32ak5r5qmvb57g246qju3odyua` (version 0.2.0, release sequence 2) | 4c781e6 | the trigger, as `altegio-me-mcp-build` | build `de80aec7` SUCCESS at 15:01 UTC; 100% explicit traffic, no candidate tag or lock left; `verify-backend.py` PASS (liveness and commit, signed initialize and six-tool list, `business_get(722227)`, correlation, unsigned 401) |
 | 2026-10-05 | Public route live: altegio-mcp-platform #250 (built on our #248) merged 15:32 UTC, customer proxy build `794c5e05` at 15:35 UTC | unchanged | ce32a45 (platform) | the platform owner | `https://mcp.alteg.io/me`: anonymous `tools/list` 200 with six tools, discovery 404 in both forms, `GET /` lists `/me` with `auth: none`; `smoke-url.sh --public` PASS; monitoring #39 deployed before publication (`me_monitoring_ready=true`) |
 | 2026-10-05 | Alert drill (`bootstrap.sh --drill`, plan 03-15 H6/H8) | none | 7e03c8c | the owner | the throwaway check `altegio-me-mcp-alert-drill` (period 1 minute, impossible matcher) failed from all three regions within minutes; the drill policy opened an incident and the owner's e-mail channel delivered the ALERT mail at 05:16 UTC and the RESOLVED mail at 05:27 UTC, after the script deleted both objects at 05:26 UTC; nothing left behind (`list-configs` and `policies list` empty for the drill name); the real check and policy were not touched |
+| 2026-10-06 | claude.ai connector run (plan 03-16, OPS-08): the owner added `https://mcp.alteg.io/me` as a custom connector in the Altegio organization's Claude account and ran the six-prompt known-business flow on location 726120 | `altegio-me-mcp-b32ak5r5qmvb57g246qju3odyua` (version 0.2.0) | 4c781e6 | the owner | all six tools answered (`http_status` 200, `outcome` ok, 15:28:25 to 15:31:20 UTC) and the returned link opened the widget with the selection pre-filled; no 401, 403 or 429 at our edge, `origin_host` empty, `forwarded_for_count` 1; claude.ai first sent MCP protocol version 2026-07-28, the SDK 1.32.0 answered 400 and the client fell back to 2025-11-25 (follow-up: SDK upgrade before directory submission). Record: [`docs/research/claude-connector-run.md`](../research/claude-connector-run.md#connector-run-results) |
