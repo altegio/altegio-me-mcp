@@ -1,5 +1,8 @@
+import type { UpstreamCallOptions } from '../booking/http.js';
+
 // Per-call tool context (WR-04, D-01): the abort signal every upstream wait
-// listens to, and the caller key the gate's per-key queue cap counts.
+// listens to, the caller key the gate's per-key queue cap counts, and the
+// caller's own partner token that upstream calls are signed with (ADR 0004).
 
 /**
  * One tool call's budget. Sizing (03-RESEARCH Pattern 4): this deadline is
@@ -13,6 +16,12 @@ export interface ToolContext {
   readonly signal: AbortSignal;
   /** Trusted caller identity for the gate's per-key cap; null when unknown. */
   readonly clientKey: string | null;
+  /**
+   * The caller's Altegio partner token, already validated; upstream calls are
+   * signed with it. Null signs them with the server's own token (local runs,
+   * and CALLER_AUTH=optional without a caller token).
+   */
+  readonly partnerToken: string | null;
   /**
    * A signal that aborts after `ms`: the budget of one step inside the call
    * (book_check's slot check). A seam, so tests need not wait out real time.
@@ -28,6 +37,7 @@ function stepTimeout(ms: number): AbortSignal {
 export const NO_TOOL_CONTEXT: ToolContext = Object.freeze({
   signal: new AbortController().signal,
   clientKey: null,
+  partnerToken: null,
   timeout: stepTimeout,
 });
 
@@ -40,12 +50,24 @@ export const NO_TOOL_CONTEXT: ToolContext = Object.freeze({
 export function createToolContext(
   parent: AbortSignal | undefined,
   clientKey: string | null,
-  deadlineMs: number = TOOL_DEADLINE_MS
+  deadlineMs: number = TOOL_DEADLINE_MS,
+  partnerToken: string | null = null
 ): ToolContext {
   const deadline = AbortSignal.timeout(deadlineMs);
   const signal =
     parent === undefined ? deadline : AbortSignal.any([parent, deadline]);
-  return { signal, clientKey, timeout: stepTimeout };
+  return { signal, clientKey, partnerToken, timeout: stepTimeout };
+}
+
+/** What every upstream call of a tool carries: its signal, gate key and token. */
+export function upstreamCall(ctx: ToolContext): UpstreamCallOptions {
+  return ctx.partnerToken === null
+    ? { signal: ctx.signal, key: ctx.clientKey }
+    : {
+        signal: ctx.signal,
+        key: ctx.clientKey,
+        partnerToken: ctx.partnerToken,
+      };
 }
 
 /**

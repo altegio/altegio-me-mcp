@@ -5,12 +5,36 @@ import { z } from 'zod';
 import { createApp, type AppDeps } from '../../app.js';
 import { PACKAGE_NAME, PACKAGE_VERSION } from '../../util/package-metadata.js';
 import { defineTool, type DefinedTool } from '../../tools/factory.js';
+import type { PartnerTokenValidator } from '../../security/partner-token.js';
 
 // Shared by the HTTP-level tests: starts createApp on an ephemeral port with an
 // in-memory log destination, and closes everything after each test so Jest exits.
 
 export const CANARY_SECRET = 'canary-secret-token-0001';
 export const ALLOWED_ORIGIN = 'http://localhost:8080';
+
+/** A partner token the stub validator accepts. */
+export const PARTNER_TOKEN = 'partner-token-valid-0001';
+/** A partner token whose check cannot be completed (Altegio down). */
+export const PARTNER_TOKEN_UNCHECKABLE = 'partner-token-uncheckable-0001';
+
+/** Accepts PARTNER_TOKEN only; counts its checks. */
+export function stubPartnerValidator(): PartnerTokenValidator & {
+  checked: string[];
+} {
+  const checked: string[] = [];
+  return {
+    checked,
+    validate(token: string) {
+      checked.push(token);
+      if (token === PARTNER_TOKEN) return Promise.resolve('valid');
+      if (token === PARTNER_TOKEN_UNCHECKABLE) {
+        return Promise.resolve('unavailable');
+      }
+      return Promise.resolve('invalid');
+    },
+  };
+}
 
 export type LogLine = Record<string, unknown>;
 
@@ -67,6 +91,9 @@ export async function startApp(
     secrets: [CANARY_SECRET],
     allowedOrigins: [ALLOWED_ORIGIN],
     allowLoopbackOrigins: false,
+    // Optional by default, so the transport tests need no token; the caller
+    // tests set 'required' and send PARTNER_TOKEN.
+    callerAuth: { mode: 'optional', validator: stubPartnerValidator() },
     ...overrides,
   });
   const server: HttpServer = await new Promise((resolve) => {

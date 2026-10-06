@@ -104,6 +104,7 @@ docker create --name "$NAME" "${NETWORK_ARGS[@]}" -p "${HOST_PORT}:8080" \
   -e PUBLIC_BASE_URL="$BASE_URL" \
   -e LOG_LEVEL=info \
   -e MCP_PROXY_BACKEND_KEY_FILE=/tmp/proxy-key \
+  -e CALLER_AUTH=optional \
   -e COMMIT_SHA="$COMMIT_VALUE" \
   "$IMAGE" >/dev/null
 docker cp "$PROXY_KEY_FILE" "$NAME:/tmp/proxy-key"

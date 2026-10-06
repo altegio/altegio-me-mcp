@@ -78,7 +78,7 @@ steps:
       - --cpu-boost
       - --cpu-throttling
       - --labels=app=altegio-me-mcp
-      - --set-env-vars=NODE_ENV=production,PUBLIC_BASE_URL=${_PUBLIC_BASE_URL},LOG_LEVEL=info,COMMIT_SHA=$COMMIT_SHA,ALTEGIO_API_TOKEN_FILE=/secrets/altegio-api/token,MCP_PROXY_BACKEND_KEY_FILE=/secrets/proxy-key/key
+      - --set-env-vars=NODE_ENV=production,PUBLIC_BASE_URL=${_PUBLIC_BASE_URL},LOG_LEVEL=info,COMMIT_SHA=$COMMIT_SHA,ALTEGIO_API_TOKEN_FILE=/secrets/altegio-api/token,MCP_PROXY_BACKEND_KEY_FILE=/secrets/proxy-key/key,CALLER_AUTH=optional
       - --set-secrets=/secrets/altegio-api/token=${_TOKEN_SECRET}:latest,/secrets/proxy-key/key=${_PROXY_KEY_SECRET}:latest
 
 options:

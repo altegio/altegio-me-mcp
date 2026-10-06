@@ -9,8 +9,10 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import type { CallRecord } from '../observability/call-log.js';
 import { scrubSecrets } from '../observability/redact.js';
-import { createToolContext } from '../tools/context.js';
+import type { Caller } from '../security/caller-auth.js';
+import { createToolContext, TOOL_DEADLINE_MS } from '../tools/context.js';
 import type { DefinedTool, ToolSpec } from '../tools/factory.js';
+import { missingScopes, scopeRefusalText } from '../tools/scopes.js';
 import { SERVER_INSTRUCTIONS } from './instructions.js';
 
 export interface CreateMcpServerOptions<D> {
@@ -24,13 +26,24 @@ export interface CreateMcpServerOptions<D> {
   record: CallRecord;
   /** Trusted caller identity for the gate's per-key cap; wired in 03-09. */
   clientKey?: string | null;
+  /**
+   * Who was admitted (ADR 0004): their scopes gate each tool call and their
+   * partner token signs the upstream calls. Null grants nothing.
+   */
+  caller?: Caller | null;
 }
 
 // A fresh low-level Server per request: nothing is shared between requests
 // except the immutable tool registry (stateless, ADR-0001-D6).
 export function createMcpServer<D>(options: CreateMcpServerOptions<D>): Server {
-  const { name, version, specs, toolsByName, toolDeps, secrets, record } =
-    options;
+  const { name, version, specs, toolsByName, toolDeps, record } = options;
+  const caller = options.caller ?? null;
+  const partnerToken = caller?.kind === 'partner' ? caller.partnerToken : null;
+  // The caller's own token is scrubbed from results like ours.
+  const secrets =
+    partnerToken === null
+      ? options.secrets
+      : [...options.secrets, partnerToken];
   const server = new Server(
     { name, version },
     { capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS }
@@ -52,12 +65,33 @@ export function createMcpServer<D>(options: CreateMcpServerOptions<D>): Server {
         );
       }
       record.tool = tool.name;
+      // Checked before the arguments: a call the grant does not cover never
+      // reaches the handler, and nothing is sent upstream (ADR 0004).
+      const missing = missingScopes(
+        tool.meta.scopes,
+        caller?.scopes ?? new Set()
+      );
+      if (missing.length > 0) {
+        record.outcome = 'tool_error';
+        record.error_type = 'InsufficientScope';
+        return {
+          content: [
+            { type: 'text', text: scopeRefusalText(tool.name, missing) },
+          ],
+          isError: true,
+        };
+      }
       // extra.signal aborts when the client cancels or the transport closes;
       // the context adds the one deadline every call runs under (WR-04).
       const invocation = await tool.invoke(
         request.params.arguments ?? {},
         toolDeps,
-        createToolContext(extra.signal, options.clientKey ?? null)
+        createToolContext(
+          extra.signal,
+          options.clientKey ?? null,
+          TOOL_DEADLINE_MS,
+          partnerToken
+        )
       );
       record.outcome = invocation.outcome;
       record.error_type = invocation.errorType;

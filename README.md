@@ -8,6 +8,9 @@ business card (`business_get`), services (`business_list_services`), team member
 (`src/booking`), and a live suite has checked that client against a real business. The hosting
 setup (a Cloud Run pipeline behind the platform proxy, edge limits, secrets as files, alerts) is
 in the repository and live since 2026-10-05 at `https://mcp.alteg.io/me`, see [Deploy](#deploy).
+Callers authenticate with their own Altegio partner token, which the server checks with Altegio
+and uses for their upstream calls; actions for one signed-in client come with OAuth in Phase 2
+([ADR 0004](docs/decisions/0004-caller-authorization-tiers.md), see [Access](#access)).
 The catalog of bookable
 businesses and search come next. Decisions and research are in [`docs/`](docs/).
 
@@ -22,7 +25,8 @@ a separate server; this repository is that server.
 
 ## Product scope
 
-**Phase 1: discover in chat, book in the widget.** No sign-in and no personal data in the chat.
+**Phase 1: discover in chat, book in the widget.** No end-user sign-in and no personal data in
+the chat. The caller (a partner's agent or app) presents its Altegio partner token.
 
 - Search businesses that use Altegio and have online booking enabled.
 - Show a business card, its bookable services, team members, dates and free time slots.
@@ -32,7 +36,8 @@ a separate server; this repository is that server.
 
 **Phase 2: book in chat.** The client signs in with phone + SMS code on an Altegio.me page
 (OAuth 2.1), then the assistant can create, reschedule and cancel appointments and list the
-client's bookings. Interactive UI (MCP Apps) for hosts that render it.
+client's bookings. Interactive UI (MCP Apps) for hosts that render it. Interactive hosts
+(claude.ai, ChatGPT, connector directories) connect from this phase on, through the same OAuth.
 
 **Distribution.** Claude Connectors Directory, then ChatGPT plugins, the MCP Registry, and
 outreach to Perplexity, Mistral, xAI and Google. See
@@ -47,21 +52,24 @@ AI host (Claude, ChatGPT, ...)
         |  POST /mcp, JSON-RPC over Streamable HTTP, no session
         v
 Express app (src/app.ts)
-        |  call log -> Origin guard -> JSON body parser (100 kb limit)
+        |  call log -> Origin guard -> proxy signature -> edge limits
+        |  -> caller's partner token (checked with Altegio, cached) -> JSON body parser (100 kb)
         v
 New SDK Server + Streamable HTTP transport for this one request (src/mcp)
         |
         v
-Tool registry and factory (src/tools) -> scrubbed, fenced result or in-band error
+Tool registry and factory (src/tools) -> scope check -> scrubbed, fenced result or in-band error
         |
         v
-Booking client (src/booking) -> request gate -> Altegio public booking API (api.alteg.io/api/v1)
+Booking client (src/booking) -> request gate -> Altegio public booking API (api.alteg.io/api/v1),
+                                                signed with the caller's partner token
 ```
 
 `GET /health` answers `{"status":"ok","version":...,"commit":...}` for Cloud Run (`commit` is the
 `COMMIT_SHA` of the build, or `null`), and stays open. With `PROXY_AUTH=required` (the default),
 `POST /mcp` is served only with a valid `x-mcp-proxy-auth` signature from the platform proxy; any
-other request gets HTTP 401 `proxy_auth_required` before its body is read. `GET` and `DELETE` on `/mcp`
+other request gets HTTP 401 `proxy_auth_required` before its body is read. With `CALLER_AUTH=required`
+(the default) a request also needs a valid Altegio partner token, see [Access](#access). `GET` and `DELETE` on `/mcp`
 answer 405, because the server is stateless: it never sends an `mcp-session-id`, and every
 `POST /mcp` is served by a fresh server and transport that are closed when the response ends.
 
@@ -71,6 +79,7 @@ answer 405, because the server is stateless: it never sends an `mcp-session-id`,
 | `src/mcp` | The only code that imports the MCP SDK: server creation, stateless request handler, server instructions |
 | `src/tools` | Tool factory with zod schemas and annotations, registry, the six booking tools, pagination shape, in-band errors, untrusted-text fencing |
 | `src/booking` | Typed client for the six documented booking routes (company card, services, team members, dates, time slots, slot check), the request gate that throttles calls on the partner budget, and the deep-link builder for the booking widget |
+| `src/security` | Proxy signature check, client address and edge limits, the caller's partner token check (`caller-auth.ts`, `partner-token.ts`) |
 | `src/observability` | pino logger, one structured call log line per `POST /mcp`, secret scrubbing |
 | `src/compliance` | Directory-compliance rules R1-R13 and deliberately bad fixtures; test-only, not in the build |
 | `src/util` | Package name and version read from `package.json` |
@@ -91,8 +100,8 @@ Other notes:
   CI layout.
 - Target hosting: its own Cloud Run service in the platform's GCP project `altegio-mcp`,
   where every Altegio MCP server lives (ADR 0003), published at `https://mcp.alteg.io/me` as a
-  route on the platform's `mcp.alteg.io` proxy, next to `https://mcp.alteg.io/pro` (ADR 0002). The proxy admits only Altegio account holders today;
-  the anonymous `/me` route is requested from the platform team.
+  route on the platform's `mcp.alteg.io` proxy, next to `https://mcp.alteg.io/pro` (ADR 0002). The `/me` lane
+  went live anonymous on 2026-10-05 and moves to partner-token admission (ADR 0004, open item I7).
 - The booking client calls the Altegio public API (`api.alteg.io/api/v1`) with the partner
   token and never creates, holds or changes a booking: `book_check` is a validation-only call,
   and a live run confirmed that it leaves the slot free. Later phases add a catalog index of
@@ -100,7 +109,9 @@ Other notes:
   designed together with the platform proxy, which is the authorization server on
   `mcp.alteg.io` (ADR 0002).
 - Decisions and their reasons: [`docs/decisions/0001-scope-and-architecture.md`](docs/decisions/0001-scope-and-architecture.md),
-  [`docs/decisions/0002-public-address-on-platform-proxy.md`](docs/decisions/0002-public-address-on-platform-proxy.md).
+  [`docs/decisions/0002-public-address-on-platform-proxy.md`](docs/decisions/0002-public-address-on-platform-proxy.md),
+  [`docs/decisions/0003-host-in-platform-project.md`](docs/decisions/0003-host-in-platform-project.md),
+  [`docs/decisions/0004-caller-authorization-tiers.md`](docs/decisions/0004-caller-authorization-tiers.md).
 - What other teams must answer before or during the build: [`docs/open-questions.md`](docs/open-questions.md).
 
 ## Research
@@ -129,6 +140,7 @@ values) when one is missing or invalid.
 | `PROXY_AUTH` | `required` or `off`. With `required`, `POST /mcp` is served only with a valid `x-mcp-proxy-auth` signature from the platform proxy and the server does not start without a proxy key. `.env.example` sets `off` for local runs | `required` | no |
 | `MCP_PROXY_BACKEND_KEY` | Shared key of the proxy signature, a comma-separated list during a rotation, each key at least 32 characters. Production uses the file form below | none | with `PROXY_AUTH=required`, this or `MCP_PROXY_BACKEND_KEY_FILE` |
 | `MCP_PROXY_BACKEND_KEY_FILE` | Absolute path of a mounted file that holds the proxy key; wins over `MCP_PROXY_BACKEND_KEY` and is re-read lazily every 60 s, so a rotation needs no restart | none | with `PROXY_AUTH=required`, this or `MCP_PROXY_BACKEND_KEY` |
+| `CALLER_AUTH` | `required` or `optional`. With `required`, every `POST /mcp` needs the caller's own Altegio partner token: behind the proxy (`PROXY_AUTH=required`) only in the proxy's signed `x-mcp-auth-altegio-partner-token` header, without it as `Authorization: Bearer <token>` or `X-Altegio-Partner-Token`. The token is checked with Altegio (cached by hash: valid 5 min, invalid 30 s) and signs that caller's upstream calls. `optional` serves a caller without a token with `ALTEGIO_API_TOKEN`, logs one `config_warning` at startup, and exists for the proxy rollout and local runs; a token that is sent is still checked. `.env.example` sets `optional` | `required` | no |
 | `COMMIT_SHA` | Commit of the deployed build, 7 to 40 lowercase hex characters; reported as `commit` by `GET /health` | none (`commit` is `null`) | no |
 | `TRUSTED_PROXY_HOPS` | Proxies between the caller and the server, counted from the right of `X-Forwarded-For`. It picks the client address when the proxy does not sign `x-mcp-auth-client-ip`, and with `PROXY_AUTH=off`. `0` means no proxy. The leftmost entries and the TCP peer are never used | `1` | no |
 | `SHARED_EGRESS_CIDRS` | Comma-separated IPv4 or IPv6 CIDRs whose addresses share one request budget and are not limited per address, because many users sit behind them. The default is Anthropic's outbound range used by claude.ai | `160.79.104.0/21` | no |
@@ -154,6 +166,33 @@ GCP Secret Manager, never in git.
 When `NODE_ENV` is not set the server runs as `production`: loopback browser origins are refused
 and an `http://` `ALTEGIO_API_BASE` stops startup, so the partner token never travels in cleartext.
 
+## Access
+
+Every call needs an Altegio partner token: the token of a developer account in the Altegio
+marketplace (register at https://app.alteg.io/appstore/developers/1; the token is under account
+settings). Send it on every `POST` to `https://mcp.alteg.io/me`:
+
+```bash
+curl -s https://mcp.alteg.io/me \
+  -H 'Authorization: Bearer <partner token>' \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+`X-Altegio-Partner-Token: <partner token>` works too. Agent frameworks pass it as the server's
+bearer token or header, for example `authorization_token` of an MCP server in the Claude API.
+The server checks the token with Altegio and makes the caller's upstream calls with it, so
+Altegio's per-partner limits and licence terms apply to the caller. Without a token the answer is
+HTTP 401; with a token Altegio refuses, 401 `invalid_token`; when Altegio cannot be reached for
+the check, 503 with `Retry-After`.
+
+Access is tiered by scope ([ADR 0004](docs/decisions/0004-caller-authorization-tiers.md)). A
+partner token grants `mcp:me:read`, which the six current tools need. Tools that act for one
+client (Phase 2) need `mcp:me:book`, which only that client's OAuth sign-in grants; a call
+without it gets an in-band error naming the missing access, and `tools/list` shows the same tools
+to everyone. Interactive hosts such as claude.ai and ChatGPT cannot send a partner token and
+connect once OAuth arrives in Phase 2.
+
 ## Local run
 
 Requires Node 22 (the version is pinned in `.nvmrc`; with nvm run `nvm use`).
@@ -173,7 +212,8 @@ npx -y @modelcontextprotocol/inspector@2.9.0 --cli http://localhost:8080/mcp --t
 
 `GET /health` returns the status, version and commit. `tools/list` lists the six booking tools. Tool
 calls reach the Altegio API, so they need the real partner token in `.env`; with the placeholder
-token they return an in-band error. Raw HTTP clients must send `Accept: application/json, text/event-stream` on
+token they return an in-band error. `.env.example` sets `CALLER_AUTH=optional`, so these calls
+need no caller token; with `CALLER_AUTH=required` send `Authorization: Bearer <partner token>`. Raw HTTP clients must send `Accept: application/json, text/event-stream` on
 `POST /mcp`, as the Streamable HTTP transport requires.
 
 ## Checks
@@ -313,6 +353,12 @@ is read. The `run.app` address stays open to the internet, because Cloud Run's i
 admits only callers inside the project's network and the proxy comes in over public egress, so
 the signature is the access control there. The edge limits in the table above (in flight, per
 address, shared pool) apply per client address as the proxy signs it.
+
+**Caller access.** The deployed revision runs with `CALLER_AUTH=optional` while the proxy's `/me`
+lane is still anonymous: a call without a partner token is served with the account-2630 token, as
+before, and a partner token that the proxy forwards signed is checked and used. Once the proxy
+requires a partner token on `/me` and the platform monitor sends one, `cloudbuild.yaml` switches to
+`CALLER_AUTH=required` (rollout in [ADR 0004](docs/decisions/0004-caller-authorization-tiers.md)).
 
 **Secrets.** No secret is in the image, in git or in an environment variable. The partner token
 (the platform's secret `MARKETPLACE_PARTNER_TOKEN`, which holds the account-2630 token; Altegio.Pro

@@ -1,6 +1,7 @@
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { RequestHandler } from 'express';
 import { getCallRecord } from '../observability/call-log.js';
+import { getCaller } from '../security/caller-auth.js';
 import type { DefinedTool } from '../tools/factory.js';
 import { createMcpServer } from './create-server.js';
 
@@ -48,6 +49,7 @@ export function createMcpRequestHandler<D>(
       // Set by the client identity step (OPS-06); null for the shared pool and
       // when the edge is off, so the gate's per-key cap never applies to them.
       clientKey: (res.locals.clientKey as string | null | undefined) ?? null,
+      caller: getCaller(res),
     });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

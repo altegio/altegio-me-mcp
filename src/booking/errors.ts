@@ -16,8 +16,13 @@ export interface UpstreamErrorInit {
   codes?: readonly number[];
   retryAfterSeconds?: number | null;
   upstreamMessage?: string | null;
+  /** Whose partner token the call carried; defaults to the server's. */
+  credential?: UpstreamCredential;
   cause?: unknown;
 }
+
+/** 'caller': the caller's own partner token (ADR 0004); 'server': ours. */
+export type UpstreamCredential = 'server' | 'caller';
 
 export class UpstreamError extends Error {
   readonly kind: UpstreamErrorKind;
@@ -34,6 +39,8 @@ export class UpstreamError extends Error {
    * scrubbed. Third-party text: never copied into `message`.
    */
   readonly upstreamMessage: string | null;
+  /** Whose partner token the call carried, so a refusal names the right party. */
+  readonly credential: UpstreamCredential;
 
   constructor(
     kind: UpstreamErrorKind,
@@ -50,5 +57,6 @@ export class UpstreamError extends Error {
     this.codes = Object.freeze([...(init.codes ?? [])]);
     this.retryAfterSeconds = init.retryAfterSeconds ?? null;
     this.upstreamMessage = init.upstreamMessage ?? null;
+    this.credential = init.credential ?? 'server';
   }
 }

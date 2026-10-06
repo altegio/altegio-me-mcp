@@ -22,27 +22,38 @@ import {
 // built from the source's current value on every attempt, an upstream 401 or
 // 403 forces one re-read and, when the token changed, one retry, and upstream
 // messages are scrubbed with the current and the previous token.
+//
+// A call may instead carry the caller's own partner token (ADR 0004): it is
+// sent in place of the server's, a 401 or 403 is never retried with another
+// token (the caller's token was refused, not rotated), and upstream messages
+// are scrubbed with it.
 
 export const ALTEGIO_ACCEPT = 'application/vnd.api.v2+json';
 export const UPSTREAM_TIMEOUT_MS = 10_000;
 
 /** What one upstream call tells the gate about its caller. */
-export interface UpstreamCallOptions {
+export interface GateCallOptions {
   /** Aborts the call: a queued call leaves the gate, a started one stops. */
   signal?: AbortSignal;
   /** Caller identity for the per-key queue cap; null or missing is uncapped. */
   key?: string | null;
 }
 
+/** What a tool hands the booking client for one upstream call. */
+export interface UpstreamCallOptions extends GateCallOptions {
+  /** The caller's validated partner token; missing signs with the server's. */
+  partnerToken?: string;
+}
+
 /** Admission control for upstream calls; the throttle implements it. */
 export interface GateLike {
-  run<T>(start: () => Promise<T>, opts?: UpstreamCallOptions): Promise<T>;
+  run<T>(start: () => Promise<T>, opts?: GateCallOptions): Promise<T>;
   pauseUntil(untilMs: number): void;
 }
 
 /** Runs every call at once and ignores pauses. */
 export const PASS_THROUGH_GATE: GateLike = Object.freeze({
-  run<T>(start: () => Promise<T>, opts?: UpstreamCallOptions): Promise<T> {
+  run<T>(start: () => Promise<T>, opts?: GateCallOptions): Promise<T> {
     if (opts?.signal?.aborted === true) {
       return Promise.reject(abortReason(opts.signal));
     }
@@ -229,10 +240,18 @@ export class BookingHttp {
       };
     };
 
-    const caller: UpstreamCallOptions = { signal: call.signal, key: call.key };
-    const sentToken = this.tokenSource.current();
+    const caller: GateCallOptions = { signal: call.signal, key: call.key };
+    const callerToken = call.partnerToken;
+    // The caller's token is the only one this call may carry: a refusal of it
+    // is the caller's to fix, and falling back to ours would hand them our
+    // access (ADR 0004).
+    const tokenNow = (): string => callerToken ?? this.tokenSource.current();
+    const sentToken = tokenNow();
     let reply = await this.attempt(call.route, url, initFor(sentToken), caller);
-    if (reply.status === 401 || reply.status === 403) {
+    if (
+      callerToken === undefined &&
+      (reply.status === 401 || reply.status === 403)
+    ) {
       // The partner token may have been rotated: re-read it once (at most once
       // per 60 s) and, when it differs from the one just refused, send the call
       // once more. A call that was dropped meanwhile is not retried. The token
@@ -262,7 +281,7 @@ export class BookingHttp {
         reply = await this.attempt(
           call.route,
           url,
-          initFor(this.tokenSource.current()),
+          initFor(tokenNow()),
           caller
         );
         if (reply.status === 429) retryAfter = this.pauseFor(reply.headers);
@@ -275,7 +294,13 @@ export class BookingHttp {
         data: parseEnvelopeData(call.route, reply.status, reply.text),
       };
     }
-    throw this.statusError(call.route, reply.status, reply.text, retryAfter);
+    throw this.statusError(
+      call.route,
+      reply.status,
+      reply.text,
+      retryAfter,
+      callerToken
+    );
   }
 
   /** One fetch through the gate; failures before a status become UpstreamErrors. */
@@ -283,7 +308,7 @@ export class BookingHttp {
     route: string,
     url: URL,
     init: RequestInit,
-    caller: UpstreamCallOptions
+    caller: GateCallOptions
   ): Promise<RawReply> {
     const callSignal = caller.signal;
     try {
@@ -345,12 +370,14 @@ export class BookingHttp {
     route: string,
     status: number,
     text: string,
-    retryAfter: number | null
+    retryAfter: number | null,
+    callerToken: string | undefined
   ): UpstreamError {
     const meta = readErrorMeta(text);
     const kind = kindOfStatus(status);
     return new UpstreamError(kind, route, {
       status,
+      credential: callerToken === undefined ? 'server' : 'caller',
       codes: kind === 'rejected' ? meta.codes : [],
       retryAfterSeconds: kind === 'rate_limited' ? retryAfter : null,
       // Scrubbed before anything else touches it (WR-04): later sanitising
@@ -358,7 +385,12 @@ export class BookingHttp {
       upstreamMessage:
         meta.message === null
           ? null
-          : scrubSecrets(meta.message, this.tokenSource.known()),
+          : scrubSecrets(
+              meta.message,
+              callerToken === undefined
+                ? this.tokenSource.known()
+                : [callerToken, ...this.tokenSource.known()]
+            ),
     });
   }
 }

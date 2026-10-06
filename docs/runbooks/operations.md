@@ -1,8 +1,10 @@
 # ME operational contract
 
-ME is anonymous/stateless; Pro is authenticated/stateful. All six ME tools remain
-user reads; `book_check` hands confirmation to the booking widget. No OAuth,
-booking write, catalog search or customer VM autoheal is introduced here.
+ME is stateless and admits callers by their own Altegio partner token (ADR 0004;
+`CALLER_AUTH=optional` while the proxy's `/me` lane is still anonymous); Pro is
+authenticated/stateful. All six ME tools remain user reads; `book_check` hands
+confirmation to the booking widget. No OAuth, booking write, catalog search or
+customer VM autoheal is introduced here.
 
 ## Signals and publication gate
 
@@ -56,7 +58,7 @@ work. Production composes `PRODUCTION_GATE_OPTIONS`; development gate defaults
 remain 250 ms/180 for existing test scenarios. Live tests are capped at 1.35
 upstream calls/second and require prior coordination with marketplace maintainers.
 
-Anonymous admission remains per process: global inflight 60, per-IP inflight 6,
+Admission limits remain per process, ahead of the partner-token check: global inflight 60, per-IP inflight 6,
 IP burst 40/refill 3/sec, shared AI egress pool burst 200/refill 20/sec, tracked
 keys 10,000. Only a verified signed client address is trusted; IPv6 buckets use
 /64; neither raw addresses nor tool arguments/results are logged. These are

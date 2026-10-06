@@ -26,8 +26,9 @@ import {
   type RuleId,
   type Violation,
 } from '../rules.js';
+import { SCOPE_READ } from '../../tools/scopes.js';
 
-const SINGLE: ToolMeta = { kind: 'single', upstream: [] };
+const SINGLE: ToolMeta = { kind: 'single', upstream: [], scopes: [SCOPE_READ] };
 
 function rules(violations: readonly Violation[]): RuleId[] {
   return violations.map((violation) => violation.rule);
@@ -67,6 +68,7 @@ describe('deliberately bad fixtures', () => {
       'R10',
       'R11',
       'R13',
+      'R14',
     ] as const) {
       expect(covered.has(rule)).toBe(true);
     }
@@ -405,6 +407,7 @@ describe('compliant paginated tool through an SDK client', () => {
       toolDeps: undefined,
       secrets: [],
       record: createCallRecord(),
+      caller: { kind: 'anonymous', scopes: new Set([SCOPE_READ]) },
     });
     const client = new Client({ name: 'jest-client', version: '0.0.0' });
     const [clientTransport, serverTransport] =
