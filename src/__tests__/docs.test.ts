@@ -190,10 +190,19 @@ describe('docs/loadtest/results.md (OPS-07)', () => {
     }
   });
 
-  it('keeps the live run marked as not run until plan 03-16 runs it', () => {
-    expect(loadtestSection('## Tier 3: live, bounded')).toMatch(
-      /^Status: (not run yet \(plan 03-16\)|run \d{4}-\d{2}-\d{2})/m
-    );
+  it('keeps the live run status honest: not run, run on a date, or deferred on a date', () => {
+    const text = loadtestSection('## Tier 3: live, bounded');
+    const status =
+      /^Status: (not run yet \(plan 03-16\)|run \d{4}-\d{2}-\d{2}|deferred \d{4}-\d{2}-\d{2})/m.exec(
+        text
+      );
+    expect(status).not.toBeNull();
+    if (status?.[1]?.startsWith('deferred')) {
+      // A deferral must carry its reason (the platform contract in
+      // operations.md, the dedicated partner token B3) and its trigger.
+      expect(text).toContain('B3');
+      expect(text).toContain('operations.md');
+    }
   });
 
   it('records the dedicated partner type as a known deviation (D-03, B3)', () => {

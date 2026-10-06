@@ -143,15 +143,28 @@ Deadline scenario (4 checks, all passed): the mock stalls `book_times` for 30 s.
 
 ## Tier 3: live, bounded
 
-Status: not run yet (plan 03-16)
+Status: deferred 2026-10-06 (owner decision)
 
-Built here, run only at plan 03-16 after the owner announces it:
+The live run is not needed to close this phase and is deferred. Reasons:
+
+- The platform contract in `docs/runbooks/operations.md` states that no burst or load test is
+  needed to verify the allocation, and tiers 1 and 2 already prove the gate arithmetic against the
+  mock upstream.
+- A live run spends the budget of the partner token of account 2630, which the marketplace
+  confirmations share.
+- ROADMAP criterion 4 needs the dedicated partner token from B3, so a run on the standard limits
+  would not close it anyway.
+
+Trigger: run it when B3 delivers the dedicated partner token, or before directory submission,
+whichever comes first, after announcing it to the platform owner in #dev-ai-coding.
+
+Built and ready for that run:
 `npm run loadtest -- --scenario=live --target=<service base URL> --confirm-announced`. It reads
 through the deployed service with the five read-only tools that make one upstream call each
-(never `book_check`), at location 726120, for at most 180 s and at most 2.7 upstream calls a
-second (90% of the gate), unsigned because the platform proxy signs. It refuses to start without
-`--confirm-announced`, and stops at the first busy or not-accepted tool error, or the first HTTP
-401, 429 or 5xx.
+(never `book_check`), at location 726120. The default is 1 upstream call a second for 120 s; the
+script caps the run at 1.35 upstream calls a second (90% of the production gate's 1.5) and 180 s.
+It is unsigned because the platform proxy signs. It refuses to start without `--confirm-announced`,
+and stops at the first busy or not-accepted tool error, or the first HTTP 401, 429 or 5xx.
 
 ## Known deviation
 
