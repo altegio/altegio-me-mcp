@@ -25,6 +25,17 @@ export const LIVE_MAX_RATE_PER_SEC = 1.35;
  * script needs no proxy key (WR-59).
  */
 export const LIVE_PUBLIC_TARGET = 'https://mcp.alteg.io/me';
+/**
+ * Slowest live rate. Below it the wait between two requests would approach
+ * the whole run, and a run that sends one request is no run at all.
+ */
+export const LIVE_MIN_RATE_PER_SEC = 0.1;
+/**
+ * Longest a live request may take before it is abandoned and the run ends as
+ * a network error: above the server's 25 s tool deadline, below the proxy's
+ * 120 s response-header bound.
+ */
+export const LIVE_REQUEST_TIMEOUT_MS = 30_000;
 export const LIVE_DEFAULT_DURATION_SEC = 120;
 export const LIVE_DEFAULT_RATE_PER_SEC = 1;
 /** The owner's location that the live run reads (read-only routes, no booking). */
@@ -111,7 +122,7 @@ export const USAGE = [
   'Usage: npm run loadtest -- --scenario=sim|peak|edge|deadline|live [flags]',
   '  sim: tier 1 on this machine only, no container and no network; optional --out',
   '  peak, edge, deadline: --start-container=IMAGE (local container, mock upstream); optional --target=http://127.0.0.1:PORT, --duration-sec, --out',
-  `  live: --target=URL --confirm-announced (the URL is posted to as given; the public route is ${LIVE_PUBLIC_TARGET}); --location (default ${DEFAULT_LIVE_LOCATION_ID}), --duration-sec (default ${LIVE_DEFAULT_DURATION_SEC}, at most ${LIVE_MAX_DURATION_SEC}), --rate (default ${LIVE_DEFAULT_RATE_PER_SEC}, at most ${LIVE_MAX_RATE_PER_SEC}), --out`,
+  `  live: --target=URL --confirm-announced (the URL is posted to as given; the public route is ${LIVE_PUBLIC_TARGET}); --location (default ${DEFAULT_LIVE_LOCATION_ID}), --duration-sec (default ${LIVE_DEFAULT_DURATION_SEC}, at most ${LIVE_MAX_DURATION_SEC}), --rate (default ${LIVE_DEFAULT_RATE_PER_SEC}, at least ${LIVE_MIN_RATE_PER_SEC}, at most ${LIVE_MAX_RATE_PER_SEC}), --out`,
 ].join('\n');
 
 const VALUE_FLAGS = [
@@ -255,6 +266,11 @@ export function parseArgs(argv: readonly string[]): LoadtestArgs {
     let rate = values.has('rate')
       ? positiveNumber(values.get('rate')!, 'rate')
       : LIVE_DEFAULT_RATE_PER_SEC;
+    if (rate < LIVE_MIN_RATE_PER_SEC) {
+      throw new UsageError(
+        `--rate must be at least ${LIVE_MIN_RATE_PER_SEC} calls a second`
+      );
+    }
     if (rate > LIVE_MAX_RATE_PER_SEC) {
       notes.push(`--rate capped from ${rate} to ${LIVE_MAX_RATE_PER_SEC}`);
       rate = LIVE_MAX_RATE_PER_SEC;

@@ -1,6 +1,8 @@
 import { describe, expect, it } from '@jest/globals';
 import {
   LIVE_MAX_RATE_PER_SEC,
+  LIVE_MIN_RATE_PER_SEC,
+  LIVE_REQUEST_TIMEOUT_MS,
   UsageError,
   parseArgs,
   type LoadtestArgs,
@@ -391,7 +393,8 @@ describe('runLive hard bounds (WR-58, T-03-54, T-03-55)', () => {
 
   it('refuses a --rate below the minimum of 0.1 and names it', () => {
     const message = refusedMessage(['--rate=0.05']);
-    expect(message).toContain('0.1');
+    expect(LIVE_MIN_RATE_PER_SEC).toBe(0.1);
+    expect(message).toContain(String(LIVE_MIN_RATE_PER_SEC));
     expect(message).toContain('--rate');
     expect(() => liveArgs(['--rate=0.1'])).not.toThrow();
   });
@@ -401,7 +404,10 @@ describe('runLive hard bounds (WR-58, T-03-54, T-03-55)', () => {
     await runLive(liveArgs(['--duration-sec=10']), service.deps);
     expect(service.sent.length).toBeGreaterThan(3);
     expect(service.signalRequests).toHaveLength(service.sent.length);
-    for (const ms of service.signalRequests) expect(ms).toBe(30_000);
+    expect(LIVE_REQUEST_TIMEOUT_MS).toBe(30_000);
+    for (const ms of service.signalRequests) {
+      expect(ms).toBe(LIVE_REQUEST_TIMEOUT_MS);
+    }
     expect(service.fetchSignals).toHaveLength(service.sent.length);
     service.fetchSignals.forEach((signal, index) => {
       expect(signal).toBe(service.handedOut[index]);

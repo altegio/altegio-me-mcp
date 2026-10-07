@@ -1,6 +1,7 @@
 import {
   LIVE_MAX_DURATION_SEC,
   LIVE_MAX_RATE_PER_SEC,
+  LIVE_REQUEST_TIMEOUT_MS,
   UsageError,
   checkLiveTarget,
   type LoadtestArgs,
@@ -29,6 +30,8 @@ export interface LiveDeps {
   fetch: typeof fetch;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
+  /** A signal that aborts after `ms`; AbortSignal.timeout by default. */
+  requestSignal?: (ms: number) => AbortSignal;
 }
 
 export interface LiveResult {
@@ -63,7 +66,7 @@ const THROTTLE_TEXT = /busy|not accept/i;
 
 interface Discovered {
   serviceId: number | null;
-  teamMemberId: number;
+  teamMemberId: number | null;
   date: string | null;
 }
 
@@ -86,6 +89,20 @@ function parseJson(text: string): unknown {
   } catch {
     return null;
   }
+}
+
+/**
+ * The name of a thrown value, for the record. Only the name is kept: a message
+ * can echo the URL. Anything that is not a short plain identifier is "Error".
+ */
+function errorName(error: unknown): string {
+  const name =
+    typeof error === 'object' && error !== null
+      ? (error as { name?: unknown }).name
+      : undefined;
+  return typeof name === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(name)
+    ? name
+    : 'Error';
 }
 
 function toolArguments(
@@ -159,7 +176,13 @@ export async function runLive(
 
   const perTool: Record<string, number> = {};
   const httpStatuses: Record<string, number> = {};
-  const found: Discovered = { serviceId: null, teamMemberId: 0, date: null };
+  const found: Discovered = {
+    serviceId: null,
+    teamMemberId: null,
+    date: null,
+  };
+  const requestSignal =
+    deps.requestSignal ?? ((ms: number) => AbortSignal.timeout(ms));
   let requests = 0;
   let toolErrors = 0;
   let otherToolErrors = 0;
@@ -177,29 +200,47 @@ export async function runLive(
       stoppedBy = 'no service found at the location to ask about dates';
       break;
     }
+    if (
+      (tool === 'business_list_dates' || tool === 'business_list_time_slots') &&
+      found.teamMemberId === null
+    ) {
+      stoppedBy = 'no team member found at the location to ask about dates';
+      break;
+    }
     requests += 1;
     perTool[tool] = (perTool[tool] ?? 0) + 1;
 
-    const response = await deps.fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'application/json, text/event-stream',
-        'user-agent': 'altegio-me-mcp-loadtest/1 (announced live run)',
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: requests,
-        method: 'tools/call',
-        params: {
-          name: tool,
-          arguments: toolArguments(tool, args.location, found, deps.now()),
+    let response: Response;
+    let text: string;
+    try {
+      response = await deps.fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          'user-agent': 'altegio-me-mcp-loadtest/1 (announced live run)',
         },
-      }),
-    });
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: requests,
+          method: 'tools/call',
+          params: {
+            name: tool,
+            arguments: toolArguments(tool, args.location, found, deps.now()),
+          },
+        }),
+        signal: requestSignal(LIVE_REQUEST_TIMEOUT_MS),
+      });
+      const statusKey = String(response.status);
+      httpStatuses[statusKey] = (httpStatuses[statusKey] ?? 0) + 1;
+      text = await response.text();
+    } catch (error) {
+      // A timeout or a dropped connection ends the run with its counts: the
+      // run already spent budget and must leave a record (T-03-55).
+      stoppedBy = `network error: ${errorName(error)}`;
+      break;
+    }
     const statusKey = String(response.status);
-    httpStatuses[statusKey] = (httpStatuses[statusKey] ?? 0) + 1;
-    const text = await response.text();
 
     if (response.status !== 200) {
       stoppedBy = `HTTP ${statusKey}`;
@@ -247,8 +288,13 @@ export async function runLive(
       }
     }
 
-    nextAt += intervalMs;
-    const wait = nextAt - deps.now();
+    // No catch-up: after a slow reply the next start is at the reply time, and
+    // the one after it a full interval later, never back to back (WR-58).
+    nextAt = Math.max(nextAt + intervalMs, deps.now());
+    const wait = Math.min(
+      nextAt - deps.now(),
+      startedAt + durationMs - deps.now()
+    );
     if (wait > 0) await deps.sleep(wait);
   }
 
