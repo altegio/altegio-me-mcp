@@ -36,6 +36,8 @@ L1 answer (owner, 2026-10-03): listing every business that has online booking en
 
 L3 answer (owner, 2026-10-03): medical and health businesses are excluded at launch, classified by their Altegio business category. The category list will live in config (Phase 4). Known-business tools (Phase 2): `business_get`, `business_list_services`, `business_list_team_members`, `business_list_dates`, `business_list_time_slots` and `book_check` accept any location id and do not filter by business type; Phase 4 (CAT-05) applies the same excluded-type list to these by-id tools, not only to search, before launch.
 
+L3 addendum (owner decision, 2026-10-07): the health-adjacent types outside business group 2 are settled for launch. Listed: 35 cosmetology (420 bookable), 25 spa (231), 29 massage salon (132); they are beauty and wellness, and their medical counterparts (103 medical cosmetology, 91 wellness massage) are already excluded with group 2. Excluded: 17 optics (10), 28 salt caves (2), and business group 9 "unknown" (454, unclassified), the last to be revisited after a classification pass. The exclusion list applies to search and to the by-id tools alike (CAT-05, 02-02).
+
 ## Design and marketing
 
 | # | Item | Needed for | Status |
