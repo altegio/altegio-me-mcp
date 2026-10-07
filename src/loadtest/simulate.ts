@@ -152,7 +152,10 @@ export interface CapacityResult {
  * The largest multiple of the expected peak, in steps of 1 / stepsPerUnit, at
  * which more than 80% of tool calls are answered under the production gate. The
  * sweep climbs one step at a time and stops at the first step that does not
- * meet the threshold, so `multiplier` is the last step that did.
+ * meet the threshold, so `multiplier` is the last step that did. Quarter steps
+ * up to 8x: the MVP peak sits at about a fifth of the gate ceiling, so the
+ * sweep has to reach past 5x to find the edge, and 32 ten-minute simulations
+ * stay inside a unit test's budget.
  */
 export async function capacityMultiplier(
   opts: {
@@ -162,8 +165,8 @@ export async function capacityMultiplier(
     seed?: number;
   } = {}
 ): Promise<CapacityResult> {
-  const stepsPerUnit = opts.stepsPerUnit ?? 20;
-  const maxMultiplier = opts.maxMultiplier ?? 2;
+  const stepsPerUnit = opts.stepsPerUnit ?? 4;
+  const maxMultiplier = opts.maxMultiplier ?? 8;
   const minutes = opts.minutes ?? 10;
   const seed = opts.seed ?? 1;
   let multiplier = 0;

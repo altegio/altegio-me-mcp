@@ -1,15 +1,30 @@
 import { PRODUCTION_GATE_OPTIONS } from '../booking/gate.js';
 
-// The expected peak, derived from the README estimate (D-03, 03-RESEARCH
-// Pattern 9): about 1,000,000 tool calls a month. Every constant names its
-// source or its assumption, so a changed estimate is a one-line edit here and
-// the tier 1 simulation and the tier 2 run follow it.
+// The expected peak, derived from the owner's MVP assumption of 2026-10-07: at
+// most 10,000 bookings a month for the first weeks to months after launch, and
+// capacity revisited only if growth exceeds it. Every constant names its source
+// or its assumption, so a changed estimate is a one-line edit here and the
+// tier 1 simulation and the tier 2 run follow it. The earlier profile (the
+// README's 1,000,000 tool calls a month, D-03) is about ten times this one and
+// is kept in docs/loadtest/results.md as the measured headroom.
 
 /** 30 days of 86,400 seconds. */
 export const SECONDS_PER_MONTH = 2_592_000;
 
-/** README "Cost estimate": the order of magnitude the service is sized for. */
-export const PEAK_MONTHLY_TOOL_CALLS = 1_000_000;
+/** Owner assumption (2026-10-07): the most bookings a month the MVP sees. */
+export const MVP_MONTHLY_BOOKINGS = 10_000;
+
+/**
+ * Tool calls behind one booking. The 2026-10-06 connector run reached the
+ * widget link in 6 tool calls (docs/research/claude-connector-run.md); 10
+ * leaves room for browsing that ends without a booking. An assumption, not a
+ * measurement; revisit with real call logs.
+ */
+export const TOOL_CALLS_PER_BOOKING = 10;
+
+/** About 100,000 tool calls a month: the README "Expected" cost column. */
+export const PEAK_MONTHLY_TOOL_CALLS =
+  MVP_MONTHLY_BOOKINGS * TOOL_CALLS_PER_BOOKING;
 
 /**
  * Assumption A2: the busiest hour carries 5 times the average rate. Nothing
@@ -17,11 +32,11 @@ export const PEAK_MONTHLY_TOOL_CALLS = 1_000_000;
  */
 export const PEAK_HOUR_FACTOR = 5;
 
-/** About 0.386 tool calls per second on average. */
+/** About 0.039 tool calls per second on average. */
 export const AVERAGE_TOOL_CALLS_PER_SEC =
   PEAK_MONTHLY_TOOL_CALLS / SECONDS_PER_MONTH;
 
-/** About 1.93 tool calls per second in a peak hour. */
+/** About 0.19 tool calls per second in a peak hour. */
 export const PEAK_TOOL_CALLS_PER_SEC =
   AVERAGE_TOOL_CALLS_PER_SEC * PEAK_HOUR_FACTOR;
 
@@ -71,7 +86,7 @@ export const UPSTREAM_CALLS_PER_TOOL_CALL = (
   0
 );
 
-/** About 2.91 upstream calls per second at the peak. */
+/** About 0.29 upstream calls per second at the peak. */
 export const UPSTREAM_PEAK_CALLS_PER_SEC =
   PEAK_TOOL_CALLS_PER_SEC * UPSTREAM_CALLS_PER_TOOL_CALL;
 
@@ -88,7 +103,7 @@ export const GATE_CEILING_CALLS_PER_SEC =
 export const ALLOCATION_PER_SECOND =
   1000 / PRODUCTION_GATE_OPTIONS.minSpacingMs;
 
-/** The expected peak as a multiple of the ceiling: about 1.94. */
+/** The expected peak as a multiple of the ceiling: about 0.19. */
 export const PEAK_AGAINST_CEILING =
   UPSTREAM_PEAK_CALLS_PER_SEC / GATE_CEILING_CALLS_PER_SEC;
 

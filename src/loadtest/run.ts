@@ -750,7 +750,7 @@ async function scenarioSim(): Promise<{ checks: Check[]; extra: unknown }> {
       : `${answeredPercentText(capacity.at.ok, capacity.at.toolCalls)} answered`;
   const shareAbove =
     capacity.above === null
-      ? 'no step up to 2x fell short'
+      ? `no step up to ${capacity.multiplier}x fell short`
       : `${capacity.above.multiplier}x answered ${answeredPercentText(capacity.above.ok, capacity.above.toolCalls)}`;
   say(
     `sim capacity: ${capacity.multiplier}x the expected peak (about ${monthly} tool calls a month at the assumed ${PEAK_HOUR_FACTOR}x peak hour) ` +
