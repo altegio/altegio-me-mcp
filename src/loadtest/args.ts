@@ -7,7 +7,7 @@
 // it refuses to start without --confirm-announced, caps its duration and rate,
 // and no other scenario may name a remote target or carry the flag (T-03-38).
 
-export const SCENARIOS = ['peak', 'edge', 'deadline', 'live'] as const;
+export const SCENARIOS = ['peak', 'edge', 'deadline', 'live', 'sim'] as const;
 export type Scenario = (typeof SCENARIOS)[number];
 
 /** Longest live run, in seconds (plan 03-16 runs a few minutes at most). */
@@ -20,9 +20,17 @@ export const LIVE_DEFAULT_RATE_PER_SEC = 1;
 export const DEFAULT_LIVE_LOCATION_ID = 726120;
 export const PEAK_DEFAULT_DURATION_SEC = 180;
 
-/** RED stub: the behaviour lands with the GREEN commit. */
-export function localTarget(_target: string | null, _port: number): string {
-  return '';
+/**
+ * The origin the health probe and the requests use for a local container
+ * published on loopback port `port`. A target that names no port (IN-55:
+ * `http://127.0.0.1`) takes the published port instead of defaulting to port
+ * 80; a target that names its port keeps it.
+ */
+export function localTarget(target: string | null, port: number): string {
+  if (target === null) return `http://127.0.0.1:${port}`;
+  const url = new URL(target);
+  if (url.port === '') url.port = String(port);
+  return url.origin;
 }
 
 export class UsageError extends Error {
@@ -50,7 +58,8 @@ export interface LoadtestArgs {
 }
 
 export const USAGE = [
-  'Usage: npm run loadtest -- --scenario=peak|edge|deadline|live [flags]',
+  'Usage: npm run loadtest -- --scenario=sim|peak|edge|deadline|live [flags]',
+  '  sim: tier 1 on this machine only, no container and no network; optional --out',
   '  peak, edge, deadline: --start-container=IMAGE (local container, mock upstream); optional --target=http://127.0.0.1:PORT, --duration-sec, --out',
   `  live: --target=BASE_URL --confirm-announced; --location (default ${DEFAULT_LIVE_LOCATION_ID}), --duration-sec (default ${LIVE_DEFAULT_DURATION_SEC}, at most ${LIVE_MAX_DURATION_SEC}), --rate (default ${LIVE_DEFAULT_RATE_PER_SEC}, at most ${LIVE_MAX_RATE_PER_SEC}), --out`,
 ].join('\n');
@@ -146,6 +155,33 @@ export function parseArgs(argv: readonly string[]): LoadtestArgs {
   const scenario = scenarioText as Scenario;
   const notes: string[] = [];
   const out = values.get('out') ?? null;
+
+  if (scenario === 'sim') {
+    // Tier 1 as a report: it needs nothing but a seed and this machine.
+    for (const name of values.keys()) {
+      if (name !== 'scenario' && name !== 'out') {
+        throw new UsageError(
+          `--${name} is not for the sim scenario: sim runs on this machine only, with no container and no network`
+        );
+      }
+    }
+    if (confirmAnnounced) {
+      throw new UsageError(
+        '--confirm-announced is not for the sim scenario: sim runs on this machine only, with no container and no network'
+      );
+    }
+    return {
+      scenario,
+      target: null,
+      startContainer: null,
+      durationSec: PEAK_DEFAULT_DURATION_SEC,
+      out,
+      location: DEFAULT_LIVE_LOCATION_ID,
+      rate: LIVE_DEFAULT_RATE_PER_SEC,
+      confirmAnnounced: false,
+      notes,
+    };
+  }
 
   const targetText = values.get('target');
   const target =
