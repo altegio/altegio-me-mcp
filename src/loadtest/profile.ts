@@ -1,4 +1,4 @@
-import { DEFAULT_GATE_OPTIONS } from '../booking/gate.js';
+import { PRODUCTION_GATE_OPTIONS } from '../booking/gate.js';
 
 // The expected peak, derived from the README estimate (D-03, 03-RESEARCH
 // Pattern 9): about 1,000,000 tool calls a month. Every constant names its
@@ -71,25 +71,52 @@ export const UPSTREAM_CALLS_PER_TOOL_CALL = (
   0
 );
 
-/** About 2.9 upstream calls per second at the peak. */
+/** About 2.91 upstream calls per second at the peak. */
 export const UPSTREAM_PEAK_CALLS_PER_SEC =
   PEAK_TOOL_CALLS_PER_SEC * UPSTREAM_CALLS_PER_TOOL_CALL;
 
-/** The gate's sustained ceiling (180 a minute): 3 upstream calls per second. */
-export const GATE_CEILING_CALLS_PER_SEC = DEFAULT_GATE_OPTIONS.perMinute / 60;
+/**
+ * The gate's sustained ceiling: PRODUCTION_GATE_OPTIONS.perMinute a minute, the
+ * allocation of one process (operations.md, "Admission and shared partner
+ * allocation"), which is 90 a minute and 1.5 upstream calls per second. The
+ * development defaults (250 ms, 180 a minute) are not what production runs.
+ */
+export const GATE_CEILING_CALLS_PER_SEC =
+  PRODUCTION_GATE_OPTIONS.perMinute / 60;
 
-/** RED scaffolding: not the production allocation yet. */
-export const ALLOCATION_PER_SECOND = 0;
+/** Starts a second the production spacing allows: 500 ms spacing is 2. */
+export const ALLOCATION_PER_SECOND =
+  1000 / PRODUCTION_GATE_OPTIONS.minSpacingMs;
 
-/** The launch criterion, per mille (RED scaffolding). */
+/** The expected peak as a multiple of the ceiling: about 1.94. */
+export const PEAK_AGAINST_CEILING =
+  UPSTREAM_PEAK_CALLS_PER_SEC / GATE_CEILING_CALLS_PER_SEC;
+
+/**
+ * The launch criterion, per mille: more than 80% of tool calls are answered at
+ * the expected peak. It is the bar the 03-12 peak test already asserted
+ * (ok / toolCalls greater than 0.8), kept and compared in integers. Changing it
+ * needs an owner decision.
+ */
 export const MIN_ANSWERED_PER_MILLE_AT_PEAK = 800;
 
-/** Not implemented yet (RED scaffolding). */
-export function meetsAnsweredShare(_ok: number, _total: number): boolean {
-  throw new Error('meetsAnsweredShare is not implemented');
+/**
+ * True when MORE than 80% of `total` calls were answered, compared in integers
+ * (ok x 1000 > total x 800): 80 of 100 does not meet it, 81 of 100 does, and no
+ * calls at all do not.
+ */
+export function meetsAnsweredShare(ok: number, total: number): boolean {
+  return total > 0 && ok * 1000 > total * MIN_ANSWERED_PER_MILLE_AT_PEAK;
 }
 
-/** Not implemented yet (RED scaffolding). */
-export function answeredPercentText(_ok: number, _total: number): string {
-  throw new Error('answeredPercentText is not implemented');
+/**
+ * The answered share as text, floored (never rounded up) to one decimal from
+ * the exact integer per-mille: 1102 of 1151 is "95.7%", 799 of 1000 is
+ * "79.9%", and no calls is "n/a".
+ */
+export function answeredPercentText(ok: number, total: number): string {
+  if (total <= 0) return 'n/a';
+  const perMille = (ok * 1000 - ((ok * 1000) % total)) / total;
+  const whole = Math.floor(perMille / 10);
+  return `${whole}.${perMille % 10}%`;
 }

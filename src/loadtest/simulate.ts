@@ -1,5 +1,5 @@
 import { BookingClient } from '../booking/client.js';
-import { RequestGate } from '../booking/gate.js';
+import { PRODUCTION_GATE_OPTIONS, RequestGate } from '../booking/gate.js';
 import {
   classifyClient,
   createSharedEgressList,
@@ -13,7 +13,7 @@ import {
   createUpstreamCore,
   type UpstreamStats,
 } from './mock-upstream.js';
-import { PEAK_TOOL_CALLS_PER_SEC } from './profile.js';
+import { PEAK_TOOL_CALLS_PER_SEC, meetsAnsweredShare } from './profile.js';
 import { createSimClock } from './sim-clock.js';
 import {
   createRng,
@@ -58,7 +58,13 @@ export async function simulatePeak(opts: {
 }): Promise<SimulationResult> {
   const clock = createSimClock(START_MS);
   const core = createUpstreamCore(clock.now);
-  const gate = new RequestGate({ now: clock.now, sleep: clock.sleep });
+  // The gate production runs (src/server.ts composes the same options). No gate
+  // option is accepted here, so tier 1 cannot be run on any other gate (WR-57).
+  const gate = new RequestGate({
+    ...PRODUCTION_GATE_OPTIONS,
+    now: clock.now,
+    sleep: clock.sleep,
+  });
   const booking = new BookingClient({
     base: 'http://sim.invalid/api/v1',
     token: 'sim-canary-token-0001',
@@ -128,23 +134,51 @@ export async function simulatePeak(opts: {
     busy,
     unexpected,
     upstream: core.stats(),
-    startTimes: [],
+    startTimes: core.startTimes(),
   };
 }
 
-/** Not implemented yet (RED scaffolding). */
-export function capacityMultiplier(
-  _opts: {
+export interface CapacityResult {
+  /** The largest multiple of the expected peak that met the launch threshold. */
+  multiplier: number;
+  stepsPerUnit: number;
+  /** The run at `multiplier`; null when even the first step did not meet it. */
+  at: SimulationResult | null;
+  /** The first run that did not meet it; null when none failed up to the maximum. */
+  above: SimulationResult | null;
+}
+
+/**
+ * The largest multiple of the expected peak, in steps of 1 / stepsPerUnit, at
+ * which more than 80% of tool calls are answered under the production gate. The
+ * sweep climbs one step at a time and stops at the first step that does not
+ * meet the threshold, so `multiplier` is the last step that did.
+ */
+export async function capacityMultiplier(
+  opts: {
     stepsPerUnit?: number;
     maxMultiplier?: number;
     minutes?: number;
     seed?: number;
   } = {}
-): Promise<{
-  multiplier: number;
-  stepsPerUnit: number;
-  at: SimulationResult | null;
-  above: SimulationResult | null;
-}> {
-  return Promise.reject(new Error('capacityMultiplier is not implemented'));
+): Promise<CapacityResult> {
+  const stepsPerUnit = opts.stepsPerUnit ?? 20;
+  const maxMultiplier = opts.maxMultiplier ?? 2;
+  const minutes = opts.minutes ?? 10;
+  const seed = opts.seed ?? 1;
+  let multiplier = 0;
+  let at: SimulationResult | null = null;
+  for (let step = 1; step <= maxMultiplier * stepsPerUnit; step += 1) {
+    const result = await simulatePeak({
+      multiplier: step / stepsPerUnit,
+      minutes,
+      seed,
+    });
+    if (!meetsAnsweredShare(result.ok, result.toolCalls)) {
+      return { multiplier, stepsPerUnit, at, above: result };
+    }
+    multiplier = step / stepsPerUnit;
+    at = result;
+  }
+  return { multiplier, stepsPerUnit, at, above: null };
 }

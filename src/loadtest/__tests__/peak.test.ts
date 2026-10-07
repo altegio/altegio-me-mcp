@@ -179,7 +179,12 @@ describe('tier 1 simulation: the gate against the measuring upstream (OPS-07)', 
     async () => {
       const result = await simulatePeak({ multiplier: 1, minutes: MINUTES });
       expect(result.toolCalls).toBeGreaterThan(1000);
-      expect(result.upstream.starts).toBeGreaterThan(1000);
+      // The expected peak offers about 1,750 upstream calls in 10 minutes and
+      // the production allocation admits about 900, so a healthy run keeps the
+      // gate saturated: at least 90% of 90 a minute.
+      expect(result.upstream.starts).toBeGreaterThan(
+        PRODUCTION_GATE_OPTIONS.perMinute * MINUTES * 0.9
+      );
       expect(result.upstream.max1s).toBeLessThanOrEqual(5);
       expect(result.upstream.max60s).toBeLessThanOrEqual(200);
       expect(result.upstream.served429).toBe(0);

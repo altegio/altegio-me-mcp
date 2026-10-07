@@ -14,6 +14,12 @@ import {
 // 200 a minute), so a gate that lets too much through shows up twice: in the
 // maxima and in served429.
 //
+// The mock models the PARTNER limits (5 a second, 200 a minute, closed
+// intervals, the conservative reading of the real upstream); the production
+// ALLOCATION (500 ms spacing, 2 a second and 90 a minute, half-open windows) is
+// our own contract and is asserted from the recorded start times, with
+// smallestGap and slidingMaxHalfOpen, not from the gate's own accounting.
+//
 // The same core runs behind an HTTP server (tier 2, the real container) and
 // behind an in-process fetch on the simulated clock (tier 1, CI).
 
@@ -60,17 +66,39 @@ export function slidingMax(times: readonly number[], windowMs: number): number {
   return best;
 }
 
-/** Not implemented yet (RED scaffolding). */
+/**
+ * The most times that fall inside any half-open interval [t, t + windowMs): a
+ * start at 0 and one at 1,000 do NOT share a 1,000 ms window. This is how the
+ * production allocation is counted: 500 ms spacing puts 2 starts in a second,
+ * and the gate's 91st start in a minute comes no earlier than 60,000 ms after
+ * the first. Input order does not matter.
+ */
 export function slidingMaxHalfOpen(
-  _times: readonly number[],
-  _windowMs: number
+  times: readonly number[],
+  windowMs: number
 ): number {
-  throw new Error('slidingMaxHalfOpen is not implemented');
+  const sorted = [...times].sort((a, b) => a - b);
+  let best = 0;
+  let from = 0;
+  for (let to = 0; to < sorted.length; to += 1) {
+    while (sorted[to]! - sorted[from]! >= windowMs) from += 1;
+    best = Math.max(best, to - from + 1);
+  }
+  return best;
 }
 
-/** Not implemented yet (RED scaffolding). */
-export function smallestGap(_times: readonly number[]): number | null {
-  throw new Error('smallestGap is not implemented');
+/**
+ * The smallest difference between two consecutive starts, in milliseconds, or
+ * null for fewer than two starts. Input order does not matter.
+ */
+export function smallestGap(times: readonly number[]): number | null {
+  if (times.length < 2) return null;
+  const sorted = [...times].sort((a, b) => a - b);
+  let smallest = Number.POSITIVE_INFINITY;
+  for (let index = 1; index < sorted.length; index += 1) {
+    smallest = Math.min(smallest, sorted[index]! - sorted[index - 1]!);
+  }
+  return smallest;
 }
 
 /** How many of the ascending `times` lie within `windowMs` before `at`, `at` included. */
@@ -157,6 +185,7 @@ export interface UpstreamCore {
   start(method: string, path: string): UpstreamStart;
   recordAborted(): void;
   stats(): UpstreamStats;
+  /** A copy of every start time received, refused ones included. */
   startTimes(): number[];
 }
 
@@ -211,9 +240,7 @@ export function createUpstreamCore(now: () => number): UpstreamCore {
     recordAborted() {
       aborted += 1;
     },
-    startTimes() {
-      throw new Error('startTimes is not implemented');
-    },
+    startTimes: () => [...everyStart],
     stats: () => ({
       max1s: slidingMax(everyStart, SECOND_MS),
       max60s: slidingMax(everyStart, MINUTE_MS),
@@ -276,6 +303,7 @@ export interface MockUpstream {
   url: string;
   port: number;
   stats(): UpstreamStats;
+  /** A copy of every start time received, refused ones included. */
   startTimes(): number[];
   close(): Promise<void>;
 }
