@@ -118,8 +118,37 @@ describe('runLive refusal', () => {
   });
 });
 
+describe('runLive target refusal (WR-59)', () => {
+  it.each([
+    ['a run.app host', 'https://svc-abc.a.run.app/mcp'],
+    ['a query', 'https://svc.example/me?x=1'],
+    ['a fragment', 'https://svc.example/me#a'],
+    ['plain http on a remote host', 'http://svc.example/me'],
+  ])('sends nothing and throws for %s', async (_label, target) => {
+    const service = fakeService(() => ({}));
+    await expect(
+      runLive({ ...liveArgs(), target }, service.deps)
+    ).rejects.toThrow(UsageError);
+    expect(service.sent).toHaveLength(0);
+  });
+
+  it.each(['http://127.0.0.1:8080/mcp', 'http://localhost:8080/mcp'])(
+    'allows plain http for the loopback target %s',
+    async (target) => {
+      const service = fakeService(() => ({}));
+      const outcome = await runLive(
+        { ...liveArgs(['--duration-sec=3']), target },
+        service.deps
+      );
+      expect(outcome.status).toBe('PASS');
+      expect(service.sent.length).toBeGreaterThan(0);
+      for (const entry of service.sent) expect(entry.url).toBe(target);
+    }
+  );
+});
+
 describe('runLive behaviour', () => {
-  it('reads only the five read-only tools, never book_check, through <target>/mcp, unsigned', async () => {
+  it('reads only the five read-only tools, never book_check, at exactly the target URL, unsigned', async () => {
     const service = fakeService(() => ({}));
     const outcome = await runLive(
       liveArgs(['--duration-sec=20']),
@@ -131,7 +160,7 @@ describe('runLive behaviour', () => {
     expect([...tools].sort()).toEqual([...LIVE_TOOLS].sort());
     expect(tools.has('book_check')).toBe(false);
     for (const entry of service.sent) {
-      expect(entry.url).toBe(`${TARGET}/mcp`);
+      expect(entry.url).toBe(TARGET);
       expect(entry.headers.get('x-mcp-proxy-auth')).toBeNull();
       expect(entry.headers.get('authorization')).toBeNull();
     }

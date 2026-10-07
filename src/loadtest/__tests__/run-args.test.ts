@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { describe, expect, it } from '@jest/globals';
+import * as argsModule from '../args.js';
 import {
   DEFAULT_LIVE_LOCATION_ID,
   LIVE_DEFAULT_DURATION_SEC,
@@ -89,6 +90,42 @@ describe('the live scenario guard', () => {
       rate: 0.5,
       location: 722227,
     });
+  });
+
+  it('names the documented public route as the live target', () => {
+    expect((argsModule as Record<string, unknown>).LIVE_PUBLIC_TARGET).toBe(
+      'https://mcp.alteg.io/me'
+    );
+  });
+
+  it('removes one trailing slash and keeps the path as given', () => {
+    const target = (url: string): string | null =>
+      parseArgs(['--scenario=live', `--target=${url}`, '--confirm-announced'])
+        .target;
+    expect(target('https://svc.example/me/')).toBe('https://svc.example/me');
+    expect(target('https://mcp.alteg.io/me')).toBe('https://mcp.alteg.io/me');
+    expect(target('https://svc.example')).toBe('https://svc.example');
+  });
+
+  it.each([
+    ['plain http', 'http://svc.example/me', 'https'],
+    ['a query', 'https://svc.example/me?x=1', 'query'],
+    ['a fragment', 'https://svc.example/me#a', 'fragment'],
+    ['a run.app host', 'https://svc-abc.a.run.app', 'run.app'],
+  ])('refuses a live target with %s', (_label, url, text) => {
+    expect(
+      refused(['--scenario=live', `--target=${url}`, '--confirm-announced'])
+    ).toContain(text);
+  });
+
+  it.each([
+    'http://svc.example/me',
+    'https://svc.example/me?x=1',
+    'https://svc-abc.a.run.app',
+  ])('asks for --confirm-announced first, whatever the target (%s)', (url) => {
+    expect(refused(['--scenario=live', `--target=${url}`])).toContain(
+      '--confirm-announced'
+    );
   });
 
   it('does not start a container', () => {
