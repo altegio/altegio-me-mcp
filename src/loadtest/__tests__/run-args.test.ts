@@ -3,13 +3,13 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { describe, expect, it } from '@jest/globals';
-import * as argsModule from '../args.js';
 import {
   DEFAULT_LIVE_LOCATION_ID,
   LIVE_DEFAULT_DURATION_SEC,
   LIVE_DEFAULT_RATE_PER_SEC,
   LIVE_MAX_DURATION_SEC,
   LIVE_MAX_RATE_PER_SEC,
+  LIVE_PUBLIC_TARGET,
   UsageError,
   localTarget,
   parseArgs,
@@ -93,9 +93,7 @@ describe('the live scenario guard', () => {
   });
 
   it('names the documented public route as the live target', () => {
-    expect((argsModule as Record<string, unknown>).LIVE_PUBLIC_TARGET).toBe(
-      'https://mcp.alteg.io/me'
-    );
+    expect(LIVE_PUBLIC_TARGET).toBe('https://mcp.alteg.io/me');
   });
 
   it('removes one trailing slash and keeps the path as given', () => {

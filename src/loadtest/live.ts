@@ -2,15 +2,23 @@ import {
   LIVE_MAX_DURATION_SEC,
   LIVE_MAX_RATE_PER_SEC,
   UsageError,
+  checkLiveTarget,
   type LoadtestArgs,
 } from './args.js';
 
-// The bounded tier 3 run (OPS-07, D-03), for plan 03-16 only. It reads through
-// the deployed service with the five read-only tools that make exactly one
-// upstream call each (never book_check, which makes up to four), one request at
-// a time, at no more than 1.35 calls a second: 90% of the gate's ceiling, so
-// Altegio.Pro MCP, which shares the partner token, keeps its share. Requests
-// carry no signature: the platform proxy in front of the service signs them.
+// The bounded tier 3 run (OPS-07, D-03), for plan 03-24 only. It reads through
+// the public route (LIVE_PUBLIC_TARGET) with the five read-only tools of the
+// discovery flow (never book_check, which makes up to four upstream calls),
+// one request at a time. Four of them make one upstream call each;
+// business_list_services makes two (the business card for the currency, and
+// the services), so five tool calls are six upstream calls. The tool-call cap
+// of 1.35 a second is therefore 1.62 upstream calls a second at full rate,
+// above the production gate's 1.5: the gate, not this script, then holds the
+// upstream rate, and a long run at the cap ends at the gate's busy stop.
+// The partner token belongs to developer account 2630 and its budget is shared
+// with the platform's marketplace confirmations (docs/runbooks/operations.md),
+// not with Altegio.Pro MCP. Requests go to the target URL as given and carry no
+// signature: the platform proxy in front of the service signs them.
 //
 // Hard stops, checked after every response: HTTP 401, 429 or 5xx (any status
 // but 200), a JSON-RPC error, or a tool error whose text says the booking
@@ -38,7 +46,7 @@ export interface LiveResult {
   httpStatuses: Record<string, number>;
 }
 
-/** The five tools of a live run, in call order; each makes one upstream call. */
+/** The five tools of a live run, in call order; business_list_services makes two upstream calls, the others one. */
 export const LIVE_TOOLS = [
   'business_get',
   'business_list_services',
@@ -139,11 +147,15 @@ export async function runLive(
   }
   if (args.target === null)
     throw new UsageError('--target is required for live');
+  // Plain http is allowed here for a loopback host only: the end-to-end test
+  // drives the real app on 127.0.0.1, which parseArgs does not accept.
+  checkLiveTarget(args.target, { allowLoopbackHttp: true });
 
   const durationMs = Math.min(args.durationSec, LIVE_MAX_DURATION_SEC) * 1000;
   const rate = Math.min(args.rate, LIVE_MAX_RATE_PER_SEC);
   const intervalMs = 1000 / rate;
-  const endpoint = `${args.target}/mcp`;
+  // The URL as given, nothing appended: the public route maps to /mcp itself.
+  const endpoint = args.target;
 
   const perTool: Record<string, number> = {};
   const httpStatuses: Record<string, number> = {};

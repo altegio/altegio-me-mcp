@@ -71,7 +71,7 @@ function liveArgs(target: string, durationSec: number): LoadtestArgs {
 }
 
 describe('runLive against the real app and the measuring mock', () => {
-  it('public-route topology: every call is HTTP 200, one upstream call each, PASS', async () => {
+  it('public-route topology: every call is HTTP 200, the upstream calls are counted per tool, PASS', async () => {
     const topology = await startTopology(null);
     const outcome = await runLive(
       liveArgs(`${topology.app.baseUrl}/mcp`, 6),
@@ -85,8 +85,12 @@ describe('runLive against the real app and the measuring mock', () => {
     expect(outcome.httpStatuses).toEqual({ '200': outcome.requests });
     expect(outcome.toolErrors).toBe(0);
 
+    // Four of the five live tools make one upstream call; business_list_services
+    // makes two (the business card for the currency, and the services), so a
+    // cycle of five tool calls is six upstream calls.
     const stats = topology.mock.stats();
-    expect(stats.starts).toBe(outcome.requests);
+    const servicesCalls = outcome.perTool.business_list_services ?? 0;
+    expect(stats.starts).toBe(outcome.requests + servicesCalls);
     expect(stats.served429).toBe(0);
 
     const logs = await waitForLogs(topology.app, outcome.requests);

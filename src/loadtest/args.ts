@@ -12,8 +12,19 @@ export type Scenario = (typeof SCENARIOS)[number];
 
 /** Longest live run, in seconds (plan 03-16 runs a few minutes at most). */
 export const LIVE_MAX_DURATION_SEC = 180;
-/** Fastest live run: 90% of the production gate's 1.5 upstream calls a second. One live tool call is one upstream call. */
+/**
+ * Fastest live run, in tool calls a second: 90% of the production gate's 1.5
+ * upstream calls a second if every tool call were one upstream call. Four of
+ * the five live tools are; business_list_services makes two, so a full cycle
+ * is 1.2 upstream calls per tool call (see live.ts).
+ */
 export const LIVE_MAX_RATE_PER_SEC = 1.35;
+/**
+ * The one supported live target: the documented public route. The platform
+ * proxy maps it to this service's /mcp and signs the request, so the load
+ * script needs no proxy key (WR-59).
+ */
+export const LIVE_PUBLIC_TARGET = 'https://mcp.alteg.io/me';
 export const LIVE_DEFAULT_DURATION_SEC = 120;
 export const LIVE_DEFAULT_RATE_PER_SEC = 1;
 /** The owner's location that the live run reads (read-only routes, no booking). */
@@ -40,6 +51,45 @@ export class UsageError extends Error {
   }
 }
 
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
+  '127.0.0.1',
+  'localhost',
+  '[::1]',
+]);
+
+/**
+ * The live target rules (WR-59, T-03-56), applied by parseArgs and again by
+ * runLive before any request: https only (plain http only for a loopback host,
+ * which runLive allows for the end-to-end test and parseArgs does not), no
+ * query and no fragment, and no run.app address, which answers 401 to the
+ * unsigned requests of a load script. Returns the URL requests are posted to:
+ * origin plus path, one trailing slash removed, nothing appended.
+ */
+export function checkLiveTarget(
+  target: string,
+  options: { allowLoopbackHttp: boolean }
+): string {
+  if (!URL.canParse(target)) throw new UsageError('--target is not a URL');
+  const url = new URL(target);
+  const loopback = LOOPBACK_HOSTS.has(url.hostname);
+  const plainHttpOk =
+    url.protocol === 'http:' && loopback && options.allowLoopbackHttp;
+  if (url.protocol !== 'https:' && !plainHttpOk) {
+    throw new UsageError(
+      `the live target is the public route over https, for example ${LIVE_PUBLIC_TARGET}`
+    );
+  }
+  if (/[?#]/.test(target)) {
+    throw new UsageError('the live target takes no query or fragment');
+  }
+  if (url.hostname.endsWith('.run.app')) {
+    throw new UsageError(
+      'a run.app address answers 401 to unsigned requests; the live run goes through the public route, where the platform proxy signs'
+    );
+  }
+  return `${url.origin}${url.pathname}`.replace(/\/$/, '');
+}
+
 export interface LoadtestArgs {
   scenario: Scenario;
   /** Base URL of the service (live), or the loopback port to publish the container on. */
@@ -61,7 +111,7 @@ export const USAGE = [
   'Usage: npm run loadtest -- --scenario=sim|peak|edge|deadline|live [flags]',
   '  sim: tier 1 on this machine only, no container and no network; optional --out',
   '  peak, edge, deadline: --start-container=IMAGE (local container, mock upstream); optional --target=http://127.0.0.1:PORT, --duration-sec, --out',
-  `  live: --target=BASE_URL --confirm-announced; --location (default ${DEFAULT_LIVE_LOCATION_ID}), --duration-sec (default ${LIVE_DEFAULT_DURATION_SEC}, at most ${LIVE_MAX_DURATION_SEC}), --rate (default ${LIVE_DEFAULT_RATE_PER_SEC}, at most ${LIVE_MAX_RATE_PER_SEC}), --out`,
+  `  live: --target=URL --confirm-announced (the URL is posted to as given; the public route is ${LIVE_PUBLIC_TARGET}); --location (default ${DEFAULT_LIVE_LOCATION_ID}), --duration-sec (default ${LIVE_DEFAULT_DURATION_SEC}, at most ${LIVE_MAX_DURATION_SEC}), --rate (default ${LIVE_DEFAULT_RATE_PER_SEC}, at most ${LIVE_MAX_RATE_PER_SEC}), --out`,
 ].join('\n');
 
 const VALUE_FLAGS = [
@@ -76,12 +126,6 @@ const VALUE_FLAGS = [
 type ValueFlag = (typeof VALUE_FLAGS)[number];
 
 const IMAGE_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/;
-const LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
-  '127.0.0.1',
-  'localhost',
-  '[::1]',
-]);
-
 function readFlags(argv: readonly string[]): {
   values: Map<ValueFlag, string>;
   confirmAnnounced: boolean;
@@ -195,6 +239,7 @@ export function parseArgs(argv: readonly string[]): LoadtestArgs {
       );
     }
     if (target === null) throw new UsageError('--target is required for live');
+    const liveUrl = checkLiveTarget(targetText!, { allowLoopbackHttp: false });
     if (values.has('start-container')) {
       throw new UsageError('--start-container is not for the live scenario');
     }
@@ -219,7 +264,7 @@ export function parseArgs(argv: readonly string[]): LoadtestArgs {
       : DEFAULT_LIVE_LOCATION_ID;
     return {
       scenario,
-      target: target.toString().replace(/\/$/, ''),
+      target: liveUrl,
       startContainer: null,
       durationSec,
       out,
