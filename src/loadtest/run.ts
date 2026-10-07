@@ -4,7 +4,7 @@
 //   npm run loadtest -- --scenario=peak     --start-container=IMAGE [--duration-sec=180]
 //   npm run loadtest -- --scenario=edge     --start-container=IMAGE
 //   npm run loadtest -- --scenario=deadline --start-container=IMAGE
-//   npm run loadtest -- --scenario=live     --target=BASE_URL --confirm-announced
+//   npm run loadtest -- --scenario=live     --target=https://mcp.alteg.io/me --confirm-announced
 //
 // Flags:
 //   --scenario=sim|peak|edge|deadline|live  what to run (required)
@@ -16,23 +16,32 @@
 //                             upstream on this host (--add-host=host.docker.internal:
 //                             host-gateway), and stop it afterwards
 //   --target=URL              peak, edge, deadline: the loopback port to publish the
-//                             container on (default: a free port). live: base URL of
-//                             the service; requests go to <URL>/mcp
+//                             container on (default: a free port). live: the public route
+//                             (LIVE_PUBLIC_TARGET, https://mcp.alteg.io/me), where the
+//                             platform proxy signs; requests go to the URL as given,
+//                             nothing is appended. A run.app address is refused (it
+//                             answers 401 to unsigned requests), and so are plain http,
+//                             a query and a fragment
 //   --duration-sec=N          peak: seconds at the expected peak (default 180; a 2x step
 //                             of up to 60 s and a 10x step of up to 20 s follow). live: default 120, at most 180
 //   --out=DIR                 where results.json and container.log go
 //                             (default loadtest-output/<timestamp>/, git-ignored)
 //   --location=ID             live only: the location to read (default 726120)
-//   --rate=N                  live only: tool calls a second (default 1, at most 2.7,
-//                             90% of the gate's 3 upstream calls a second)
+//   --rate=N                  live only: tool calls a second (default 1, at least 0.1,
+//                             at most 1.35: 90% of the production gate's 1.5 upstream
+//                             calls a second, if each tool call were one upstream call;
+//                             business_list_services makes two, see live.ts). Each
+//                             live request times out after 30 s
 //   --confirm-announced       live only: required. The owner must have announced the
-//                             run first; it spends partner-token budget shared with
-//                             Altegio.Pro MCP
+//                             run first; it spends budget of the partner token of
+//                             developer account 2630, shared with the platform's
+//                             marketplace confirmations (docs/runbooks/operations.md)
 //
 // The sim scenario and the first three container scenarios never leave this machine:
 // the container ones drive a local container and a mock upstream that measures its
 // own start rate, with a random test key and a canary token (T-03-39). The live
-// scenario stops at the first sign of throttling or rejection (T-03-38); see live.ts.
+// scenario stops at the first sign of throttling or rejection (T-03-38); a network
+// error or a timeout ends it as FAIL, with results.json written; see live.ts.
 //
 // Output: for sim, peak, edge and deadline, every check line and one summary line
 // starting with PASS, BELOW or FAIL, a results.json in the output directory (with the
