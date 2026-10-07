@@ -406,7 +406,14 @@ no LLM: the model runs on the AI host's side. The platform proxy in front of the
 (`mcp.alteg.io`, ADR 0002) is the platform's cost and is not counted here. Free allotments are not
 subtracted, except for the uptime checks (see below).
 
-| Item | Expected (≈100k tool calls / month) | Peak (≈1M tool calls / month) |
+The expected column is the MVP assumption the owner set on 2026-10-07: at most 10,000 bookings a
+month for the first weeks to months after launch, at about 10 tool calls each. The peak column is
+ten times that: the headroom the hosting and the request gate were measured against
+([`docs/loadtest/results.md`](docs/loadtest/results.md)), not a forecast. In the MVP peak hour the
+gate runs at about a fifth of its ceiling (90 upstream calls a minute per process); capacity is
+revisited only if growth exceeds the assumption.
+
+| Item | Expected (MVP, ≤10k bookings ≈ 100k tool calls / month) | Peak (10x headroom, ≈1M tool calls / month) |
 |---|---|---|
 | Cloud Run: one idle minimum instance, 2,592,000 s at $0.00000375 per second | $9.72 | $9.72 |
 | Cloud Run: busy time above the idle rate ($0.0000215 per second) and requests ($0.40 per million) | $3.90 | $29.26 |
