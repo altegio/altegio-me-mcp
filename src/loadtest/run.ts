@@ -11,7 +11,10 @@
 //                             sim: tier 1, the production gate on a simulated clock
 //                             (no container, no network; only --out is accepted)
 //   --start-container=IMAGE   peak, edge, deadline: start IMAGE with NODE_ENV=test,
-//                             PROXY_AUTH=required, a random 64-hex proxy key, a canary
+//                             PROXY_AUTH=required, CALLER_AUTH=optional (the load
+//                             generator sends no partner token, as scripts/smoke.sh;
+//                             the caller check has its own tests and does not touch
+//                             the gate), a random 64-hex proxy key, a canary
 //                             partner token and ALTEGIO_API_BASE pointing at the mock
 //                             upstream on this host (--add-host=host.docker.internal:
 //                             host-gateway), and stop it afterwards
@@ -270,6 +273,8 @@ async function startHarness(
     'NODE_ENV=test',
     '-e',
     'PROXY_AUTH=required',
+    '-e',
+    'CALLER_AUTH=optional',
     '-e',
     `MCP_PROXY_BACKEND_KEY=${key}`,
     '-e',
