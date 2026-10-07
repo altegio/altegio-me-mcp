@@ -20,6 +20,11 @@ export const LIVE_DEFAULT_RATE_PER_SEC = 1;
 export const DEFAULT_LIVE_LOCATION_ID = 726120;
 export const PEAK_DEFAULT_DURATION_SEC = 180;
 
+/** RED stub: the behaviour lands with the GREEN commit. */
+export function localTarget(_target: string | null, _port: number): string {
+  return '';
+}
+
 export class UsageError extends Error {
   constructor(message: string) {
     super(message);

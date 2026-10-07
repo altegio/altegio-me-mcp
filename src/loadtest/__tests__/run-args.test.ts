@@ -10,6 +10,7 @@ import {
   LIVE_MAX_DURATION_SEC,
   LIVE_MAX_RATE_PER_SEC,
   UsageError,
+  localTarget,
   parseArgs,
 } from '../args.js';
 
@@ -158,6 +159,50 @@ describe('the local scenarios', () => {
     expect(refused([...base, '--confirm-announced'])).toContain('live');
     expect(refused([...base, '--rate=2'])).toContain('live');
     expect(refused([...base, '--location=1'])).toContain('live');
+  });
+});
+
+describe('the sim scenario (tier 1 as a report)', () => {
+  it('needs no container and no target', () => {
+    expect(parseArgs(['--scenario=sim'])).toMatchObject({
+      scenario: 'sim',
+      startContainer: null,
+      target: null,
+      confirmAnnounced: false,
+    });
+  });
+
+  it('accepts --out', () => {
+    expect(parseArgs(['--scenario=sim', '--out=some/dir']).out).toBe(
+      'some/dir'
+    );
+  });
+
+  it.each([
+    ['--start-container=img:1'],
+    ['--target=http://127.0.0.1:18080'],
+    ['--duration-sec=60'],
+    ['--location=1'],
+    ['--rate=1'],
+    ['--confirm-announced'],
+  ])('refuses %s and says that sim runs on this machine only', (flag) => {
+    expect(refused(['--scenario=sim', flag])).toContain('this machine only');
+  });
+});
+
+describe('localTarget (IN-55)', () => {
+  it('publishes on the given port when no target is named', () => {
+    expect(localTarget(null, 4321)).toBe('http://127.0.0.1:4321');
+  });
+
+  it('adds the published port to a target that names none', () => {
+    expect(localTarget('http://127.0.0.1', 4321)).toBe('http://127.0.0.1:4321');
+  });
+
+  it('keeps a target that names its port', () => {
+    expect(localTarget('http://localhost:5000', 5000)).toBe(
+      'http://localhost:5000'
+    );
   });
 });
 
