@@ -30,15 +30,42 @@ interface Sent {
   headers: Headers;
 }
 
-type Reply = { status?: number; body?: unknown; text?: string };
+type Reply = {
+  status?: number;
+  body?: unknown;
+  text?: string;
+  /** The fake clock moves by this much while the request is in flight. */
+  delayMs?: number;
+  /** The fetch itself rejects. */
+  fetchError?: Error;
+  /** The reply arrives but reading its body rejects. */
+  bodyError?: Error;
+};
+
+type TestDeps = LiveDeps & { requestSignal?: (ms: number) => AbortSignal };
+
+function namedError(name: string, message: string): Error {
+  const error = new Error(message);
+  error.name = name;
+  return error;
+}
 
 /** A fake service: `reply(sent, index)` answers each request; the clock moves only on sleep. */
 function fakeService(reply: (sent: Sent, index: number) => Reply) {
   let clock = 1_000_000;
   const sent: Sent[] = [];
   const sleeps: number[] = [];
-  const deps: LiveDeps = {
+  const signalRequests: number[] = [];
+  const fetchSignals: (AbortSignal | null | undefined)[] = [];
+  const handedOut: AbortSignal[] = [];
+  const deps: TestDeps = {
     now: () => clock,
+    requestSignal: (ms) => {
+      signalRequests.push(ms);
+      const signal = new AbortController().signal;
+      handedOut.push(signal);
+      return signal;
+    },
     sleep: (ms) => {
       sleeps.push(ms);
       clock += ms;
@@ -63,14 +90,26 @@ function fakeService(reply: (sent: Sent, index: number) => Reply) {
         headers: new Headers(init?.headers),
       };
       sent.push(entry);
+      fetchSignals.push(init?.signal);
       const answer = reply(entry, sent.length - 1);
+      clock += answer.delayMs ?? 0;
+      if (answer.fetchError !== undefined) {
+        return Promise.reject(answer.fetchError);
+      }
+      if (answer.bodyError !== undefined) {
+        const failing = answer.bodyError;
+        return Promise.resolve({
+          status: 200,
+          text: () => Promise.reject(failing),
+        } as unknown as Response);
+      }
       const text = answer.text ?? JSON.stringify(answer.body ?? okBody(entry));
       return Promise.resolve(
         new Response(text, { status: answer.status ?? 200 })
       );
     },
   };
-  return { deps, sent, sleeps };
+  return { deps, sent, sleeps, signalRequests, fetchSignals, handedOut };
 }
 
 function result(structuredContent: unknown, isError = false, text = 'ok') {
@@ -92,6 +131,16 @@ function okBody(entry: Sent): unknown {
     default:
       return result({ items: [] });
   }
+}
+
+function refusedMessage(extra: string[]): string {
+  try {
+    liveArgs(extra);
+  } catch (error) {
+    if (error instanceof UsageError) return error.message;
+    throw error;
+  }
+  throw new Error(`expected ${extra.join(' ')} to be refused`);
 }
 
 describe('runLive refusal', () => {
@@ -185,7 +234,7 @@ describe('runLive behaviour', () => {
     });
   });
 
-  it('never exceeds 2.7 calls a second, even when asked for more', async () => {
+  it('never exceeds 1.35 calls a second, even when asked for more', async () => {
     const service = fakeService(() => ({}));
     const outcome = await runLive(
       liveArgs(['--duration-sec=60', '--rate=50']),
@@ -195,10 +244,10 @@ describe('runLive behaviour', () => {
     expect(outcome.averageRate).toBeLessThanOrEqual(
       LIVE_MAX_RATE_PER_SEC + 0.05
     );
-    // Any one-second window holds at most 3 starts at 2.7 a second.
+    // Any closed one-second window holds at most 2 starts at 1.35 a second.
     const times = service.sent.map((entry) => entry.at);
-    for (let index = 0; index + 3 < times.length; index += 1) {
-      expect(times[index + 3]! - times[index]!).toBeGreaterThan(1000);
+    for (let index = 0; index + 2 < times.length; index += 1) {
+      expect(times[index + 2]! - times[index]!).toBeGreaterThan(1000);
     }
   });
 
@@ -292,5 +341,120 @@ describe('runLive behaviour', () => {
     expect(outcome.status).toBe('FAIL');
     expect(outcome.stoppedBy).toBe('too many other tool errors');
     expect(outcome.toolErrors).toBe(6);
+  });
+});
+
+describe('runLive hard bounds (WR-58, T-03-54, T-03-55)', () => {
+  const INTERVAL_MS = 1000 / 1.35;
+
+  it('does not catch up after a slow reply: starts stay at least 1/rate apart', async () => {
+    const service = fakeService((_sent, index) =>
+      index === 1 ? { delayMs: 5000 } : {}
+    );
+    const outcome = await runLive(
+      liveArgs(['--duration-sec=20', '--rate=1.35']),
+      service.deps
+    );
+    expect(outcome.status).toBe('PASS');
+    const times = service.sent.map((entry) => entry.at);
+    for (let index = 1; index < times.length; index += 1) {
+      expect(times[index]! - times[index - 1]!).toBeGreaterThanOrEqual(
+        INTERVAL_MS - 1e-6
+      );
+    }
+    // The next start after the slow reply is at the reply time, not earlier.
+    expect(times[2]! - times[1]!).toBe(5000);
+    expect(times[3]! - times[2]!).toBeGreaterThanOrEqual(INTERVAL_MS - 1e-6);
+  });
+
+  it.each([25, 30])(
+    'ends within --duration-sec=%i at the minimum rate; no wait is longer than the time left',
+    async (durationSec) => {
+      const service = fakeService(() => ({}));
+      const outcome = await runLive(
+        liveArgs([`--duration-sec=${durationSec}`, '--rate=0.1']),
+        service.deps
+      );
+      expect(outcome.status).toBe('PASS');
+      expect(outcome.elapsedMs).toBeLessThanOrEqual(durationSec * 1000);
+      for (const wait of service.sleeps) {
+        expect(wait).toBeLessThanOrEqual(durationSec * 1000);
+      }
+      const lastStart = service.sent[service.sent.length - 1]!.at;
+      const startedAt = service.sent[0]!.at;
+      const lastSleep = service.sleeps[service.sleeps.length - 1]!;
+      expect(lastStart - startedAt + lastSleep).toBeLessThanOrEqual(
+        durationSec * 1000
+      );
+    }
+  );
+
+  it('refuses a --rate below the minimum of 0.1 and names it', () => {
+    const message = refusedMessage(['--rate=0.05']);
+    expect(message).toContain('0.1');
+    expect(message).toContain('--rate');
+    expect(() => liveArgs(['--rate=0.1'])).not.toThrow();
+  });
+
+  it('gives every request a 30 s timeout signal and hands it to fetch', async () => {
+    const service = fakeService(() => ({}));
+    await runLive(liveArgs(['--duration-sec=10']), service.deps);
+    expect(service.sent.length).toBeGreaterThan(3);
+    expect(service.signalRequests).toHaveLength(service.sent.length);
+    for (const ms of service.signalRequests) expect(ms).toBe(30_000);
+    expect(service.fetchSignals).toHaveLength(service.sent.length);
+    service.fetchSignals.forEach((signal, index) => {
+      expect(signal).toBe(service.handedOut[index]);
+    });
+  });
+
+  it('records a fetch timeout as a FAIL with the counts, without throwing', async () => {
+    const service = fakeService((_sent, index) =>
+      index === 2
+        ? {
+            fetchError: namedError(
+              'TimeoutError',
+              'The operation was aborted due to timeout https://svc.example/me'
+            ),
+          }
+        : {}
+    );
+    const outcome = await runLive(liveArgs(), service.deps);
+    expect(outcome.status).toBe('FAIL');
+    expect(outcome.stoppedBy).toBe('network error: TimeoutError');
+    expect(outcome.requests).toBe(3);
+    expect(service.sent).toHaveLength(3);
+    // Only the error name is kept: a message can echo the URL.
+    expect(JSON.stringify(outcome)).not.toContain('svc.example');
+  });
+
+  it('records a failed body read the same way, with the error name', async () => {
+    const service = fakeService((_sent, index) =>
+      index === 1
+        ? { bodyError: namedError('SocketError', 'other side closed') }
+        : {}
+    );
+    const outcome = await runLive(liveArgs(), service.deps);
+    expect(outcome.status).toBe('FAIL');
+    expect(outcome.stoppedBy).toBe('network error: SocketError');
+    expect(outcome.requests).toBe(2);
+    expect(outcome.httpStatuses).toEqual({ '200': 2 });
+  });
+
+  it('stops before dates and time slots when no team member was found', async () => {
+    const service = fakeService((entry) =>
+      entry.tool === 'business_list_team_members'
+        ? { body: result({ items: [] }) }
+        : {}
+    );
+    const outcome = await runLive(liveArgs(), service.deps);
+    expect(outcome.status).toBe('FAIL');
+    expect(outcome.stoppedBy).toContain('no team member');
+    const tools = service.sent.map((entry) => entry.tool);
+    expect(tools).not.toContain('business_list_dates');
+    expect(tools).not.toContain('business_list_time_slots');
+    for (const entry of service.sent) {
+      expect(entry.args.team_member_id).not.toBe(0);
+    }
   });
 });
