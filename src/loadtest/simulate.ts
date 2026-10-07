@@ -42,6 +42,8 @@ export interface SimulationResult {
   /** Anything else that failed; empty in a healthy run. */
   unexpected: string[];
   upstream: UpstreamStats;
+  /** Every upstream start time, in simulated milliseconds. */
+  startTimes: number[];
 }
 
 const toolsByName = new Map<string, DefinedTool<ToolDeps>>(
@@ -126,5 +128,23 @@ export async function simulatePeak(opts: {
     busy,
     unexpected,
     upstream: core.stats(),
+    startTimes: [],
   };
+}
+
+/** Not implemented yet (RED scaffolding). */
+export function capacityMultiplier(
+  _opts: {
+    stepsPerUnit?: number;
+    maxMultiplier?: number;
+    minutes?: number;
+    seed?: number;
+  } = {}
+): Promise<{
+  multiplier: number;
+  stepsPerUnit: number;
+  at: SimulationResult | null;
+  above: SimulationResult | null;
+}> {
+  return Promise.reject(new Error('capacityMultiplier is not implemented'));
 }

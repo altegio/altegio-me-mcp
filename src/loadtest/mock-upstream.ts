@@ -60,6 +60,19 @@ export function slidingMax(times: readonly number[], windowMs: number): number {
   return best;
 }
 
+/** Not implemented yet (RED scaffolding). */
+export function slidingMaxHalfOpen(
+  _times: readonly number[],
+  _windowMs: number
+): number {
+  throw new Error('slidingMaxHalfOpen is not implemented');
+}
+
+/** Not implemented yet (RED scaffolding). */
+export function smallestGap(_times: readonly number[]): number | null {
+  throw new Error('smallestGap is not implemented');
+}
+
 /** How many of the ascending `times` lie within `windowMs` before `at`, `at` included. */
 function countWithin(
   times: readonly number[],
@@ -144,6 +157,7 @@ export interface UpstreamCore {
   start(method: string, path: string): UpstreamStart;
   recordAborted(): void;
   stats(): UpstreamStats;
+  startTimes(): number[];
 }
 
 export function createUpstreamCore(now: () => number): UpstreamCore {
@@ -196,6 +210,9 @@ export function createUpstreamCore(now: () => number): UpstreamCore {
     },
     recordAborted() {
       aborted += 1;
+    },
+    startTimes() {
+      throw new Error('startTimes is not implemented');
     },
     stats: () => ({
       max1s: slidingMax(everyStart, SECOND_MS),
@@ -259,6 +276,7 @@ export interface MockUpstream {
   url: string;
   port: number;
   stats(): UpstreamStats;
+  startTimes(): number[];
   close(): Promise<void>;
 }
 
@@ -300,6 +318,7 @@ export async function startMockUpstream(
     url: `http://${shownHost}:${port}${API_PREFIX}`,
     port,
     stats: () => core.stats(),
+    startTimes: () => core.startTimes(),
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections();

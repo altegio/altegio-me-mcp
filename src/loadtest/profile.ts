@@ -77,3 +77,19 @@ export const UPSTREAM_PEAK_CALLS_PER_SEC =
 
 /** The gate's sustained ceiling (180 a minute): 3 upstream calls per second. */
 export const GATE_CEILING_CALLS_PER_SEC = DEFAULT_GATE_OPTIONS.perMinute / 60;
+
+/** RED scaffolding: not the production allocation yet. */
+export const ALLOCATION_PER_SECOND = 0;
+
+/** The launch criterion, per mille (RED scaffolding). */
+export const MIN_ANSWERED_PER_MILLE_AT_PEAK = 800;
+
+/** Not implemented yet (RED scaffolding). */
+export function meetsAnsweredShare(_ok: number, _total: number): boolean {
+  throw new Error('meetsAnsweredShare is not implemented');
+}
+
+/** Not implemented yet (RED scaffolding). */
+export function answeredPercentText(_ok: number, _total: number): string {
+  throw new Error('answeredPercentText is not implemented');
+}
