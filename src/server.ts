@@ -19,6 +19,7 @@ import { createLogger } from './observability/logger.js';
 import { MIN_SECRET_LENGTH, scrubSecrets } from './observability/redact.js';
 import { createSharedEgressList } from './security/client-ip.js';
 import { createEdgeLimiter } from './security/edge-limiter.js';
+import { createPartnerTokenValidator } from './security/partner-token.js';
 import { MIN_PROXY_KEY_LENGTH, parseProxyKeys } from './security/proxy-auth.js';
 import { productionTools } from './tools/registry.js';
 import { PACKAGE_NAME, PACKAGE_VERSION } from './util/package-metadata.js';
@@ -174,23 +175,24 @@ async function main(): Promise<void> {
   process.on('uncaughtException', reportFatal);
   process.on('unhandledRejection', reportFatal);
 
+  // No upstream call at startup: /health stays free of Altegio API calls.
+  const booking = new BookingClient({
+    base: config.ALTEGIO_API_BASE,
+    tokenSource,
+    // One gate per process, shared by every request and session: all
+    // upstream calls, partner-token probes included, stay below the API
+    // limits of our egress together (BAPI-02).
+    gate: new RequestGate({
+      ...PRODUCTION_GATE_OPTIONS,
+      maxQueuePerKey: config.GATE_MAX_QUEUE_PER_KEY,
+    }),
+  });
+
   const app = createApp({
     name: PACKAGE_NAME,
     version: PACKAGE_VERSION,
     tools: productionTools,
-    // No upstream call at startup: /health stays free of Altegio API calls.
-    toolDeps: {
-      booking: new BookingClient({
-        base: config.ALTEGIO_API_BASE,
-        tokenSource,
-        // One gate per process, shared by every request and session: all
-        // upstream calls stay below the API limits together (BAPI-02).
-        gate: new RequestGate({
-          ...PRODUCTION_GATE_OPTIONS,
-          maxQueuePerKey: config.GATE_MAX_QUEUE_PER_KEY,
-        }),
-      }),
-    },
+    toolDeps: { booking },
     logger,
     secrets,
     allowedOrigins: allowedOriginsFor(
@@ -199,6 +201,12 @@ async function main(): Promise<void> {
     ),
     allowLoopbackOrigins: config.NODE_ENV !== 'production',
     proxyAuth,
+    callerAuth: {
+      mode: config.CALLER_AUTH,
+      validator: createPartnerTokenValidator({
+        probe: (token, signal) => booking.probePartnerToken(token, { signal }),
+      }),
+    },
     edge: {
       limiter: createEdgeLimiter({
         maxInflight: config.EDGE_MAX_INFLIGHT,
@@ -225,6 +233,12 @@ async function main(): Promise<void> {
       'listening'
     );
     // After the listening line, so that line stays the first one written.
+    if (config.CALLER_AUTH === 'optional') {
+      logger.warn(
+        { event: 'config_warning', setting: 'CALLER_AUTH' },
+        'caller auth is optional: /mcp serves callers without a partner token with the server token'
+      );
+    }
     if (config.PROXY_AUTH === 'off') {
       logger.warn(
         { event: 'config_warning', setting: 'PROXY_AUTH' },

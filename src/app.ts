@@ -20,6 +20,11 @@ import {
   gateKeyOf,
   resolveClientAddress,
 } from './security/client-ip.js';
+import {
+  createCallerAuthMiddleware,
+  type CallerAuthMode,
+} from './security/caller-auth.js';
+import type { PartnerTokenValidator } from './security/partner-token.js';
 import { createProxyAuthMiddleware } from './security/proxy-auth.js';
 import type { DefinedTool } from './tools/factory.js';
 
@@ -40,6 +45,11 @@ export interface AppDeps<D> {
   // or null leaves the check off, which only src/server.ts does, and only for
   // an explicit PROXY_AUTH=off.
   proxyAuth?: { keys: () => readonly string[]; now?: () => number } | null;
+  // Who may call (ADR 0004): the caller's Altegio partner token, validated,
+  // from the proxy's signed header when proxyAuth is on, else sent directly.
+  // Required: there is no configuration without a caller check, and a request
+  // that reaches the MCP handler without an admitted caller is granted nothing.
+  callerAuth: { mode: CallerAuthMode; validator: PartnerTokenValidator };
   // The deployed commit, reported by /health.
   commit?: string | null;
   // Edge abuse protection for POST /mcp (OPS-06): the client identity step and
@@ -198,10 +208,11 @@ export function createApp<D>(deps: AppDeps<D>): Express {
   }
 
   // Chain: call log -> origin guard -> proxy auth -> client identity -> edge
-  // limiter (a limiter built by createEdgeLimiter() in src/server.ts) -> body
-  // parser -> batch refusal -> MCP handler. Proxy auth and the limiter run
-  // before the body is parsed, so an unsigned or excess request on the public
-  // run.app address costs no parsing.
+  // limiter (a limiter built by createEdgeLimiter() in src/server.ts) ->
+  // caller auth -> body parser -> batch refusal -> MCP handler. Proxy auth,
+  // the limiter and the caller check run before the body is parsed, so an
+  // unsigned, excess or unauthenticated request costs no parsing, and a flood
+  // of bad partner tokens is limited before any token is probed.
   const proxyAuth: RequestHandler[] =
     deps.proxyAuth === undefined || deps.proxyAuth === null
       ? []
@@ -225,6 +236,11 @@ export function createApp<D>(deps: AppDeps<D>): Express {
     originGuard,
     ...proxyAuth,
     ...edge,
+    createCallerAuthMiddleware({
+      mode: deps.callerAuth.mode,
+      behindProxy: proxyAuth.length > 0,
+      validator: deps.callerAuth.validator,
+    }),
     express.json({ limit: MCP_BODY_LIMIT }),
     rejectBatch,
     mcpHandler

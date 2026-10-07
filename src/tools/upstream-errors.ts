@@ -48,6 +48,16 @@ function defaultText(error: UpstreamError): UpstreamErrorText {
     case 'rejected':
       return REJECTED_REQUEST;
     case 'unauthorized':
+      // The caller's own partner token was refused after it passed admission
+      // (revoked or blocked since): only the integrator can renew it.
+      if (error.credential === 'caller') {
+        return {
+          message:
+            "The booking service did not accept this connection's Altegio partner token.",
+          nextAction:
+            'tell the user the connection needs a valid Altegio partner token; do not retry.',
+        };
+      }
       // Names no credential: the user can do nothing about our access.
       return {
         message: "The booking service did not accept this server's access.",

@@ -321,7 +321,7 @@ describe('outcome from the JSON-RPC response body (WR-05)', () => {
     expect(logs[0]?.outcome).toBe('protocol_error');
     expect(JSON.stringify(logs)).not.toContain(canary);
     const { level: _level, message: _message, ...fields } = logs[0] ?? {};
-    expect(Object.keys(fields)).toHaveLength(17);
+    expect(Object.keys(fields)).toHaveLength(19);
   });
 
   it('counts an array response that contains an error member', async () => {

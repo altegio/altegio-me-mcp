@@ -18,6 +18,7 @@ docker create --name "$NAME" \
   -e ALTEGIO_API_TOKEN=image-gate-canary-token \
   -e PUBLIC_BASE_URL=https://fixture.invalid/me \
   -e MCP_PROXY_BACKEND_KEY_FILE=/tmp/proxy-key \
+  -e CALLER_AUTH=optional \
   -e COMMIT_SHA=0123abc "$IMAGE" >/dev/null
 docker cp "$WORK_DIR/proxy-key" "$NAME:/tmp/proxy-key"
 docker cp "$ROOT/scripts/fixtures/localhost-cert.pem" "$NAME:/tmp/fixture-cert.pem"

@@ -11,6 +11,7 @@ import {
   pageInputShape,
   paginateArray,
 } from '../tools/pagination.js';
+import { SCOPE_BOOK, SCOPE_READ, type Scope } from '../tools/scopes.js';
 import type { RuleId } from './rules.js';
 
 // Fixtures for the compliance suite. Never imported by production code and
@@ -60,7 +61,7 @@ export interface BadFixture {
   production?: boolean;
 }
 
-const SINGLE: ToolMeta = { kind: 'single', upstream: [] };
+const SINGLE: ToolMeta = { kind: 'single', upstream: [], scopes: [SCOPE_READ] };
 const EMPTY_OUTPUT = z.strictObject({ ok: z.boolean() });
 
 interface Variant {
@@ -71,6 +72,7 @@ interface Variant {
   input?: z.ZodObject;
   upstream?: readonly UpstreamCall[];
   kind?: 'list';
+  scopes?: readonly Scope[];
 }
 
 // A tool built through the factory from the compliant defaults plus one
@@ -83,6 +85,7 @@ function built(variant: Variant): { spec: ToolSpec; meta: ToolMeta } {
     annotations: variant.annotations ?? READ_HINTS,
     ...(variant.kind === undefined ? {} : { kind: variant.kind }),
     ...(variant.upstream === undefined ? {} : { upstream: variant.upstream }),
+    ...(variant.scopes === undefined ? {} : { scopes: variant.scopes }),
     input: variant.input ?? z.strictObject({ id: z.string() }),
     output: EMPTY_OUTPUT,
     render: () => 'ok',
@@ -161,6 +164,7 @@ export const badFixtures: readonly BadFixture[] = [
         openWorldHint: false,
         idempotentHint: true,
       },
+      scopes: [SCOPE_BOOK],
     }),
     true
   ),
@@ -235,5 +239,22 @@ export const badFixtures: readonly BadFixture[] = [
     'R13 non-strict input',
     'R13',
     built({ input: z.object({ id: z.string() }) })
+  ),
+  fixture('R14 tool without the base tier', 'R14', {
+    spec: built({}).spec,
+    meta: { kind: 'single', upstream: [], scopes: [] },
+  }),
+  fixture(
+    'R14 write tool without the client tier',
+    'R14',
+    built({
+      name: 'demo_cancel_thing',
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false,
+        idempotentHint: true,
+      },
+    })
   ),
 ];

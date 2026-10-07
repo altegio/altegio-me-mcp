@@ -14,9 +14,11 @@ import { productionTools } from '../tools/registry.js';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from '../tools/untrusted.js';
 import {
   CANARY_SECRET,
+  PARTNER_TOKEN,
   closeAllApps,
   postMcp,
   startApp,
+  stubPartnerValidator,
   toolCallBody,
   waitForLogs,
   type Harness,
@@ -664,5 +666,57 @@ describe('the call log names the upstream failure kind (OPS-05, T-03-18, T-03-19
     expect(line?.outcome).toBe('invalid_params');
     expect(line?.upstream_kind).toBeNull();
     expect(line?.limited_by).toBeNull();
+  });
+});
+
+describe('the caller partner token end to end (ADR 0004)', () => {
+  async function startRequired(): Promise<{
+    harness: Harness;
+    upstream: FakeFetch;
+  }> {
+    const upstream = fakeFetch([
+      {
+        method: 'GET',
+        path: `/company/${LOCATION_ID}`,
+        reply: loadFixture('company', 'default'),
+      },
+    ]);
+    const harness = await startApp({
+      tools: productionTools,
+      toolDeps: {
+        booking: new BookingClient({
+          base: API_BASE,
+          token: CANARY_SECRET,
+          fetch: upstream.fetch,
+        }),
+      },
+      callerAuth: { mode: 'required', validator: stubPartnerValidator() },
+    });
+    return { harness, upstream };
+  }
+
+  it('calls the Altegio API with the caller token, never the server token', async () => {
+    const { harness, upstream } = await startRequired();
+    const res = await postMcp(
+      harness.baseUrl,
+      toolCallBody('business_get', { location_id: LOCATION_ID }),
+      { authorization: `Bearer ${PARTNER_TOKEN}` }
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { result?: { isError?: boolean } };
+    expect(body.result?.isError).not.toBe(true);
+    expect(
+      upstream.calls.map((call) => call.headers.get('authorization'))
+    ).toEqual([`Bearer ${PARTNER_TOKEN}`]);
+  });
+
+  it('makes no upstream call without a caller token', async () => {
+    const { harness, upstream } = await startRequired();
+    const res = await postMcp(
+      harness.baseUrl,
+      toolCallBody('business_get', { location_id: LOCATION_ID })
+    );
+    expect(res.status).toBe(401);
+    expect(upstream.calls).toEqual([]);
   });
 });
