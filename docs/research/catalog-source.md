@@ -39,8 +39,10 @@ Notes on `GET /companies`:
    `active_staff_count == 0`. Do not rely on `next_slot`: a feature flag can leave it empty.
 3. Health exclusion by configured ids, applied at index build:
    - `business_group_id = 2` (medicine), types 4, 31, 32, 38, 39, 40, 41, 42, 43, 44, 87, 91, 92, 103.
-   - Health-adjacent types outside group 2, owner decision pending: 35 cosmetology, 25 spa,
-     29 massage salon, 17 optics, 28 salt caves. Also group 9 "unknown".
+   - Health-adjacent types outside group 2, owner decision 2026-10-07: 35 cosmetology, 25 spa
+     and 29 massage salon are listed (beauty and wellness; their medical counterparts are in
+     group 2); 17 optics, 28 salt caves and group 9 "unknown" are excluded at launch, group 9
+     to be revisited after a classification pass.
 4. Store per business: id, titles, city, country, address, coordinates, type, group, chain,
    default bookform URL, logo, timezone, currency. About 1 KB per row, 12-15 MB in total; fits
    SQLite FTS5 or memory. Do not store phone numbers (personal data for private specialists).
