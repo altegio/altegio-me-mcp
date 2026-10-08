@@ -318,6 +318,34 @@ The live scenario spends developer 2630 quota shared with platform marketplace c
 - The results file goes under the ignored `loadtest-output/` directory; summarize it in the
   deployment record.
 
+## Client sign-in
+
+The client tier (ADR 0005) is in the image and needs nothing deployed until the platform's I8
+ships. What to know and check:
+
+- **Production settings.** Production keeps `CALLER_AUTH=required`, which admits a client that the
+  proxy signs (`x-mcp-auth-kind: client` with the user token and the scope list in signed
+  `x-mcp-auth-*` headers). A direct `X-Altegio-User-Token` is refused there. The three settings
+  `CLIENT_USER_TOKEN_HEADER`, `CLIENT_SCOPE_HEADER` and `CLIENT_CALLER_KIND` stay at their
+  defaults (`x-mcp-auth-altegio-user-token`, `x-mcp-auth-scope`, `client`) unless the platform's I8
+  header names differ; if they do, set the three in the service environment and nothing else.
+- **Nothing to deploy until I8 ships.** Until the proxy's phone and SMS sign-in page sends a client
+  kind, no production request reaches `me_list_places` or `me_list_bookings` with a user token, and
+  both answer in band with a sign-in refusal. The container smoke (`scripts/smoke.sh`) checks that
+  refusal with a signed client identity that has no `mcp:me:read` scope.
+- **Checks to run once I8 ships.** Call `me_list_places` as a signed-in test client through
+  `https://mcp.alteg.io/me` and expect the client's own places. Then read the `mcp_call` log lines
+  of that request: `caller` is `client`, `tool` is `me_list_places`, `http_status` is 200, and no
+  line holds a token. Run the own-place flow of `docs/research/signed-in-routes.md` once through
+  the proxy, ending at the pre-selected widget link, and record it in the deployment record. Its
+  upstream calls share developer 2630 (see `operations.md`).
+- **Rollback is on the proxy.** The proxy stops sending the client kind (or the `/me` lane returns
+  to partner-token admission); no server change or redeploy is needed. The tools then answer the
+  in-band sign-in refusal again. A server rollback follows `## Rollback` as for any release.
+- **The user token is in no log.** It is scrubbed from every result, error and log line, and the
+  smoke test and the unit tests scan for a canary of it. If a log line ever holds a real one, stop
+  the client lane at the proxy and open an incident; the token belongs to the client.
+
 ## Known limits
 
 - **`run.app` cannot be closed to the proxy.** Internal ingress admits only callers inside the
@@ -337,6 +365,11 @@ The live scenario spends developer 2630 quota shared with platform marketplace c
   process, reserving two processes during serialized rollout. Cloud Run maxima
   can be temporarily exceeded; they are not a hard distributed quota. See
   operations.md for marketplace reserve, monitoring and scaling restrictions.
+- **The two signed-in routes are undocumented.** `GET /user/companies/yplaces` and
+  `GET /user/records` are the routes of the Altegio.me app, not of the public API reference; their
+  contract is the recording in `docs/research/signed-in-routes.md`, and Altegio can change them
+  without notice. A change shows up as an in-band error of `me_list_places` or `me_list_bookings`
+  while the six known-business tools keep working.
 - **The shared proxy key** widens who holds it. The service has no VPC egress, so it cannot reach
   the platform's VM backends, which bounds the impact; a key issued for this route is preferred.
 

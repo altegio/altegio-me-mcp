@@ -2,16 +2,18 @@
 
 ME is stateless and admits callers by their own Altegio partner token (ADR 0004;
 `CALLER_AUTH=required` in production since 2026-10-06); Pro is
-authenticated/stateful. All six ME tools remain user reads; `book_check` hands
-confirmation to the booking widget. No OAuth, booking write, catalog search or
-customer VM autoheal is introduced here.
+authenticated/stateful. All eight ME tools remain user reads (six for a known
+business, plus `me_list_places` and `me_list_bookings` for a signed-in client);
+`book_check` hands confirmation to the booking widget. No OAuth page, booking
+write, catalog search or customer VM autoheal is introduced here.
 
 ## Signals and publication gate
 
 - Liveness: backend `GET /health`, HTTP 200, `status=ok`, `service=altegio-me-mcp`,
   package `version` and deployed `commit`. It performs no upstream API call.
 - Protocol: signed HTTPS `initialize` with protocol `2025-11-25`, then
-  `tools/list`; valid JSON-RPC results, precisely the six documented tools,
+  `tools/list`; valid JSON-RPC results, precisely the eight documented tools
+  (six known-business tools, `me_list_places` and `me_list_bookings`),
   object input schemas and no `mcp-session-id`. Direct unsigned `/mcp` remains 401.
 - Functional: a separate read-only `business_get` for `location_id=722227` through
   trusted ingress. Require a valid result and `isError != true`; do not log its
@@ -42,6 +44,13 @@ ME uses developer **2630**, Secret Manager `MARKETPLACE_PARTNER_TOKEN`.
 Marketplace confirmations in the platform share this token's relevant quota.
 Pro uses a different token (`ALTEGIO_API_TOKEN`); its traffic is not automatically
 part of the ME partner allocation.
+
+Client callers (a signed-in client, ADR 0005) share that allocation. Their upstream
+calls, the two signed-in routes (`GET /user/companies/yplaces` and `GET /user/records`)
+and the business routes alike, run on the partner token the proxy sends with the
+client, else on 2630, and pass the same request gate. The call log shows
+`caller: client` and never the user token. Until the proxy's end-client sign-in
+(I8) ships, only local and test runs reach these routes.
 
 The known partner ceilings are 5 starts/second and 200 starts/rolling minute.
 Production ME allocates **90 starts/rolling minute and 2 starts/second per
