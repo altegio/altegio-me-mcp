@@ -14,6 +14,7 @@ import {
   type Pagination,
 } from './pagination.js';
 import type { ToolDeps } from './registry.js';
+import { SCOPE_READ } from './scopes.js';
 import { toToolError } from './upstream-errors.js';
 import { sanitizeUntrusted, withUntrustedBlock } from './untrusted.js';
 
@@ -103,6 +104,7 @@ export const meListPlaces = defineTool<
   description:
     "Lists the signed-in client's own places: businesses where the client already has bookings and that take bookings through Altegio.me. Each place has the location_id the business tools take, whether online booking is on, and the last visit when known. Needs the client's sign-in. The places route is undocumented, so some fields can be empty.",
   kind: 'list',
+  scopes: [SCOPE_READ],
   annotations: UPSTREAM_READ_HINTS,
   upstream: [USER_ROUTES.places],
   input: placesInput,

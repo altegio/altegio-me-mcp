@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
 import type { ToolMeta, ToolSpec } from '../tools/factory.js';
-import { SCOPE_BOOK, SCOPE_READ } from '../tools/scopes.js';
+import { SCOPE_BOOK, SCOPE_DISCOVER } from '../tools/scopes.js';
 import {
   INVISIBLE_RANGES,
   UNTRUSTED_CLOSE,
@@ -429,13 +429,13 @@ export function checkTool(
     add('R13', 'inputSchema.additionalProperties must be false');
   }
 
-  // R14 access tier (ADR 0004): no tool runs without a partner token, and a
+  // R14 access tier (ADR 0004): no tool runs without an admitted caller, and a
   // tool that writes acts for one signed-in client, so it needs that tier.
   const scopes: readonly string[] = Array.isArray(meta.scopes)
     ? meta.scopes
     : [];
-  if (!scopes.includes(SCOPE_READ)) {
-    add('R14', `scopes must include ${SCOPE_READ}`);
+  if (!scopes.includes(SCOPE_DISCOVER)) {
+    add('R14', `scopes must include ${SCOPE_DISCOVER}`);
   }
   if (annotations.readOnlyHint !== true && !scopes.includes(SCOPE_BOOK)) {
     add('R14', `a tool that writes must require ${SCOPE_BOOK}`);

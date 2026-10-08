@@ -1,7 +1,11 @@
 import type { IncomingHttpHeaders } from 'node:http';
 import type { RequestHandler, Response } from 'express';
 import { getCallRecord } from '../observability/call-log.js';
-import { SCOPE_READ, type Scope } from '../tools/scopes.js';
+import {
+  CLIENT_GRANTABLE_SCOPES,
+  SCOPE_DISCOVER,
+  type Scope,
+} from '../tools/scopes.js';
 import { partnerIdOf, type PartnerTokenValidator } from './partner-token.js';
 
 // Who may call POST /mcp (ADR 0004). The base tier is an Altegio partner
@@ -68,11 +72,22 @@ export type Caller =
 
 export type CallerAuthReason = 'no_partner_token' | 'invalid_partner_token';
 
-/** What a partner token grants. The client tier comes only from OAuth (Phase 2). */
-const PARTNER_SCOPES: ReadonlySet<Scope> = new Set<Scope>([SCOPE_READ]);
+/** What a partner token grants: the base tier only. The client tier needs a client sign-in. */
+const PARTNER_SCOPES: ReadonlySet<Scope> = new Set<Scope>([SCOPE_DISCOVER]);
 
-/** What a client sign-in grants; Task 2 of plan 04-02 splits it from the base tier. */
-const CLIENT_SCOPES: ReadonlySet<Scope> = PARTNER_SCOPES;
+/**
+ * What a client sign-in grants: the base tier plus each grantable scope the
+ * proxy's signed scope list names, or all of them when the client came with a
+ * direct header (`listed` null: local and headless runs). Nothing else is ever
+ * granted, whatever the list says: mcp:me:book is nobody's yet.
+ */
+function clientScopes(listed: readonly string[] | null): ReadonlySet<Scope> {
+  const granted = new Set<Scope>([SCOPE_DISCOVER]);
+  for (const scope of CLIENT_GRANTABLE_SCOPES) {
+    if (listed === null || listed.includes(scope)) granted.add(scope);
+  }
+  return granted;
+}
 
 /** Kept only while the proxy lane rolls out; see CALLER_AUTH in the README. */
 const ANONYMOUS_SCOPES: ReadonlySet<Scope> = PARTNER_SCOPES;
@@ -88,7 +103,14 @@ function nonBlank(value: string | undefined): string | undefined {
 }
 
 /** What a request presents as the client's user token. */
-export type PresentedUser = { kind: 'none' } | { kind: 'token'; token: string };
+export type PresentedUser =
+  | { kind: 'none' }
+  | {
+      kind: 'token';
+      token: string;
+      /** The signed scope list behind the proxy; null for a direct header. */
+      scopes: readonly string[] | null;
+    };
 
 /**
  * The client's user token a request presents. Behind the proxy only the signed
@@ -102,14 +124,20 @@ export function presentedUserToken(
   if (behindProxy) {
     const kind = nonBlank(single(headers[SIGNED_KIND_HEADER]));
     const token = nonBlank(single(headers[SIGNED_USER_TOKEN_HEADER]));
-    return kind === CALLER_KIND_CLIENT && token !== undefined
-      ? { kind: 'token', token }
-      : { kind: 'none' };
+    if (kind !== CALLER_KIND_CLIENT || token === undefined) {
+      return { kind: 'none' };
+    }
+    const listed = nonBlank(single(headers[SIGNED_SCOPE_HEADER]));
+    return {
+      kind: 'token',
+      token,
+      scopes: listed === undefined ? [] : listed.split(/\s+/),
+    };
   }
   const direct = nonBlank(single(headers[DIRECT_USER_TOKEN_HEADER]));
   return direct === undefined
     ? { kind: 'none' }
-    : { kind: 'token', token: direct };
+    : { kind: 'token', token: direct, scopes: null };
 }
 
 const BEARER = /^Bearer[ \t]+(\S+)[ \t]*$/i;
@@ -199,7 +227,7 @@ export function createCallerAuthMiddleware(opts: {
         userToken: user.token,
         partnerToken: null,
         partnerId: null,
-        scopes: CLIENT_SCOPES,
+        scopes: clientScopes(user.scopes),
       };
       res.locals.caller = caller;
       record.caller = caller.kind;

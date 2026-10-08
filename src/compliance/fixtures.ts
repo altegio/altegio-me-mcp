@@ -11,7 +11,7 @@ import {
   pageInputShape,
   paginateArray,
 } from '../tools/pagination.js';
-import { SCOPE_BOOK, SCOPE_READ, type Scope } from '../tools/scopes.js';
+import { SCOPE_BOOK, SCOPE_DISCOVER, type Scope } from '../tools/scopes.js';
 import type { RuleId } from './rules.js';
 
 // Fixtures for the compliance suite. Never imported by production code and
@@ -61,7 +61,11 @@ export interface BadFixture {
   production?: boolean;
 }
 
-const SINGLE: ToolMeta = { kind: 'single', upstream: [], scopes: [SCOPE_READ] };
+const SINGLE: ToolMeta = {
+  kind: 'single',
+  upstream: [],
+  scopes: [SCOPE_DISCOVER],
+};
 const EMPTY_OUTPUT = z.strictObject({ ok: z.boolean() });
 
 interface Variant {
