@@ -369,6 +369,11 @@ function prepaidSlug(value: unknown): PrepaidSlug | null {
     : null;
 }
 
+/** abonement_restriction above 0, or a true flag: the service is for membership holders only. */
+function isMembershipOnly(value: boolean | number | null | undefined): boolean {
+  return value === true || (typeof value === 'number' && value > 0);
+}
+
 function positiveOrNull(value: number | null | undefined): number | null {
   return typeof value === 'number' && value > 0 ? value : null;
 }
@@ -578,7 +583,7 @@ function toCatalog(data: ServicesData): ServiceCatalog {
       priceMax: service.price_max ?? 0,
       durationSeconds: positiveOrNull(service.seance_length),
       prepaid: prepaidSlug(service.prepaid),
-      membershipOnly: false,
+      membershipOnly: isMembershipOnly(service.abonement_restriction),
     });
   }
   return {

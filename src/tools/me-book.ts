@@ -3,16 +3,21 @@ import {
   BOOKING_ROUTES,
   CLIENT_WRITE_ROUTES,
   USER_ROUTES,
+  type BusinessCard,
   type BusinessRules,
 } from '../booking/client.js';
-import { buildBookingLink } from '../booking/deep-link.js';
+import {
+  bookableFormUrl,
+  buildBookingLink,
+  canTakeOnlineBookings,
+  plainBookingLink,
+} from '../booking/deep-link.js';
 import { UpstreamError } from '../booking/errors.js';
 import {
   BOOK_CHECK_STEP_MS,
   CHECK_ERRORS,
   CONFIRMATION_STATEMENT,
   SERVICE_NOT_AVAILABLE,
-  requireBookingWidget,
   selectedServices,
   selectedTeamMember,
   slotDatetimeInput,
@@ -60,6 +65,12 @@ import { sanitizeUntrusted, withUntrustedBlock } from './untrusted.js';
 // user token and returns it as me_list_bookings shows it. The name and phone
 // come from the client's Altegio profile and never from a tool input, and
 // never back out of the server.
+//
+// What the chat cannot do ends at the business's own booking widget (ME-08,
+// D-04): a place the client has no record at, a service that needs online
+// prepayment (or whose prepayment is not known), a membership-only service and
+// an inactive widget each return status "fallback" with the reason and the
+// pre-filled link, in band and with no token.
 
 const TOOL_NAME = 'me_book';
 
@@ -115,15 +126,29 @@ const previewSchema = z.strictObject({
     .describe(
       "The business's online cancellation rule, or null when the business states none."
     ),
+  optional_prepayment: z
+    .boolean()
+    .describe(
+      'True when the business also offers optional online prepayment for a chosen service in its booking widget; this booking is made without it.'
+    ),
 });
 
-const FALLBACK_REASONS = ['not_confirmed', 'required_field'] as const;
+const FALLBACK_REASONS = [
+  'not_own_place',
+  'prepayment',
+  'membership',
+  'widget_inactive',
+  'not_confirmed',
+  'required_field',
+] as const;
+
+type FallbackReason = (typeof FALLBACK_REASONS)[number];
 
 const bookOutput = z.strictObject({
   status: z
     .enum(['preview', 'booked', 'fallback'])
     .describe(
-      "preview: the slot was checked and nothing is booked. booked: the booking was created. fallback: the business could not confirm the booking from here, nothing was booked, and the client completes it with the pre-filled link in the business's booking widget."
+      "preview: the slot was checked and nothing is booked. booked: the booking was created. fallback: the booking cannot be made from here, nothing was booked, and the client completes it with the pre-filled link in the business's booking widget, or through the business's contacts when there is no link."
     ),
   location_id: z.number().int().describe('Location id of the business.'),
   preview: previewSchema
@@ -160,7 +185,7 @@ const bookOutput = z.strictObject({
       reason: z
         .enum(FALLBACK_REASONS)
         .describe(
-          "not_confirmed: the business's booking service could not confirm the booking from here. required_field: the business needs a detail the client's Altegio profile does not have."
+          "not_own_place: the client has no earlier booking at this business. prepayment: a chosen service needs online prepayment, or its prepayment is not known. membership: a chosen service is for membership holders. widget_inactive: the business takes no online bookings right now. not_confirmed: the business's booking service could not confirm the booking from here. required_field: the business needs a detail the client's Altegio profile does not have."
         ),
       link: z
         .strictObject({
@@ -173,7 +198,7 @@ const bookOutput = z.strictObject({
         })
         .nullable()
         .describe(
-          'The booking widget link, or null when it could not be built.'
+          'The booking widget link, or null when the business has no usable booking form.'
         ),
     })
     .nullable()
@@ -212,8 +237,60 @@ export function cancellationText(rules: BusinessRules): string | null {
     : 'Online cancellation is allowed.';
 }
 
-const NOT_AN_OWN_PLACE_NEXT =
-  "call book_check with the same selection for the business's pre-filled booking link.";
+type FallbackLink = { url: string; kind: 'preselected' | 'booking_form' };
+
+/** The pre-filled widget link for the selection, built from the card as book_check builds it. */
+function selectionLink(input: BookInput, card: BusinessCard): FallbackLink {
+  const link = buildBookingLink({
+    locationId: input.location_id,
+    formUrl: card.bookingFormUrl,
+    teamMemberId: input.team_member_id,
+    serviceIds: input.service_ids,
+    slotDatetime: input.datetime,
+    businessUtcOffsetHours: card.utcOffsetHours,
+    anyTeamMemberAllowed: card.anyTeamMemberAllowed,
+  });
+  return { url: link.url, kind: link.kind };
+}
+
+function fallbackOutput(
+  input: BookInput,
+  reason: FallbackReason,
+  link: FallbackLink | null
+): BookOutput {
+  return {
+    status: 'fallback',
+    location_id: input.location_id,
+    preview: null,
+    confirmation_token: null,
+    expires_at: null,
+    booking_id: null,
+    booking: null,
+    fallback: { reason, link },
+  };
+}
+
+/**
+ * An inactive widget (or a card without a booking form): the plain booking-form
+ * link when the card has a form on an allowed host, else no link at all and the
+ * business's contacts as the way on.
+ */
+function widgetInactiveFallback(
+  input: BookInput,
+  card: BusinessCard
+): BookOutput {
+  const usable =
+    card.bookingFormUrl !== null &&
+    bookableFormUrl(card.bookingFormUrl) !== null;
+  const link = usable
+    ? plainBookingLink(input.location_id, card.bookingFormUrl)
+    : null;
+  return fallbackOutput(
+    input,
+    'widget_inactive',
+    link === null ? null : { url: link.url, kind: link.kind }
+  );
+}
 
 /** Preview: validates the slot and issues the confirmation token. Nothing is written upstream. */
 async function preview(
@@ -225,14 +302,20 @@ async function preview(
   const records = await deps.booking.myRecords(userSide).catch((error) => {
     throw toToolError(error);
   });
+  const call = upstreamCall(ctx);
+
+  // A place with no record of the client's: the widget completes it (D-04).
   if (!records.some((record) => record.locationId === input.location_id)) {
-    throw new ToolError(
-      `Nothing was booked: location ${input.location_id} is not among the places this client has booked before.`,
-      NOT_AN_OWN_PLACE_NEXT
-    );
+    const card = await deps.booking
+      .company(input.location_id, call)
+      .catch((error) => {
+        throw toToolError(error);
+      });
+    return canTakeOnlineBookings(card)
+      ? fallbackOutput(input, 'not_own_place', selectionLink(input, card))
+      : widgetInactiveFallback(input, card);
   }
 
-  const call = upstreamCall(ctx);
   const [cardResult, catalogResult, membersResult] = await Promise.allSettled([
     deps.booking.company(input.location_id, call),
     deps.booking.services(input.location_id, {}, call),
@@ -245,7 +328,7 @@ async function preview(
     throw toToolError(catalogResult.reason);
   }
   const card = cardResult.value;
-  requireBookingWidget(card);
+  if (!canTakeOnlineBookings(card)) return widgetInactiveFallback(input, card);
 
   const currency = sanitizeUntrusted(card.currency, {
     maxChars: LABEL_MAX_CHARS,
@@ -260,6 +343,24 @@ async function preview(
       `Nothing was booked: ${SERVICE_NOT_AVAILABLE.message}`,
       SERVICE_NOT_AVAILABLE.nextAction
     );
+  }
+  // Online prepayment is taken only by the widget; a service whose prepayment
+  // is required, or not known, must not be booked here (T-04.1-12).
+  if (
+    chosen.services.some(
+      (service) =>
+        service.prepayment === 'required' || service.prepayment === 'unknown'
+    )
+  ) {
+    return fallbackOutput(input, 'prepayment', selectionLink(input, card));
+  }
+  const membershipOnly = new Set(
+    catalogResult.value.services
+      .filter((service) => service.membershipOnly)
+      .map((service) => service.id)
+  );
+  if (input.service_ids.some((id) => membershipOnly.has(id))) {
+    return fallbackOutput(input, 'membership', selectionLink(input, card));
   }
   const member = selectedTeamMember(
     input.team_member_id,
@@ -317,6 +418,9 @@ async function preview(
         maxChars: LABEL_MAX_CHARS,
       }),
       cancellation: cancellationText(card.rules),
+      optional_prepayment: chosen.services.some(
+        (service) => service.prepayment === 'optional'
+      ),
     },
     confirmation_token: issued.token,
     expires_at: new Date(issued.expiresAt).toISOString(),
@@ -451,7 +555,7 @@ async function fallbackResult(
   input: BookInput,
   deps: ToolDeps,
   ctx: ToolContext,
-  reason: (typeof FALLBACK_REASONS)[number]
+  reason: 'not_confirmed' | 'required_field'
 ): Promise<BookOutput> {
   let card;
   try {
@@ -462,25 +566,7 @@ async function fallbackResult(
       BOOK_CHECK_LINK_NEXT
     );
   }
-  const link = buildBookingLink({
-    locationId: input.location_id,
-    formUrl: card.bookingFormUrl,
-    teamMemberId: input.team_member_id,
-    serviceIds: input.service_ids,
-    slotDatetime: input.datetime,
-    businessUtcOffsetHours: card.utcOffsetHours,
-    anyTeamMemberAllowed: card.anyTeamMemberAllowed,
-  });
-  return {
-    status: 'fallback',
-    location_id: input.location_id,
-    preview: null,
-    confirmation_token: null,
-    expires_at: null,
-    booking_id: null,
-    booking: null,
-    fallback: { reason, link: { url: link.url, kind: link.kind } },
-  };
+  return fallbackOutput(input, reason, selectionLink(input, card));
 }
 
 /** Confirm: redeems the token, reads the profile, creates the booking and reads it back. */
@@ -585,6 +671,11 @@ function renderPreview(out: BookOutput): string {
     `Team member: ${who === null ? teamMemberText(0) : teamMemberText(who.id)}.`,
     'Prices are in the currency of the business.',
   ];
+  if (shown.optional_prepayment) {
+    lines.push(
+      'The business also offers optional online prepayment in its booking widget; this booking is made without it.'
+    );
+  }
   if (shown.cancellation !== null) lines.push(shown.cancellation);
   lines.push(
     `Next: show this to the user; only after the user agrees, call me_book again with the same location_id, service_ids, team_member_id and datetime and confirmation_token ${out.confirmation_token ?? ''} (valid until ${out.expires_at ?? ''} UTC).`
@@ -604,12 +695,27 @@ function renderPreview(out: BookOutput): string {
   return withUntrustedBlock(lines.join('\n'), fields);
 }
 
+const FALLBACK_TEXT: Record<FallbackReason, string> = {
+  not_own_place:
+    "Not booked. This client has no earlier booking at this business, so the booking is completed in the business's booking widget.",
+  prepayment:
+    "Not booked. A chosen service needs online prepayment, which only the business's booking widget takes.",
+  membership:
+    "Not booked. A chosen service is for membership holders, which only the business's booking widget checks.",
+  widget_inactive:
+    'Not booked. This business does not take online bookings right now.',
+  not_confirmed:
+    'Not booked: the business could not confirm this booking from here.',
+  required_field:
+    "Not booked: the business needs more details for this booking than the client's Altegio profile has.",
+};
+
 function renderFallback(out: BookOutput): string {
   const { fallback } = out;
   const lines = [
-    fallback?.reason === 'required_field'
-      ? "Not booked: the business needs more details for this booking than the client's Altegio profile has."
-      : 'Not booked: the business could not confirm this booking from here.',
+    fallback === null
+      ? FALLBACK_TEXT.not_confirmed
+      : FALLBACK_TEXT[fallback.reason],
   ];
   if (fallback?.link != null) {
     lines.push(
@@ -617,8 +723,12 @@ function renderFallback(out: BookOutput): string {
         ? `Booking link with the services, team member and time already selected: ${fallback.link.url}`
         : `Booking link to the business's booking form, without the selection: ${fallback.link.url}`
     );
+    lines.push(CONFIRMATION_STATEMENT);
+  } else {
+    lines.push(
+      'Next: tell the user to contact the business directly, using the contact details from business_get.'
+    );
   }
-  lines.push(CONFIRMATION_STATEMENT);
   return lines.join('\n');
 }
 
@@ -646,7 +756,7 @@ export const meBook = defineTool<typeof bookInput, typeof bookOutput, ToolDeps>(
     name: TOOL_NAME,
     title: 'Book at one of my places',
     description:
-      "Books for the signed-in client at one of their own places, in two calls. The first call checks the time with the business and returns a preview and a confirmation_token valid for 10 minutes; nothing is booked. After the client agrees, the second call with the same selection and that token creates the booking and returns it. The client's name and phone come from their Altegio profile. Needs the client's sign-in.",
+      "Books for the signed-in client at one of their own places, in two calls. The first call checks the time with the business and returns a preview and a confirmation_token valid for 10 minutes; nothing is booked. After the client agrees, the second call with the same selection and that token creates the booking and returns it. The client's name and phone come from their Altegio profile. Where the chat cannot complete a booking, namely online prepayment, a membership-only service, an inactive booking widget or a place without an earlier booking, the answer states the reason and carries the pre-filled booking widget link. Needs the client's sign-in.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,

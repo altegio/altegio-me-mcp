@@ -104,10 +104,12 @@ const bookServiceSchema = z.looseObject({
   price_max: numeric.nullish(),
   /** Seconds; null unless the request filters by a team member. */
   seance_length: numeric.nullish(),
-  /** forbidden, allowed or required; anything else is unknown. */
-  prepaid: z.unknown(),
+  /** forbidden, allowed or required; anything else, and a missing key, is unknown. */
+  prepaid: z.unknown().optional(),
   /** Absent means active. */
   active: flag.nullish(),
+  /** Above 0 (or true): the service is for membership holders; 0 on every service of the live recording. */
+  abonement_restriction: flag.nullish(),
 });
 
 const serviceCategorySchema = z.looseObject({
