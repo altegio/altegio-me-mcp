@@ -74,8 +74,12 @@ export const SANITIZED_KEYS = {
   idSuffix: '_account_id',
   /** Objects whose `name` is a person's name, replaced with SANITIZED_TEXT. */
   personContainers: ['user', 'position', 'client'],
-  /** Signed-in routes: keys equal to these, or ending in `hashSuffix`, are record hashes. */
-  hash: ['hash'],
+  /**
+   * Signed-in routes: record hashes and tokens (a hash or token lets its
+   * holder reach or cancel the booking) and record api ids. Keys equal to these,
+   * or ending in `hashSuffix` or `tokenSuffix`, are replaced with SANITIZED_TEXT.
+   */
+  hash: ['hash', 'token', 'api_id'],
   hashSuffix: '_hash',
   tokenSuffix: '_token',
   /** Signed-in routes: replaced with SANITIZED_ID. */
@@ -256,7 +260,8 @@ function sanitizeValue(
     if (user) {
       if (
         (SANITIZED_KEYS.hash as readonly string[]).includes(key) ||
-        key.endsWith(SANITIZED_KEYS.hashSuffix)
+        key.endsWith(SANITIZED_KEYS.hashSuffix) ||
+        key.endsWith(SANITIZED_KEYS.tokenSuffix)
       ) {
         return isEmpty(value) ? value : replaceLeaves(value, SANITIZED_TEXT);
       }

@@ -1,0 +1,560 @@
+{
+  "default": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [
+        {
+          "id": 1,
+          "token": "fixture-hash-0001",
+          "record_token": "fixture-hash-0001",
+          "clients_count": 1,
+          "date": "2025-03-10 10:00:00",
+          "datetime": "2025-03-10T10:00:00+0300",
+          "create_date": "2025-01-05T09:00:00+0300",
+          "comment": "Fixture Client fixture.client@example.invalid",
+          "deleted": false,
+          "attendance": 1,
+          "length": 3600,
+          "notify_by_sms": 2,
+          "notify_by_email": 0,
+          "master_requested": 0,
+          "online": true,
+          "api_id": "fixture-api-id-0001",
+          "last_change_date": "2025-01-05T09:00:00+0300",
+          "prepaid": false,
+          "prepaid_confirmed": false,
+          "activity_id": 0,
+          "review_enabled": true,
+          "paid_amount": 0,
+          "allow_delete_record": true,
+          "allow_change_record": true,
+          "is_confirmation_needed": false,
+          "is_acceptance_payment": false,
+          "payment_failure": false,
+          "is_show_prepay_button": false,
+          "services": [
+            {
+              "id": 10303531,
+              "title": "Manicure",
+              "cost": 1500,
+              "price_min": 1500,
+              "price_max": 1500,
+              "discount": 0,
+              "amount": 1,
+              "seance_length": 3600,
+              "api_id": "",
+              "abonement_restriction": 0,
+              "prepaid_settings": {
+                "status": "forbidden",
+                "prepaid_full": {
+                  "amount": 1500,
+                  "currency": "EUR"
+                },
+                "prepaid_min": {
+                  "amount": 1500,
+                  "percent": 100,
+                  "currency": "EUR"
+                }
+              }
+            }
+          ],
+          "company": {
+            "id": 722227,
+            "title": "Fixture Barber",
+            "public_title": "Fixture Barber",
+            "country_id": 87,
+            "country": "Cyprus",
+            "city_id": 1001,
+            "city": "Limassol",
+            "phone": "+15550000001",
+            "phones": ["+15550000001"],
+            "timezone": 3,
+            "address": "12 Example Street",
+            "coordinate_lat": 34.6786,
+            "coordinate_lon": 33.0413,
+            "allow_delete_record": true,
+            "allow_change_record": true,
+            "allow_change_prepaid_record": false,
+            "allow_delete_prepaid_record": false,
+            "site": "https://fixture-barber.example.invalid",
+            "currency_short_title": "€",
+            "allow_change_record_delay_step": 0,
+            "allow_delete_record_delay_step": 0,
+            "logo": "https://assets.example.invalid/logo.png",
+            "social": {
+              "facebook": "",
+              "instagram": "",
+              "telegram": "",
+              "whatsapp": "",
+              "viber": ""
+            },
+            "map": null
+          },
+          "staff": {
+            "id": 2098145,
+            "name": "Anna Smith",
+            "specialization": "Fixture specialist",
+            "show_rating": 1,
+            "rating": 5,
+            "votes_count": 0,
+            "avatar": "https://assets.example.invalid/avatar.png",
+            "avatar_big": "https://assets.example.invalid/avatar.png",
+            "comments_count": 11,
+            "is_deleted": false,
+            "position": {
+              "id": 11,
+              "title": "Stylist",
+              "services_binding_type": 0
+            }
+          },
+          "resource_instances": [],
+          "acceptance_free": null
+        },
+        {
+          "id": 2,
+          "token": "fixture-hash-0002",
+          "record_token": "fixture-hash-0002",
+          "clients_count": 1,
+          "date": "2025-05-05 16:00:00",
+          "datetime": "2025-05-05T16:00:00+0300",
+          "create_date": "2025-01-05T09:00:00+0300",
+          "comment": "",
+          "deleted": false,
+          "attendance": 1,
+          "length": 5400,
+          "notify_by_sms": 2,
+          "notify_by_email": 0,
+          "master_requested": 0,
+          "online": true,
+          "api_id": "fixture-api-id-0002",
+          "last_change_date": "2025-01-05T09:00:00+0300",
+          "prepaid": false,
+          "prepaid_confirmed": false,
+          "activity_id": 0,
+          "review_enabled": true,
+          "paid_amount": 0,
+          "allow_delete_record": true,
+          "allow_change_record": true,
+          "is_confirmation_needed": false,
+          "is_acceptance_payment": false,
+          "payment_failure": false,
+          "is_show_prepay_button": false,
+          "services": [
+            {
+              "id": 10303532,
+              "title": "Hair colouring",
+              "cost": 2000,
+              "price_min": 2000,
+              "price_max": 2000,
+              "discount": 0,
+              "amount": 1,
+              "seance_length": 5400,
+              "api_id": "",
+              "abonement_restriction": 0,
+              "prepaid_settings": {
+                "status": "forbidden",
+                "prepaid_full": {
+                  "amount": 2000,
+                  "currency": "EUR"
+                },
+                "prepaid_min": {
+                  "amount": 2000,
+                  "percent": 100,
+                  "currency": "EUR"
+                }
+              }
+            }
+          ],
+          "company": {
+            "id": 726120,
+            "title": "Fixture Studio",
+            "public_title": "Fixture Studio",
+            "country_id": 87,
+            "country": "Cyprus",
+            "city_id": 1001,
+            "city": "Limassol",
+            "phone": "+15550000001",
+            "phones": ["+15550000001"],
+            "timezone": 3,
+            "address": "12 Example Street",
+            "coordinate_lat": 34.6786,
+            "coordinate_lon": 33.0413,
+            "allow_delete_record": true,
+            "allow_change_record": true,
+            "allow_change_prepaid_record": false,
+            "allow_delete_prepaid_record": false,
+            "site": "https://fixture-barber.example.invalid",
+            "currency_short_title": "€",
+            "allow_change_record_delay_step": 0,
+            "allow_delete_record_delay_step": 0,
+            "logo": "https://assets.example.invalid/logo.png",
+            "social": {
+              "facebook": "",
+              "instagram": "",
+              "telegram": "",
+              "whatsapp": "",
+              "viber": ""
+            },
+            "map": null
+          },
+          "staff": {
+            "id": 2098146,
+            "name": "Maria Lopez",
+            "specialization": "Fixture specialist",
+            "show_rating": 1,
+            "rating": 5,
+            "votes_count": 0,
+            "avatar": "https://assets.example.invalid/avatar.png",
+            "avatar_big": "https://assets.example.invalid/avatar.png",
+            "comments_count": 11,
+            "is_deleted": false,
+            "position": {
+              "id": 11,
+              "title": "Stylist",
+              "services_binding_type": 0
+            }
+          },
+          "resource_instances": [],
+          "acceptance_free": null
+        },
+        {
+          "id": 3,
+          "token": "fixture-hash-0003",
+          "record_token": "fixture-hash-0003",
+          "clients_count": 1,
+          "date": "2025-06-16 14:30:00",
+          "datetime": "2025-06-16T14:30:00+0300",
+          "create_date": "2025-01-05T09:00:00+0300",
+          "comment": "",
+          "deleted": false,
+          "attendance": 1,
+          "length": 3600,
+          "notify_by_sms": 2,
+          "notify_by_email": 0,
+          "master_requested": 0,
+          "online": true,
+          "api_id": "fixture-api-id-0003",
+          "last_change_date": "2025-01-05T09:00:00+0300",
+          "prepaid": false,
+          "prepaid_confirmed": false,
+          "activity_id": 0,
+          "review_enabled": true,
+          "paid_amount": 0,
+          "allow_delete_record": true,
+          "allow_change_record": true,
+          "is_confirmation_needed": false,
+          "is_acceptance_payment": false,
+          "payment_failure": false,
+          "is_show_prepay_button": false,
+          "services": [
+            {
+              "id": 10303531,
+              "title": "Manicure",
+              "cost": 1500,
+              "price_min": 1500,
+              "price_max": 1500,
+              "discount": 0,
+              "amount": 1,
+              "seance_length": 3600,
+              "api_id": "",
+              "abonement_restriction": 0,
+              "prepaid_settings": {
+                "status": "forbidden",
+                "prepaid_full": {
+                  "amount": 1500,
+                  "currency": "EUR"
+                },
+                "prepaid_min": {
+                  "amount": 1500,
+                  "percent": 100,
+                  "currency": "EUR"
+                }
+              }
+            }
+          ],
+          "company": {
+            "id": 722227,
+            "title": "Fixture Barber",
+            "public_title": "Fixture Barber",
+            "country_id": 87,
+            "country": "Cyprus",
+            "city_id": 1001,
+            "city": "Limassol",
+            "phone": "+15550000001",
+            "phones": ["+15550000001"],
+            "timezone": 3,
+            "address": "12 Example Street",
+            "coordinate_lat": 34.6786,
+            "coordinate_lon": 33.0413,
+            "allow_delete_record": true,
+            "allow_change_record": true,
+            "allow_change_prepaid_record": false,
+            "allow_delete_prepaid_record": false,
+            "site": "https://fixture-barber.example.invalid",
+            "currency_short_title": "€",
+            "allow_change_record_delay_step": 0,
+            "allow_delete_record_delay_step": 0,
+            "logo": "https://assets.example.invalid/logo.png",
+            "social": {
+              "facebook": "",
+              "instagram": "",
+              "telegram": "",
+              "whatsapp": "",
+              "viber": ""
+            },
+            "map": null
+          },
+          "staff": {
+            "id": 2098145,
+            "name": "Anna Smith",
+            "specialization": "Fixture specialist",
+            "show_rating": 1,
+            "rating": 5,
+            "votes_count": 0,
+            "avatar": "https://assets.example.invalid/avatar.png",
+            "avatar_big": "https://assets.example.invalid/avatar.png",
+            "comments_count": 11,
+            "is_deleted": false,
+            "position": {
+              "id": 11,
+              "title": "Stylist",
+              "services_binding_type": 0
+            }
+          },
+          "resource_instances": [],
+          "acceptance_free": null
+        },
+        {
+          "id": 4,
+          "token": "fixture-hash-0004",
+          "record_token": "fixture-hash-0004",
+          "clients_count": 1,
+          "date": "2025-09-01 11:00:00",
+          "datetime": "2025-09-01T11:00:00+0300",
+          "create_date": "2025-01-05T09:00:00+0300",
+          "comment": "",
+          "deleted": true,
+          "attendance": 0,
+          "length": 3600,
+          "notify_by_sms": 2,
+          "notify_by_email": 0,
+          "master_requested": 0,
+          "online": true,
+          "api_id": "fixture-api-id-0004",
+          "last_change_date": "2025-01-05T09:00:00+0300",
+          "prepaid": false,
+          "prepaid_confirmed": false,
+          "activity_id": 0,
+          "review_enabled": true,
+          "paid_amount": 0,
+          "allow_delete_record": true,
+          "allow_change_record": true,
+          "is_confirmation_needed": false,
+          "is_acceptance_payment": false,
+          "payment_failure": false,
+          "is_show_prepay_button": false,
+          "services": [
+            {
+              "id": 10303531,
+              "title": "Manicure",
+              "cost": 1500,
+              "price_min": 1500,
+              "price_max": 1500,
+              "discount": 0,
+              "amount": 1,
+              "seance_length": 3600,
+              "api_id": "",
+              "abonement_restriction": 0,
+              "prepaid_settings": {
+                "status": "forbidden",
+                "prepaid_full": {
+                  "amount": 1500,
+                  "currency": "EUR"
+                },
+                "prepaid_min": {
+                  "amount": 1500,
+                  "percent": 100,
+                  "currency": "EUR"
+                }
+              }
+            }
+          ],
+          "company": {
+            "id": 722227,
+            "title": "Fixture Barber",
+            "public_title": "Fixture Barber",
+            "country_id": 87,
+            "country": "Cyprus",
+            "city_id": 1001,
+            "city": "Limassol",
+            "phone": "+15550000001",
+            "phones": ["+15550000001"],
+            "timezone": 3,
+            "address": "12 Example Street",
+            "coordinate_lat": 34.6786,
+            "coordinate_lon": 33.0413,
+            "allow_delete_record": true,
+            "allow_change_record": true,
+            "allow_change_prepaid_record": false,
+            "allow_delete_prepaid_record": false,
+            "site": "https://fixture-barber.example.invalid",
+            "currency_short_title": "€",
+            "allow_change_record_delay_step": 0,
+            "allow_delete_record_delay_step": 0,
+            "logo": "https://assets.example.invalid/logo.png",
+            "social": {
+              "facebook": "",
+              "instagram": "",
+              "telegram": "",
+              "whatsapp": "",
+              "viber": ""
+            },
+            "map": null
+          },
+          "staff": {
+            "id": 2098145,
+            "name": "Anna Smith",
+            "specialization": "Fixture specialist",
+            "show_rating": 1,
+            "rating": 5,
+            "votes_count": 0,
+            "avatar": "https://assets.example.invalid/avatar.png",
+            "avatar_big": "https://assets.example.invalid/avatar.png",
+            "comments_count": 11,
+            "is_deleted": false,
+            "position": {
+              "id": 11,
+              "title": "Stylist",
+              "services_binding_type": 0
+            }
+          },
+          "resource_instances": [],
+          "acceptance_free": null
+        },
+        {
+          "id": 5,
+          "token": "fixture-hash-0005",
+          "record_token": "fixture-hash-0005",
+          "clients_count": 1,
+          "date": "2099-01-12 10:00:00",
+          "datetime": "2099-01-12T10:00:00+0300",
+          "create_date": "2099-01-05T09:00:00+0300",
+          "comment": "",
+          "deleted": false,
+          "attendance": 0,
+          "length": 3600,
+          "notify_by_sms": 2,
+          "notify_by_email": 0,
+          "master_requested": 0,
+          "online": true,
+          "api_id": "fixture-api-id-0005",
+          "last_change_date": "2099-01-05T09:00:00+0300",
+          "prepaid": false,
+          "prepaid_confirmed": false,
+          "activity_id": 0,
+          "review_enabled": true,
+          "paid_amount": 0,
+          "allow_delete_record": true,
+          "allow_change_record": true,
+          "is_confirmation_needed": false,
+          "is_acceptance_payment": false,
+          "payment_failure": false,
+          "is_show_prepay_button": false,
+          "services": [
+            {
+              "id": 10303531,
+              "title": "Manicure",
+              "cost": 1500,
+              "price_min": 1500,
+              "price_max": 1500,
+              "discount": 0,
+              "amount": 1,
+              "seance_length": 3600,
+              "api_id": "",
+              "abonement_restriction": 0,
+              "prepaid_settings": {
+                "status": "forbidden",
+                "prepaid_full": {
+                  "amount": 1500,
+                  "currency": "EUR"
+                },
+                "prepaid_min": {
+                  "amount": 1500,
+                  "percent": 100,
+                  "currency": "EUR"
+                }
+              }
+            }
+          ],
+          "company": {
+            "id": 722227,
+            "title": "Fixture Barber",
+            "public_title": "Fixture Barber",
+            "country_id": 87,
+            "country": "Cyprus",
+            "city_id": 1001,
+            "city": "Limassol",
+            "phone": "+15550000001",
+            "phones": ["+15550000001"],
+            "timezone": 3,
+            "address": "12 Example Street",
+            "coordinate_lat": 34.6786,
+            "coordinate_lon": 33.0413,
+            "allow_delete_record": true,
+            "allow_change_record": true,
+            "allow_change_prepaid_record": false,
+            "allow_delete_prepaid_record": false,
+            "site": "https://fixture-barber.example.invalid",
+            "currency_short_title": "€",
+            "allow_change_record_delay_step": 0,
+            "allow_delete_record_delay_step": 0,
+            "logo": "https://assets.example.invalid/logo.png",
+            "social": {
+              "facebook": "",
+              "instagram": "",
+              "telegram": "",
+              "whatsapp": "",
+              "viber": ""
+            },
+            "map": null
+          },
+          "staff": {
+            "id": 2098145,
+            "name": "Anna Smith",
+            "specialization": "Fixture specialist",
+            "show_rating": 1,
+            "rating": 5,
+            "votes_count": 0,
+            "avatar": "https://assets.example.invalid/avatar.png",
+            "avatar_big": "https://assets.example.invalid/avatar.png",
+            "comments_count": 11,
+            "is_deleted": false,
+            "position": {
+              "id": 11,
+              "title": "Stylist",
+              "services_binding_type": 0
+            }
+          },
+          "resource_instances": [],
+          "acceptance_free": null
+        }
+      ],
+      "meta": []
+    }
+  },
+  "empty": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [],
+      "meta": []
+    }
+  }
+}

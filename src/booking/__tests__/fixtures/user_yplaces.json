@@ -1,0 +1,77 @@
+{
+  "default": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [
+        {
+          "id": 722227,
+          "title": "Fixture Barber",
+          "public_title": "Fixture Barber",
+          "business_group_id": 1,
+          "business_type_id": 1,
+          "country_id": 87,
+          "city_id": 1001,
+          "timezone": 3,
+          "timezone_name": "Asia/Nicosia",
+          "address": "12 Example Street",
+          "coordinate_lat": 34.6786,
+          "coordinate_lon": 33.0413,
+          "logo": "https://assets.example.invalid/logo.png",
+          "zip": "",
+          "phone": "+15550000001",
+          "phones": ["+15550000001"],
+          "site": "https://fixture-barber.example.invalid",
+          "short_descr": "Fixture business",
+          "allow_delete_record": true,
+          "allow_change_record": true,
+          "active_status": {
+            "is_active": true,
+            "is_enabled_gca": true
+          }
+        },
+        {
+          "id": 726120,
+          "title": "Fixture Studio",
+          "public_title": "Fixture Studio",
+          "business_group_id": 1,
+          "business_type_id": 1,
+          "country_id": 87,
+          "city_id": 1001,
+          "timezone": 3,
+          "timezone_name": "Asia/Nicosia",
+          "address": "12 Example Street",
+          "coordinate_lat": 34.6786,
+          "coordinate_lon": 33.0413,
+          "logo": "https://assets.example.invalid/logo.png",
+          "zip": "",
+          "phone": "+15550000001",
+          "phones": ["+15550000001"],
+          "site": "https://fixture-barber.example.invalid",
+          "short_descr": "Fixture business",
+          "allow_delete_record": true,
+          "allow_change_record": true,
+          "active_status": {
+            "is_active": false,
+            "is_enabled_gca": false
+          }
+        }
+      ],
+      "meta": []
+    }
+  },
+  "empty": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [],
+      "meta": []
+    }
+  }
+}

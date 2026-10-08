@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from '@jest/globals';
 import { ALTEGIO_ACCEPT } from '../http.js';
+import { userPlacesDataSchema, userRecordsDataSchema } from '../schemas.js';
 import { scrubSecrets } from '../../observability/redact.js';
 import {
   createRecordingFetch,
@@ -12,7 +13,7 @@ import {
 // Opt-in live suite of the two signed-in routes (ME-05, plan 04-01, D-02):
 // GET /user/companies/yplaces (the client's own places) and GET /user/records
 // (the client's bookings). Both are undocumented, so this suite records their
-// contract. It runs only with ALTEGIO_E2E=1 and ALTEGIO_E2E_USER=1, through
+// contract and parses each answer with its route schema. It runs only with ALTEGIO_E2E=1 and ALTEGIO_E2E_USER=1, through
 //
 //   ALTEGIO_E2E=1 ALTEGIO_E2E_USER=1 node --env-file=.env \
 //     ./node_modules/jest/bin/jest.js --testPathPatterns=user-routes.live --runInBand
@@ -135,7 +136,8 @@ describeLive(
     it(
       'GET /user/companies/yplaces answers 200 with a list of places',
       async () => {
-        await listOf('/user/companies/yplaces');
+        const places = await listOf('/user/companies/yplaces');
+        expect(userPlacesDataSchema.safeParse(places).success).toBe(true);
         expect(recordings.map((entry) => entry.route)).toContain(
           'user_yplaces'
         );
@@ -146,7 +148,8 @@ describeLive(
     it(
       'GET /user/records answers 200 with a list of records',
       async () => {
-        await listOf('/user/records');
+        const records = await listOf('/user/records');
+        expect(userRecordsDataSchema.safeParse(records).success).toBe(true);
         expect(recordings.map((entry) => entry.route)).toContain(
           'user_records'
         );

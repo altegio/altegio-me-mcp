@@ -8,6 +8,8 @@ import {
   servicesDataSchema,
   teamMembersDataSchema,
   timeSlotsDataSchema,
+  userPlacesDataSchema,
+  userRecordsDataSchema,
 } from '../schemas.js';
 import {
   createRecordingFetch,
@@ -62,6 +64,8 @@ const DATA_SCHEMAS: DataSchemas = {
   book_staff: teamMembersDataSchema,
   book_dates: datesDataSchema,
   book_times: timeSlotsDataSchema,
+  user_yplaces: userPlacesDataSchema,
+  user_records: userRecordsDataSchema,
 };
 
 const TEAM_MEMBER_NAME = /^Team member \d+$/;
@@ -159,7 +163,7 @@ function unsanitizedValues(
       return isEmptyOr(item, SANITIZED_ID) ? [] : [here];
     }
     if (user && isHashKey(key)) {
-      return isEmptyOr(item, SANITIZED_TEXT) ? [] : [here];
+      return item === '' || isEmptyOr(item, SANITIZED_TEXT) ? [] : [here];
     }
     if (user && (SANITIZED_KEYS.personIds as readonly string[]).includes(key)) {
       return isEmptyOr(item, SANITIZED_ID) ? [] : [here];
@@ -1202,5 +1206,62 @@ describe('createRecordingFetch on the signed-in routes', () => {
     expect(text).not.toContain('Real Person');
     expect(text).not.toContain('a1b2c3d4e5f6');
     expect(recorded[0]?.data).toMatchObject([{ id: 1 }]);
+  });
+});
+
+describe('contract fixtures of the signed-in routes', () => {
+  const read = (route: string): Record<string, { body: { data: unknown } }> =>
+    JSON.parse(
+      readFileSync(
+        join(process.cwd(), 'src', 'booking', '__tests__', 'fixtures', route),
+        'utf8'
+      )
+    ) as Record<string, { body: { data: unknown } }>;
+
+  it('parse with the route schemas in every scenario', () => {
+    const places = read('user_yplaces.json');
+    const records = read('user_records.json');
+    expect(Object.keys(places)).toEqual(['default', 'empty']);
+    expect(Object.keys(records)).toEqual(['default', 'empty']);
+    for (const scenario of Object.values(places)) {
+      expect(userPlacesDataSchema.safeParse(scenario.body.data).success).toBe(
+        true
+      );
+    }
+    for (const scenario of Object.values(records)) {
+      expect(userRecordsDataSchema.safeParse(scenario.body.data).success).toBe(
+        true
+      );
+    }
+  });
+
+  it('use the location, service and team member ids of the default book_* fixtures and carry the bait values', () => {
+    const places = userPlacesDataSchema.parse(
+      read('user_yplaces.json').default?.body.data
+    );
+    expect(places.map((place) => place.id)).toEqual([722227, 726120]);
+    const records = userRecordsDataSchema.parse(
+      read('user_records.json').default?.body.data
+    );
+    expect(records.map((record) => record.id)).toEqual([1, 2, 3, 4, 5]);
+    const text = readFileSync(
+      join(
+        process.cwd(),
+        'src',
+        'booking',
+        '__tests__',
+        'fixtures',
+        'user_records.json'
+      ),
+      'utf8'
+    );
+    for (const bait of [
+      '+15550000001',
+      'Fixture Client',
+      'fixture.client@example.invalid',
+      'fixture-hash-0001',
+    ]) {
+      expect(text).toContain(bait);
+    }
   });
 });
