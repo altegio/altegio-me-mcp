@@ -1,39 +1,61 @@
 // Load script for OPS-07 (D-03). Run it through npm:
 //
+//   npm run loadtest -- --scenario=sim
 //   npm run loadtest -- --scenario=peak     --start-container=IMAGE [--duration-sec=180]
 //   npm run loadtest -- --scenario=edge     --start-container=IMAGE
 //   npm run loadtest -- --scenario=deadline --start-container=IMAGE
-//   npm run loadtest -- --scenario=live     --target=BASE_URL --confirm-announced
+//   npm run loadtest -- --scenario=live     --target=https://mcp.alteg.io/me --confirm-announced
 //
 // Flags:
-//   --scenario=peak|edge|deadline|live  what to run (required)
+//   --scenario=sim|peak|edge|deadline|live  what to run (required)
+//                             sim: tier 1, the production gate on a simulated clock
+//                             (no container, no network; only --out is accepted)
 //   --start-container=IMAGE   peak, edge, deadline: start IMAGE with NODE_ENV=test,
-//                             PROXY_AUTH=required, a random 64-hex proxy key, a canary
+//                             PROXY_AUTH=required, CALLER_AUTH=optional (the load
+//                             generator sends no partner token, as scripts/smoke.sh;
+//                             the caller check has its own tests and does not touch
+//                             the gate), a random 64-hex proxy key, a canary
 //                             partner token and ALTEGIO_API_BASE pointing at the mock
 //                             upstream on this host (--add-host=host.docker.internal:
 //                             host-gateway), and stop it afterwards
 //   --target=URL              peak, edge, deadline: the loopback port to publish the
-//                             container on (default: a free port). live: base URL of
-//                             the service; requests go to <URL>/mcp
+//                             container on (default: a free port). live: the public route
+//                             (LIVE_PUBLIC_TARGET, https://mcp.alteg.io/me), where the
+//                             platform proxy signs; requests go to the URL as given,
+//                             nothing is appended. A run.app address is refused (it
+//                             answers 401 to unsigned requests), and so are plain http,
+//                             a query and a fragment
 //   --duration-sec=N          peak: seconds at the expected peak (default 180; a 2x step
 //                             of up to 60 s and a 10x step of up to 20 s follow). live: default 120, at most 180
 //   --out=DIR                 where results.json and container.log go
 //                             (default loadtest-output/<timestamp>/, git-ignored)
 //   --location=ID             live only: the location to read (default 726120)
-//   --rate=N                  live only: tool calls a second (default 1, at most 2.7,
-//                             90% of the gate's 3 upstream calls a second)
+//   --rate=N                  live only: tool calls a second (default 1, at least 0.1,
+//                             at most 1.35: 90% of the production gate's 1.5 upstream
+//                             calls a second, if each tool call were one upstream call;
+//                             business_list_services makes two, see live.ts). Each
+//                             live request times out after 30 s
 //   --confirm-announced       live only: required. The owner must have announced the
-//                             run first; it spends partner-token budget shared with
-//                             Altegio.Pro MCP
+//                             run first; it spends budget of the partner token of
+//                             developer account 2630, shared with the platform's
+//                             marketplace confirmations (docs/runbooks/operations.md)
 //
-// The first three scenarios never leave this machine: they drive a local container
-// and a mock upstream that measures its own start rate, with a random test key and a
-// canary token (T-03-39). The live scenario is for plan 03-16 only and stops at the
-// first sign of throttling or rejection (T-03-38); see live.ts.
+// The sim scenario and the first three container scenarios never leave this machine:
+// the container ones drive a local container and a mock upstream that measures its
+// own start rate, with a random test key and a canary token (T-03-39). The live
+// scenario stops at the first sign of throttling or rejection (T-03-38); a network
+// error or a timeout ends it as FAIL, with results.json written; see live.ts.
 //
-// Output: one line "PASS <scenario>: ..." or "FAIL <scenario>: ..." on stdout, a
-// results.json in the output directory, and for local scenarios the container log.
-// Exit code 0 on PASS, 1 on FAIL, 2 on a usage error.
+// Output: for sim, peak, edge and deadline, every check line and one summary line
+// starting with PASS, BELOW or FAIL, a results.json in the output directory (with the
+// verdict and the kind of each check), and for container scenarios the container log.
+//   PASS   every check passed
+//   BELOW  every safety check passed (the production allocation and the partner
+//          limits held, nothing failed unexpectedly) but the answered share at the
+//          expected peak is not more than 80%: the launch criterion is not met
+//   FAIL   a safety check failed
+// Exit code 0 on PASS, 1 on FAIL, 2 on a usage error, 3 on BELOW. The live scenario
+// prints PASS or FAIL and exits 0 or 1.
 
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -42,17 +64,51 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { signProxyRequest } from '../__tests__/helpers/sign-request.js';
-import { UsageError, USAGE, parseArgs, type LoadtestArgs } from './args.js';
+import {
+  UsageError,
+  USAGE,
+  localTarget,
+  parseArgs,
+  type LoadtestArgs,
+} from './args.js';
 import { runLive } from './live.js';
 import {
-  LIMIT_PER_MINUTE,
-  LIMIT_PER_SECOND,
+  slidingMax,
+  slidingMaxHalfOpen,
+  smallestGap,
   startMockUpstream,
   type MockUpstream,
   type RouteName,
   type UpstreamStats,
 } from './mock-upstream.js';
-import { PEAK_TOOL_CALLS_PER_SEC, type LoadToolName } from './profile.js';
+import {
+  GATE_CEILING_CALLS_PER_SEC,
+  PEAK_AGAINST_CEILING,
+  PEAK_HOUR_FACTOR,
+  PEAK_MONTHLY_TOOL_CALLS,
+  PEAK_TOOL_CALLS_PER_SEC,
+  SECONDS_PER_MONTH,
+  UPSTREAM_CALLS_PER_TOOL_CALL,
+  UPSTREAM_PEAK_CALLS_PER_SEC,
+  answeredPercentText,
+  type LoadToolName,
+} from './profile.js';
+import {
+  capacityMultiplier,
+  simulatePeak,
+  type SimulationResult,
+} from './simulate.js';
+import {
+  TIER2_ARRIVAL_TOLERANCE_MS,
+  VERDICT_EXIT_CODE,
+  allocationChecks,
+  answeredShareCheck,
+  check,
+  partnerLimitChecks,
+  verdictOf,
+  type Check,
+  type Verdict,
+} from './verdict.js';
 import {
   FIXTURE_DATE,
   FIXTURE_LOCATION_ID,
@@ -70,16 +126,6 @@ const CONTAINER_PORT = 8080;
 /** Not a pool address and not the platform's: an arbitrary egress hop for the X-Forwarded-For chain. */
 const EGRESS_HOP = '34.96.0.1';
 const DEADLINE_LIMIT_MS = 26_000;
-
-interface Check {
-  name: string;
-  pass: boolean;
-  detail: string;
-}
-
-function check(name: string, pass: boolean, detail: string): Check {
-  return { name, pass, detail };
-}
 
 function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -207,7 +253,9 @@ async function startHarness(
     args.target === null
       ? await freePort()
       : Number(new URL(args.target).port) || (await freePort());
-  const target = args.target ?? `http://127.0.0.1:${hostPort}`;
+  // IN-55: a target that names no port is probed on the port the container is
+  // published on, not on port 80.
+  const target = localTarget(args.target, hostPort);
   const key = randomBytes(32).toString('hex');
   const canaryToken = `loadtest-canary-${randomBytes(12).toString('hex')}`;
   const name = `altegio-loadtest-${randomBytes(4).toString('hex')}`;
@@ -225,6 +273,8 @@ async function startHarness(
     'NODE_ENV=test',
     '-e',
     'PROXY_AUTH=required',
+    '-e',
+    'CALLER_AUTH=optional',
     '-e',
     `MCP_PROXY_BACKEND_KEY=${key}`,
     '-e',
@@ -246,9 +296,16 @@ async function startHarness(
     .replace(/^sha256:/, '')
     .slice(0, 12);
 
+  // IN-55: the signal handlers go in as soon as the container exists, so a
+  // Ctrl-C during the 40 s health wait stops it instead of leaking it.
   let stopped: Promise<LogSummary> | null = null;
+  const onSignal = (): void => {
+    void stop().finally(() => process.exit(130));
+  };
   const stop = (): Promise<LogSummary> => {
     stopped ??= (async () => {
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
       const logs = docker(['logs', name]);
       const text = `${logs.stdout}${logs.stderr}`;
       await writeFile(join(outDir, 'container.log'), text);
@@ -259,6 +316,8 @@ async function startHarness(
     return stopped;
   };
 
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
   const harness: Harness = { target, key, mock, outDir, image, imageId, stop };
   try {
     let healthy = false;
@@ -414,7 +473,7 @@ interface PhaseResult {
   otherToolErrors: number;
   http429Pool: number;
   http429Single: number;
-  latencyMs: { p50: number; p95: number; max: number };
+  latencyMs: { p50: number; p95: number; max: number; mean: number };
   upstreamAfter: UpstreamStats;
 }
 
@@ -443,7 +502,7 @@ async function runPhase(
     otherToolErrors: 0,
     http429Pool: 0,
     http429Single: 0,
-    latencyMs: { p50: 0, p95: 0, max: 0 },
+    latencyMs: { p50: 0, p95: 0, max: 0, mean: 0 },
     upstreamAfter: harness.mock.stats(),
   };
   const latencies: number[] = [];
@@ -491,29 +550,62 @@ async function runPhase(
     p50: Math.round(percentile(latencies, 0.5)),
     p95: Math.round(percentile(latencies, 0.95)),
     max: Math.round(latencies[latencies.length - 1] ?? 0),
+    mean: Math.round(
+      latencies.reduce((sum, value) => sum + value, 0) /
+        Math.max(1, latencies.length)
+    ),
   };
   result.upstreamAfter = harness.mock.stats();
   return result;
 }
 
-function upstreamChecks(label: string, stats: UpstreamStats): Check[] {
-  return [
-    check(
-      `${label}: upstream starts in any 1 s <= ${LIMIT_PER_SECOND}`,
-      stats.max1s <= LIMIT_PER_SECOND,
-      `Max upstream starts in any 1 s: ${stats.max1s} (limit ${LIMIT_PER_SECOND})`
+// ---------------------------------------------------------------------------
+// The allocation figures and the arithmetic behind the verdict
+// ---------------------------------------------------------------------------
+
+/**
+ * The production allocation as measured from start times: the smallest gap and
+ * the half-open maxima over windows shortened by the tolerance (the same
+ * windows allocationChecks tests), plus the closed maxima for comparison.
+ */
+function allocationFigures(
+  startTimes: readonly number[],
+  toleranceMs: number
+): Record<string, number | null> {
+  return {
+    starts: startTimes.length,
+    toleranceMs,
+    smallestGapMs: smallestGap(startTimes),
+    halfOpen1s: slidingMaxHalfOpen(startTimes, 1000 - toleranceMs),
+    halfOpen60s: slidingMaxHalfOpen(startTimes, 60_000 - toleranceMs),
+    closed1s: slidingMax(startTimes, 1000),
+    closed60s: slidingMax(startTimes, 60_000),
+  };
+}
+
+/** The ceiling, the expected peak against it, and the monthly volume at which the peak hour saturates the gate. */
+function arithmetic(): Record<string, number> {
+  return {
+    gateCeilingCallsPerSec: GATE_CEILING_CALLS_PER_SEC,
+    upstreamCallsPerToolCall: UPSTREAM_CALLS_PER_TOOL_CALL,
+    upstreamPeakCallsPerSec: UPSTREAM_PEAK_CALLS_PER_SEC,
+    peakAgainstCeiling: PEAK_AGAINST_CEILING,
+    peakHourFactor: PEAK_HOUR_FACTOR,
+    saturationMonthlyToolCalls: Math.round(
+      (GATE_CEILING_CALLS_PER_SEC /
+        UPSTREAM_CALLS_PER_TOOL_CALL /
+        PEAK_HOUR_FACTOR) *
+        SECONDS_PER_MONTH
     ),
-    check(
-      `${label}: upstream starts in any 60 s <= ${LIMIT_PER_MINUTE}`,
-      stats.max60s <= LIMIT_PER_MINUTE,
-      `Max upstream starts in any 60 s: ${stats.max60s} (limit ${LIMIT_PER_MINUTE})`
-    ),
-    check(
-      `${label}: no upstream 429`,
-      stats.served429 === 0,
-      `Upstream 429 responses: ${stats.served429}`
-    ),
-  ];
+  };
+}
+
+function arithmeticLine(figures: Record<string, number>): string {
+  return (
+    `arithmetic: ceiling ${figures.gateCeilingCallsPerSec} upstream calls a second; ` +
+    `expected peak ${figures.upstreamPeakCallsPerSec!.toFixed(2)} (${figures.peakAgainstCeiling!.toFixed(2)} times the ceiling); ` +
+    `the peak hour saturates the gate above about ${figures.saturationMonthlyToolCalls} tool calls a month`
+  );
 }
 
 async function scenarioPeak(
@@ -554,7 +646,7 @@ async function scenarioPeak(
       `HTTP ${JSON.stringify(phase.httpStatus)}, other tool errors ${phase.otherToolErrors}, busy ${phase.busy}`
     );
   const checks: Check[] = [
-    ...upstreamChecks('1x', one.upstreamAfter),
+    ...partnerLimitChecks('1x', one.upstreamAfter),
     check(
       '1x: no HTTP 429 for the 30 pool addresses',
       one.http429Pool === 0,
@@ -566,12 +658,127 @@ async function scenarioPeak(
         one.otherToolErrors === 0,
       `HTTP ${JSON.stringify(one.httpStatus)}, other tool errors ${one.otherToolErrors}`
     ),
-    ...upstreamChecks('2x', two.upstreamAfter),
+    ...partnerLimitChecks('2x', two.upstreamAfter),
     shedInBand(two),
-    ...upstreamChecks('10x', ten.upstreamAfter),
+    ...partnerLimitChecks('10x', ten.upstreamAfter),
     shedInBand(ten),
+    // The production allocation over the whole run, from the mock's own start
+    // times, with the fixed tier 2 arrival tolerance (verdict.ts).
+    ...allocationChecks(
+      'run',
+      harness.mock.startTimes(),
+      TIER2_ARRIVAL_TOLERANCE_MS
+    ),
+    // The launch criterion at the expected peak: a capacity check, so a gate
+    // that sheds most calls prints BELOW, never PASS.
+    answeredShareCheck('1x', one.ok, one.sent),
   ];
-  return { checks, extra: { phases: [one, two, ten] } };
+  return {
+    checks,
+    extra: {
+      phases: [one, two, ten],
+      allocation: allocationFigures(
+        harness.mock.startTimes(),
+        TIER2_ARRIVAL_TOLERANCE_MS
+      ),
+      arithmetic: arithmetic(),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// sim (tier 1 as a report)
+// ---------------------------------------------------------------------------
+
+const SIM_MULTIPLIERS = [1, 2, 10] as const;
+const SIM_MINUTES = 10;
+const SIM_SEED = 1;
+
+function simSummary(result: SimulationResult): Record<string, unknown> {
+  return {
+    multiplier: result.multiplier,
+    minutes: result.minutes,
+    toolCalls: result.toolCalls,
+    ok: result.ok,
+    busy: result.busy,
+    answered: answeredPercentText(result.ok, result.toolCalls),
+    unexpected: result.unexpected,
+    upstream: result.upstream,
+    allocation: allocationFigures(result.startTimes, 0),
+  };
+}
+
+async function scenarioSim(): Promise<{ checks: Check[]; extra: unknown }> {
+  const checks: Check[] = [];
+  const steps: Record<string, unknown>[] = [];
+  for (const multiplier of SIM_MULTIPLIERS) {
+    const label = `${multiplier}x`;
+    const result = await simulatePeak({
+      multiplier,
+      minutes: SIM_MINUTES,
+      seed: SIM_SEED,
+    });
+    const figures = allocationFigures(result.startTimes, 0);
+    say(
+      `sim ${label}: ${result.toolCalls} tool calls in ${result.minutes} simulated minutes, ` +
+        `answered ${result.ok} (${answeredPercentText(result.ok, result.toolCalls)}), busy ${result.busy}, ` +
+        `upstream starts ${result.upstream.starts}, ` +
+        `max in 1 s ${result.upstream.max1s} closed / ${figures.halfOpen1s} half-open, ` +
+        `max in 60 s ${result.upstream.max60s} closed / ${figures.halfOpen60s} half-open, ` +
+        `smallest gap ${figures.smallestGapMs} ms, upstream 429 ${result.upstream.served429}`
+    );
+    checks.push(
+      ...partnerLimitChecks(label, result.upstream),
+      ...allocationChecks(label, result.startTimes, 0),
+      check(
+        `${label}: no unexpected tool error`,
+        result.unexpected.length === 0,
+        `Unexpected tool errors: ${JSON.stringify(result.unexpected)}`
+      ),
+      check(
+        `${label}: answered + busy = tool calls`,
+        result.ok + result.busy === result.toolCalls,
+        `answered ${result.ok} + busy ${result.busy} = ${result.ok + result.busy} of ${result.toolCalls}`
+      )
+    );
+    if (multiplier === 1) {
+      checks.push(answeredShareCheck('1x', result.ok, result.toolCalls));
+    }
+    steps.push(simSummary(result));
+  }
+
+  const capacity = await capacityMultiplier();
+  const monthly = Math.round(capacity.multiplier * PEAK_MONTHLY_TOOL_CALLS);
+  const shareAt =
+    capacity.at === null
+      ? 'no step met the threshold'
+      : `${answeredPercentText(capacity.at.ok, capacity.at.toolCalls)} answered`;
+  const shareAbove =
+    capacity.above === null
+      ? `no step up to ${capacity.multiplier}x fell short`
+      : `${capacity.above.multiplier}x answered ${answeredPercentText(capacity.above.ok, capacity.above.toolCalls)}`;
+  say(
+    `sim capacity: ${capacity.multiplier}x the expected peak (about ${monthly} tool calls a month at the assumed ${PEAK_HOUR_FACTOR}x peak hour) ` +
+      `is the largest step of 1/${capacity.stepsPerUnit} that answers more than 80% (${shareAt}); next step: ${shareAbove}`
+  );
+  const figures = arithmetic();
+  say(`sim ${arithmeticLine(figures)}`);
+  return {
+    checks,
+    extra: {
+      seed: SIM_SEED,
+      minutes: SIM_MINUTES,
+      steps,
+      capacity: {
+        multiplier: capacity.multiplier,
+        stepsPerUnit: capacity.stepsPerUnit,
+        monthlyToolCalls: monthly,
+        at: capacity.at === null ? null : simSummary(capacity.at),
+        above: capacity.above === null ? null : simSummary(capacity.above),
+      },
+      arithmetic: figures,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -824,6 +1031,9 @@ async function scenarioDeadline(
 
 interface ScenarioOutcome {
   scenario: string;
+  /** PASS, BELOW or FAIL (verdict.ts). */
+  verdict: Verdict;
+  /** True when every check passed. */
   pass: boolean;
   checks: Check[];
   [key: string]: unknown;
@@ -834,12 +1044,9 @@ async function runLocal(
 ): Promise<{ outcome: ScenarioOutcome; outDir: string }> {
   const stalls: Partial<Record<RouteName, number>> =
     args.scenario === 'deadline' ? { [STALLED_ROUTE]: STALL_MS } : {};
+  // The harness installs its own SIGINT and SIGTERM handlers as soon as the
+  // container exists (IN-55) and removes them in stop().
   const harness = await startHarness(args, stalls);
-  const onSignal = (): void => {
-    void harness.stop().finally(() => process.exit(130));
-  };
-  process.once('SIGINT', onSignal);
-  process.once('SIGTERM', onSignal);
   const startedAt = new Date().toISOString();
   let ran: { checks: Check[]; extra: unknown };
   try {
@@ -852,12 +1059,11 @@ async function runLocal(
   }
   const mock = harness.mock.stats();
   const container = await harness.stop();
-  process.off('SIGINT', onSignal);
-  process.off('SIGTERM', onSignal);
   return {
     outDir: harness.outDir,
     outcome: {
       scenario: args.scenario,
+      verdict: verdictOf(ran.checks),
       pass: ran.checks.every((entry) => entry.pass),
       startedAt,
       finishedAt: new Date().toISOString(),
@@ -870,6 +1076,43 @@ async function runLocal(
       ...(ran.extra as Record<string, unknown>),
     },
   };
+}
+
+async function runSim(
+  args: LoadtestArgs
+): Promise<{ outcome: ScenarioOutcome; outDir: string }> {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const outDir = args.out ?? join('loadtest-output', stamp);
+  await mkdir(outDir, { recursive: true });
+  const startedAt = new Date().toISOString();
+  const ran = await scenarioSim();
+  return {
+    outDir,
+    outcome: {
+      scenario: 'sim',
+      verdict: verdictOf(ran.checks),
+      pass: ran.checks.every((entry) => entry.pass),
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      commit: git(['rev-parse', '--short', 'HEAD']),
+      checks: ran.checks,
+      ...(ran.extra as Record<string, unknown>),
+    },
+  };
+}
+
+/** The one summary line: PASS, BELOW (a capacity check fell short) or FAIL (a safety check failed). */
+function summaryLine(outcome: ScenarioOutcome, file: string): string {
+  const failed = outcome.checks.filter((entry) => !entry.pass);
+  if (outcome.verdict === 'PASS') {
+    return `PASS ${outcome.scenario}: ${outcome.checks.length} checks passed (${file})`;
+  }
+  if (outcome.verdict === 'BELOW') {
+    const short = failed[0]!;
+    return `BELOW ${outcome.scenario}: every safety check passed; ${short.name}: ${short.detail} (${file})`;
+  }
+  const firstSafety = failed.find((entry) => entry.kind === 'safety');
+  return `FAIL ${outcome.scenario}: ${failed.length} of ${outcome.checks.length} checks failed, first: ${firstSafety?.name ?? failed[0]?.name ?? ''} (${file})`;
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -907,19 +1150,15 @@ async function main(argv: string[]): Promise<number> {
     return result.status === 'PASS' ? 0 : 1;
   }
 
-  const { outcome, outDir } = await runLocal(args);
+  const { outcome, outDir } =
+    args.scenario === 'sim' ? await runSim(args) : await runLocal(args);
   const file = join(outDir, 'results.json');
   await writeFile(file, `${JSON.stringify(outcome, null, 2)}\n`);
-  const failed = outcome.checks.filter((entry) => !entry.pass);
   for (const entry of outcome.checks) {
     say(`${entry.pass ? 'ok  ' : 'FAIL'} ${entry.name}: ${entry.detail}`);
   }
-  say(
-    outcome.pass
-      ? `PASS ${args.scenario}: ${outcome.checks.length} checks passed (${file})`
-      : `FAIL ${args.scenario}: ${failed.length} of ${outcome.checks.length} checks failed, first: ${failed[0]?.name ?? ''} (${file})`
-  );
-  return outcome.pass ? 0 : 1;
+  say(summaryLine(outcome, file));
+  return VERDICT_EXIT_CODE[outcome.verdict];
 }
 
 main(process.argv.slice(2)).then(

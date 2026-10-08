@@ -9,7 +9,9 @@ import {
   LIVE_DEFAULT_RATE_PER_SEC,
   LIVE_MAX_DURATION_SEC,
   LIVE_MAX_RATE_PER_SEC,
+  LIVE_PUBLIC_TARGET,
   UsageError,
+  localTarget,
   parseArgs,
 } from '../args.js';
 
@@ -90,6 +92,40 @@ describe('the live scenario guard', () => {
     });
   });
 
+  it('names the documented public route as the live target', () => {
+    expect(LIVE_PUBLIC_TARGET).toBe('https://mcp.alteg.io/me');
+  });
+
+  it('removes one trailing slash and keeps the path as given', () => {
+    const target = (url: string): string | null =>
+      parseArgs(['--scenario=live', `--target=${url}`, '--confirm-announced'])
+        .target;
+    expect(target('https://svc.example/me/')).toBe('https://svc.example/me');
+    expect(target('https://mcp.alteg.io/me')).toBe('https://mcp.alteg.io/me');
+    expect(target('https://svc.example')).toBe('https://svc.example');
+  });
+
+  it.each([
+    ['plain http', 'http://svc.example/me', 'https'],
+    ['a query', 'https://svc.example/me?x=1', 'query'],
+    ['a fragment', 'https://svc.example/me#a', 'fragment'],
+    ['a run.app host', 'https://svc-abc.a.run.app', 'run.app'],
+  ])('refuses a live target with %s', (_label, url, text) => {
+    expect(
+      refused(['--scenario=live', `--target=${url}`, '--confirm-announced'])
+    ).toContain(text);
+  });
+
+  it.each([
+    'http://svc.example/me',
+    'https://svc.example/me?x=1',
+    'https://svc-abc.a.run.app',
+  ])('asks for --confirm-announced first, whatever the target (%s)', (url) => {
+    expect(refused(['--scenario=live', `--target=${url}`])).toContain(
+      '--confirm-announced'
+    );
+  });
+
   it('does not start a container', () => {
     expect(
       refused([
@@ -158,6 +194,50 @@ describe('the local scenarios', () => {
     expect(refused([...base, '--confirm-announced'])).toContain('live');
     expect(refused([...base, '--rate=2'])).toContain('live');
     expect(refused([...base, '--location=1'])).toContain('live');
+  });
+});
+
+describe('the sim scenario (tier 1 as a report)', () => {
+  it('needs no container and no target', () => {
+    expect(parseArgs(['--scenario=sim'])).toMatchObject({
+      scenario: 'sim',
+      startContainer: null,
+      target: null,
+      confirmAnnounced: false,
+    });
+  });
+
+  it('accepts --out', () => {
+    expect(parseArgs(['--scenario=sim', '--out=some/dir']).out).toBe(
+      'some/dir'
+    );
+  });
+
+  it.each([
+    ['--start-container=img:1'],
+    ['--target=http://127.0.0.1:18080'],
+    ['--duration-sec=60'],
+    ['--location=1'],
+    ['--rate=1'],
+    ['--confirm-announced'],
+  ])('refuses %s and says that sim runs on this machine only', (flag) => {
+    expect(refused(['--scenario=sim', flag])).toContain('this machine only');
+  });
+});
+
+describe('localTarget (IN-55)', () => {
+  it('publishes on the given port when no target is named', () => {
+    expect(localTarget(null, 4321)).toBe('http://127.0.0.1:4321');
+  });
+
+  it('adds the published port to a target that names none', () => {
+    expect(localTarget('http://127.0.0.1', 4321)).toBe('http://127.0.0.1:4321');
+  });
+
+  it('keeps a target that names its port', () => {
+    expect(localTarget('http://localhost:5000', 5000)).toBe(
+      'http://localhost:5000'
+    );
   });
 });
 

@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
-import { startMockUpstream, slidingMax } from '../mock-upstream.js';
+import {
+  createUpstreamCore,
+  slidingMax,
+  slidingMaxHalfOpen,
+  smallestGap,
+  startMockUpstream,
+} from '../mock-upstream.js';
 
 // The measuring mock upstream (OPS-07 precision, D-03): it counts request
 // starts from its own millisecond timestamps over closed sliding windows, so
@@ -40,6 +46,80 @@ describe('slidingMax', () => {
   it('is 0 for no starts and 1 for a lone start', () => {
     expect(slidingMax([], 1000)).toBe(0);
     expect(slidingMax([42], 60_000)).toBe(1);
+  });
+});
+
+describe('slidingMaxHalfOpen', () => {
+  it('counts a half-open interval: starts 500 ms apart put 2, not 3, in one second', () => {
+    expect(slidingMaxHalfOpen([0, 500, 1000], 1000)).toBe(2);
+    expect(slidingMax([0, 500, 1000], 1000)).toBe(3);
+  });
+
+  it('counts a start 999 ms after the first inside the window', () => {
+    expect(slidingMaxHalfOpen([0, 999], 1000)).toBe(2);
+  });
+
+  it('counts 90 starts 500 ms apart plus a 91st at exactly 60,000 ms as 90 half-open and 91 closed', () => {
+    const times = Array.from({ length: 90 }, (_, index) => index * 500);
+    times.push(60_000);
+    expect(slidingMaxHalfOpen(times, 60_000)).toBe(90);
+    expect(slidingMax(times, 60_000)).toBe(91);
+  });
+
+  it('counts the 91st start at 59,999 ms inside the half-open minute', () => {
+    const times = Array.from({ length: 90 }, (_, index) => index * 500);
+    times.push(59_999);
+    expect(slidingMaxHalfOpen(times, 60_000)).toBe(91);
+  });
+
+  it('does not depend on the input order and is 0 for no starts', () => {
+    expect(slidingMaxHalfOpen([1000, 0, 500], 1000)).toBe(2);
+    expect(slidingMaxHalfOpen([], 1000)).toBe(0);
+    expect(slidingMaxHalfOpen([42], 60_000)).toBe(1);
+  });
+});
+
+describe('smallestGap', () => {
+  it('is the smallest difference between consecutive starts', () => {
+    expect(smallestGap([0, 500, 1000])).toBe(500);
+    expect(smallestGap([0, 499])).toBe(499);
+    expect(smallestGap([0, 1000, 1499, 5000])).toBe(499);
+  });
+
+  it('does not depend on the input order', () => {
+    expect(smallestGap([1000, 0, 500])).toBe(500);
+  });
+
+  it('is null for fewer than two starts', () => {
+    expect(smallestGap([42])).toBeNull();
+    expect(smallestGap([])).toBeNull();
+  });
+});
+
+describe('startTimes', () => {
+  it('returns a copy of every start the core received, refused ones included', () => {
+    let now = 5_000;
+    const core = createUpstreamCore(() => now);
+    for (let index = 0; index < 6; index += 1) {
+      core.start('GET', '/api/v1/company/722227');
+    }
+    now = 5_100;
+    core.start('GET', '/api/v1/company/722227');
+    const times = core.startTimes();
+    expect(times).toEqual([5_000, 5_000, 5_000, 5_000, 5_000, 5_000, 5_100]);
+    // 6 starts in one millisecond: the sixth was refused and still counts.
+    expect(core.stats().served429).toBeGreaterThan(0);
+    times.push(1);
+    expect(core.startTimes()).toHaveLength(7);
+  });
+
+  it('is returned by the HTTP mock too', async () => {
+    let now = 10_000;
+    const mock = await mockWith({ now: () => now });
+    await get(mock.url, '/company/722227');
+    now = 10_500;
+    await get(mock.url, '/company/722227');
+    expect(mock.startTimes()).toEqual([10_000, 10_500]);
   });
 });
 

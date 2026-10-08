@@ -190,10 +190,19 @@ describe('docs/loadtest/results.md (OPS-07)', () => {
     }
   });
 
-  it('keeps the live run marked as not run until plan 03-16 runs it', () => {
-    expect(loadtestSection('## Tier 3: live, bounded')).toMatch(
-      /^Status: (not run yet \(plan 03-16\)|run \d{4}-\d{2}-\d{2})/m
-    );
+  it('keeps the live run status honest: not run, run on a date, or deferred on a date', () => {
+    const text = loadtestSection('## Tier 3: live, bounded');
+    const status =
+      /^Status: (not run yet \(plan 03-16\)|run \d{4}-\d{2}-\d{2}|deferred \d{4}-\d{2}-\d{2})/m.exec(
+        text
+      );
+    expect(status).not.toBeNull();
+    if (status?.[1]?.startsWith('deferred')) {
+      // A deferral must carry its reason (the platform contract in
+      // operations.md, the dedicated partner token B3) and its trigger.
+      expect(text).toContain('B3');
+      expect(text).toContain('operations.md');
+    }
   });
 
   it('records the dedicated partner type as a known deviation (D-03, B3)', () => {
@@ -201,5 +210,57 @@ describe('docs/loadtest/results.md (OPS-07)', () => {
     expect(text).toContain('D-03');
     expect(text).toContain('B3');
     expect(text).toContain('2630');
+  });
+});
+
+// The recorded OPS-08 run (plan 03-17): claude.ai itself drove the
+// known-business flow through the public route. The section must name the
+// date, the revision and the commit, hold one row per step, and carry an owner
+// review that is not pending, so the proof cannot be dropped or left blank.
+const CONNECTOR_RUN_DOC = readFileSync(
+  join(process.cwd(), 'docs', 'research', 'claude-connector-run.md'),
+  'utf8'
+);
+
+const CONNECTOR_STEP_IDS = [
+  'business_get',
+  'business_list_services',
+  'business_list_team_members',
+  'business_list_dates',
+  'business_list_time_slots',
+  'book_check',
+  'widget',
+] as const;
+
+function connectorRunResults(): string {
+  const heading = '## Connector run results\n';
+  const start = CONNECTOR_RUN_DOC.indexOf(heading);
+  if (start === -1) return '';
+  const rest = CONNECTOR_RUN_DOC.slice(start + heading.length);
+  const next = rest.search(/^## /m);
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
+describe('docs/research/claude-connector-run.md connector run results (OPS-08)', () => {
+  const results = connectorRunResults();
+
+  it('has the section ## Connector run results', () => {
+    expect(CONNECTOR_RUN_DOC).toContain('\n## Connector run results\n');
+  });
+
+  it('names the run date and time range, the revision and the commit', () => {
+    expect(results).toMatch(/^Run: \d{4}-\d{2}-\d{2} \d{2}:\d{2}/m);
+    expect(results).toMatch(/^Revision: \S/m);
+    expect(results).toMatch(/^Commit: [0-9a-f]{7}/m);
+  });
+
+  it.each(CONNECTOR_STEP_IDS)('has a table row for the step %s', (id) => {
+    expect(results).toMatch(new RegExp(`^\\| ${id} \\|`, 'm'));
+  });
+
+  it('records a completed owner review', () => {
+    const review = /^Owner review: (.+)$/m.exec(results);
+    expect(review).not.toBeNull();
+    expect(review?.[1]).not.toMatch(/^pending\b/i);
   });
 });
