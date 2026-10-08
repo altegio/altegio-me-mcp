@@ -1701,3 +1701,124 @@ describe('the profile and the create route (ADR 0006, D-02)', () => {
     expect(upstream.calls).toEqual([]);
   });
 });
+
+describe('create rejections and the anti-fraud signals (ADR 0006, D-02)', () => {
+  const USER_TOKEN = 'client-user-token-0001-abcdef';
+  const SELECTION = {
+    serviceIds: [10303531],
+    teamMemberId: 2098145,
+    datetime: '2099-01-12T11:00:00+03:00',
+  };
+  const PROFILE = {
+    fullname: 'Fixture Client',
+    phone: '+15550000001',
+    email: null,
+  };
+
+  function createWith(scenario: string): {
+    client: BookingClient;
+    upstream: ReturnType<typeof fakeFetch>;
+  } {
+    const upstream = fakeFetch([
+      {
+        method: 'POST',
+        path: `/book_record/${LOCATION}`,
+        reply: loadFixture('book_record_create', scenario),
+      },
+    ]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    return { client, upstream };
+  }
+
+  async function createError(scenario: string): Promise<UpstreamError> {
+    const { client } = createWith(scenario);
+    return upstreamError(
+      client.createBooking(LOCATION, SELECTION, PROFILE, {
+        userToken: USER_TOKEN,
+      })
+    );
+  }
+
+  it('maps a 412 to the anti_fraud kind with its status', async () => {
+    const error = await createError('anti_fraud_412');
+    expect(error.kind).toBe('anti_fraud');
+    expect(error.status).toBe(412);
+    expect(error.route).toBe('/book_record/{location_id}');
+  });
+
+  it.each(['fake_201'])(
+    'maps the %s answer, a 201 that names no booking, to anti_fraud with status 201',
+    async (scenario) => {
+      const error = await createError(scenario);
+      expect(error.kind).toBe('anti_fraud');
+      expect(error.status).toBe(201);
+    }
+  );
+
+  it('maps a 201 whose entry has record id 0 to anti_fraud', async () => {
+    const upstream = fakeFetch([
+      {
+        method: 'POST',
+        path: `/book_record/${LOCATION}`,
+        reply: {
+          status: 201,
+          body: { success: true, data: [{ id: 1, record_id: 0 }], meta: [] },
+        },
+      },
+    ]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    const error = await upstreamError(
+      client.createBooking(LOCATION, SELECTION, PROFILE, {
+        userToken: USER_TOKEN,
+      })
+    );
+    expect(error.kind).toBe('anti_fraud');
+  });
+
+  it('keeps the codes of a 403 with code 434 and names the user as the credential', async () => {
+    const error = await createError('blacklisted_434');
+    expect(error.kind).toBe('unauthorized');
+    expect(error.status).toBe(403);
+    expect(error.codes).toEqual([434]);
+    expect(error.credential).toBe('user');
+  });
+
+  it.each([
+    ['taken_433', 433],
+    ['no_team_member_436', 436],
+    ['overlap_437', 437],
+    ['phone_431', 431],
+    ['name_435', 435],
+    ['code_432', 432],
+  ])('keeps the code of the 422 scenario %s', async (scenario, code) => {
+    const error = await createError(scenario);
+    expect(error.kind).toBe('rejected');
+    expect(error.codes).toEqual([code]);
+  });
+
+  it('names the required fields of a 422 whose errors are keyed by field, and no code', async () => {
+    const error = await createError('required_email_422');
+    expect(error.kind).toBe('rejected');
+    expect(error.codes).toEqual([]);
+    expect(error.requiredFields).toEqual(['email']);
+  });
+
+  it('names no required field for a list of coded errors', async () => {
+    const error = await createError('taken_433');
+    expect(error.requiredFields).toEqual([]);
+  });
+
+  it('keeps the upstream message out of the error text', async () => {
+    const error = await createError('taken_433');
+    expect(error.message).not.toContain('Fixture Client');
+    expect(error.message).not.toContain('+15550000001');
+  });
+});
