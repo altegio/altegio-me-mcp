@@ -9,10 +9,12 @@ import {
 } from '../booking/__tests__/helpers/fake-fetch.js';
 import {
   DIRECT_USER_TOKEN_HEADER,
+  SIGNED_PARTNER_TOKEN_HEADER,
   SIGNED_KIND_HEADER,
   SIGNED_SCOPE_HEADER,
   SIGNED_USER_TOKEN_HEADER,
 } from '../security/caller-auth.js';
+import { partnerIdOf } from '../security/partner-token.js';
 import { PROXY_AUTH_HEADER } from '../security/proxy-auth.js';
 import { defineTool, type DefinedTool } from '../tools/factory.js';
 import { productionTools } from '../tools/registry.js';
@@ -21,6 +23,7 @@ import {
   CANARY_SECRET,
   CLIENT_USER_TOKEN,
   PARTNER_TOKEN,
+  PARTNER_TOKEN_UNCHECKABLE,
   closeAllApps,
   postMcp,
   startApp,
@@ -410,5 +413,131 @@ describe('tier separation: discover for everyone, read for a signed-in client', 
       expect(body.result?.isError === true).toBe(refused);
     }
     expect(bookHandlerRuns).toBe(0);
+  });
+});
+
+describe('a partner token that comes with the client sign-in', () => {
+  const placesAuthorization = (upstream: FakeFetch): (string | null)[] =>
+    upstream.calls.map((call) => call.headers.get('authorization'));
+
+  function signedWithPartner(token: string): Record<string, string> {
+    return signed({
+      [SIGNED_KIND_HEADER]: 'client',
+      [SIGNED_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN,
+      [SIGNED_SCOPE_HEADER]: 'mcp:me:read',
+      [SIGNED_PARTNER_TOKEN_HEADER]: token,
+    });
+  }
+
+  it('is validated once and backs the call next to the user token', async () => {
+    const validator = stubPartnerValidator();
+    const { harness, upstream } = await start('default', {
+      proxyAuth: { keys: () => [KEY] },
+      callerAuth: { mode: 'required', validator },
+    });
+    const res = await postMcp(
+      harness.baseUrl,
+      toolCallBody('me_list_places', {}),
+      signedWithPartner(PARTNER_TOKEN)
+    );
+    const text = await res.text();
+    const body = JSON.parse(text) as RpcResult;
+    expect(body.result?.isError).not.toBe(true);
+    expect(validator.checked).toEqual([PARTNER_TOKEN]);
+    expect(placesAuthorization(upstream)).toEqual([
+      `Bearer ${PARTNER_TOKEN}, User ${CLIENT_USER_TOKEN}`,
+    ]);
+    const [line] = await waitForLogs(harness, 1);
+    expect(line).toMatchObject({
+      caller: 'client',
+      partner_id: partnerIdOf(PARTNER_TOKEN),
+    });
+    expect(text).not.toContain(PARTNER_TOKEN);
+    expect(JSON.stringify(harness.logs)).not.toContain(PARTNER_TOKEN);
+    expect(JSON.stringify(harness.logs)).not.toContain(CLIENT_USER_TOKEN);
+  });
+
+  it('refuses an invalid partner token next to the client with 401', async () => {
+    const { harness, upstream } = await start('default', BEHIND_PROXY);
+    const res = await postMcp(
+      harness.baseUrl,
+      toolCallBody('me_list_places', {}),
+      signedWithPartner('made-up-token-0001')
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: 'invalid_token' });
+    expect(upstream.calls).toEqual([]);
+  });
+
+  it('answers 503 with Retry-After when the partner token cannot be checked', async () => {
+    const { harness } = await start('default', BEHIND_PROXY);
+    const res = await postMcp(
+      harness.baseUrl,
+      toolCallBody('me_list_places', {}),
+      signedWithPartner(PARTNER_TOKEN_UNCHECKABLE)
+    );
+    expect(res.status).toBe(503);
+    expect(res.headers.get('retry-after')).toBe('5');
+  });
+
+  it('is read from Authorization next to a direct user token in optional mode', async () => {
+    const { harness, upstream } = await start('default');
+    const res = await postMcp(
+      harness.baseUrl,
+      toolCallBody('me_list_places', {}),
+      {
+        [DIRECT_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN,
+        authorization: `Bearer ${PARTNER_TOKEN}`,
+      }
+    );
+    const body = (await res.json()) as RpcResult;
+    expect(body.result?.isError).not.toBe(true);
+    expect(placesAuthorization(upstream)).toEqual([
+      `Bearer ${PARTNER_TOKEN}, User ${CLIENT_USER_TOKEN}`,
+    ]);
+    const [line] = await waitForLogs(harness, 1);
+    expect(line).toMatchObject({
+      caller: 'client',
+      partner_id: partnerIdOf(PARTNER_TOKEN),
+    });
+  });
+});
+
+describe('a refused sign-in upstream', () => {
+  it('becomes an in-band error naming the client sign-in, never retried', async () => {
+    const upstream = fakeFetch([
+      {
+        method: 'GET',
+        path: PLACES_PATH,
+        reply: {
+          status: 401,
+          body: {
+            success: false,
+            meta: { message: `User ${CLIENT_USER_TOKEN} expired` },
+          },
+        },
+      },
+    ]);
+    const harness = await startApp({
+      tools: productionTools,
+      toolDeps: {
+        booking: new BookingClient({
+          base: API_BASE,
+          token: CANARY_SECRET,
+          fetch: upstream.fetch,
+        }),
+      },
+    });
+    const res = await postMcp(
+      harness.baseUrl,
+      toolCallBody('me_list_places', {}),
+      { [DIRECT_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN }
+    );
+    const text = await res.text();
+    const body = JSON.parse(text) as RpcResult;
+    expect(body.result?.isError).toBe(true);
+    expect(body.result?.content?.[0]?.text).toContain("client's sign-in");
+    expect(text).not.toContain(CLIENT_USER_TOKEN);
+    expect(upstream.calls).toHaveLength(1);
   });
 });

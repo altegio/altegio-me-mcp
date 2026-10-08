@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { z } from 'zod';
 import {
+  CLIENT_USER_TOKEN,
   PARTNER_TOKEN,
   PARTNER_TOKEN_UNCHECKABLE,
   closeAllApps,
@@ -17,9 +18,13 @@ import { defineTool, type DefinedTool } from '../../tools/factory.js';
 import { SCOPE_BOOK } from '../../tools/scopes.js';
 import {
   DIRECT_PARTNER_TOKEN_HEADER,
+  DIRECT_USER_TOKEN_HEADER,
   SIGNED_KIND_HEADER,
   SIGNED_PARTNER_TOKEN_HEADER,
+  SIGNED_SCOPE_HEADER,
+  SIGNED_USER_TOKEN_HEADER,
   presentedPartnerToken,
+  presentedUserToken,
 } from '../caller-auth.js';
 import { partnerIdOf } from '../partner-token.js';
 import { PROXY_AUTH_HEADER } from '../proxy-auth.js';
@@ -391,5 +396,274 @@ describe('per-tool scopes in tools/call', () => {
     const body = (await res.json()) as RpcResponse;
     expect(body.result?.isError).not.toBe(true);
     expect(body.result?.structuredContent).toEqual({ items: ['a'], count: 1 });
+  });
+});
+
+describe('presentedUserToken', () => {
+  it('reads only the signed header of the client kind behind the proxy', () => {
+    expect(
+      presentedUserToken(
+        {
+          [SIGNED_KIND_HEADER]: 'client',
+          [SIGNED_USER_TOKEN_HEADER]: ` ${CLIENT_USER_TOKEN} `,
+          [SIGNED_SCOPE_HEADER]: 'mcp:me:read  mcp:me:book',
+        },
+        true
+      )
+    ).toEqual({
+      kind: 'token',
+      token: CLIENT_USER_TOKEN,
+      scopes: ['mcp:me:read', 'mcp:me:book'],
+    });
+    // An empty or absent scope list names no scope.
+    expect(
+      presentedUserToken(
+        {
+          [SIGNED_KIND_HEADER]: 'client',
+          [SIGNED_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN,
+        },
+        true
+      )
+    ).toEqual({ kind: 'token', token: CLIENT_USER_TOKEN, scopes: [] });
+  });
+
+  it('ignores the direct header and a token of another kind behind the proxy', () => {
+    expect(
+      presentedUserToken(
+        { [DIRECT_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN },
+        true
+      )
+    ).toEqual({ kind: 'none' });
+    expect(
+      presentedUserToken(
+        {
+          [SIGNED_KIND_HEADER]: 'partner',
+          [SIGNED_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN,
+        },
+        true
+      )
+    ).toEqual({ kind: 'none' });
+  });
+
+  it('reports a signed client kind without a token as missing', () => {
+    expect(
+      presentedUserToken({ [SIGNED_KIND_HEADER]: 'client' }, true)
+    ).toEqual({ kind: 'missing' });
+    expect(
+      presentedUserToken(
+        { [SIGNED_KIND_HEADER]: 'client', [SIGNED_USER_TOKEN_HEADER]: '  ' },
+        true
+      )
+    ).toEqual({ kind: 'missing' });
+  });
+
+  it('reads only the direct header without a proxy', () => {
+    expect(
+      presentedUserToken(
+        { [DIRECT_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN },
+        false
+      )
+    ).toEqual({ kind: 'token', token: CLIENT_USER_TOKEN, scopes: null });
+    expect(
+      presentedUserToken(
+        {
+          [SIGNED_KIND_HEADER]: 'client',
+          [SIGNED_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN,
+        },
+        false
+      )
+    ).toEqual({ kind: 'none' });
+  });
+
+  it('follows configured header names and kind', () => {
+    const client = {
+      userTokenHeader: 'x-mcp-auth-user-token',
+      scopeHeader: 'x-mcp-auth-scopes',
+      kind: 'enduser',
+    };
+    expect(
+      presentedUserToken(
+        {
+          [SIGNED_KIND_HEADER]: 'enduser',
+          'x-mcp-auth-user-token': CLIENT_USER_TOKEN,
+          'x-mcp-auth-scopes': 'mcp:me:read',
+        },
+        true,
+        client
+      )
+    ).toEqual({
+      kind: 'token',
+      token: CLIENT_USER_TOKEN,
+      scopes: ['mcp:me:read'],
+    });
+    expect(
+      presentedUserToken(
+        {
+          [SIGNED_KIND_HEADER]: 'client',
+          [SIGNED_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN,
+        },
+        true,
+        client
+      )
+    ).toEqual({ kind: 'none' });
+  });
+});
+
+describe('the client sign-in refusals (D-01)', () => {
+  const signedClientHeaders = (
+    extra: Record<string, string> = {}
+  ): Record<string, string> =>
+    signed({
+      [SIGNED_KIND_HEADER]: 'client',
+      [SIGNED_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN,
+      ...extra,
+    });
+
+  it('refuses a direct user token with CALLER_AUTH=required, before any probe', async () => {
+    const validator = stubPartnerValidator();
+    const harness = await startApp({
+      callerAuth: { mode: 'required', validator },
+    });
+    const res = await postMcp(harness.baseUrl, toolsListBody(), {
+      [DIRECT_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN,
+      ...bearer(PARTNER_TOKEN),
+    });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({
+      error: 'invalid_token',
+      error_description:
+        'A client sign-in reaches this server only through the platform proxy',
+    });
+    expect(validator.checked).toEqual([]);
+    const [line] = await waitForLogs(harness, 1);
+    expect(line).toMatchObject({
+      auth_reason: 'invalid_user_token',
+      error_type: 'invalid_token',
+      caller: null,
+    });
+    expect(JSON.stringify(harness.logs)).not.toContain(CLIENT_USER_TOKEN);
+  });
+
+  it.each([
+    ['seven characters', '1234567'],
+    ['a space', 'client token 0001 abc'],
+  ])(
+    'refuses a direct user token of %s with 401 invalid_token',
+    async (_label, token) => {
+      const harness = await startApp({
+        callerAuth: { mode: 'optional', validator: stubPartnerValidator() },
+      });
+      const res = await postMcp(harness.baseUrl, toolsListBody(), {
+        [DIRECT_USER_TOKEN_HEADER]: token,
+      });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({
+        error: 'invalid_token',
+        error_description: 'The Altegio user token was not accepted',
+      });
+      const [line] = await waitForLogs(harness, 1);
+      expect(line).toMatchObject({ auth_reason: 'invalid_user_token' });
+    }
+  );
+
+  it('admits a signed client under required and optional alike', async () => {
+    for (const mode of ['required', 'optional'] as const) {
+      const harness = await startApp({
+        proxyAuth: { keys: () => [KEY] },
+        callerAuth: { mode, validator: stubPartnerValidator() },
+      });
+      const res = await postMcp(
+        harness.baseUrl,
+        toolsListBody(),
+        signedClientHeaders()
+      );
+      expect(res.status).toBe(200);
+      const [line] = await waitForLogs(harness, 1);
+      expect(line).toMatchObject({
+        caller: 'client',
+        partner_id: null,
+        auth_reason: null,
+      });
+      expect(JSON.stringify(harness.logs)).not.toContain(CLIENT_USER_TOKEN);
+    }
+  });
+
+  it.each([
+    ['seven characters', { [SIGNED_USER_TOKEN_HEADER]: '1234567' }],
+    ['a space', { [SIGNED_USER_TOKEN_HEADER]: 'client token 0001 abc' }],
+    ['no token', {}],
+  ])('refuses a signed client kind with %s', async (_label, headers) => {
+    const harness = await startApp({
+      proxyAuth: { keys: () => [KEY] },
+      callerAuth: { mode: 'required', validator: stubPartnerValidator() },
+    });
+    const res = await postMcp(
+      harness.baseUrl,
+      toolsListBody(),
+      signed({ [SIGNED_KIND_HEADER]: 'client', ...headers })
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: 'invalid_token' });
+    const [line] = await waitForLogs(harness, 1);
+    expect(line).toMatchObject({ auth_reason: 'invalid_user_token' });
+  });
+
+  it('never reads an unsigned user token behind the proxy', async () => {
+    const harness = await startApp({
+      proxyAuth: { keys: () => [KEY] },
+      callerAuth: { mode: 'required', validator: stubPartnerValidator() },
+    });
+    // A partner identity next to a direct user-token header the proxy did not
+    // sign into x-mcp-auth-*: the caller stays a partner.
+    const res = await postMcp(harness.baseUrl, toolsListBody(), {
+      ...fromProxy(PARTNER_TOKEN),
+      [DIRECT_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN,
+    });
+    expect(res.status).toBe(200);
+    const [line] = await waitForLogs(harness, 1);
+    expect(line).toMatchObject({ caller: 'partner' });
+  });
+
+  it('refuses a signed-looking user token header the signature does not cover', async () => {
+    const harness = await startApp({
+      proxyAuth: { keys: () => [KEY] },
+      callerAuth: { mode: 'required', validator: stubPartnerValidator() },
+    });
+    const res = await postMcp(harness.baseUrl, toolsListBody(), {
+      ...signed({ [SIGNED_KIND_HEADER]: 'client' }),
+      [SIGNED_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN,
+    });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: 'proxy_auth_required' });
+  });
+
+  it('follows the configured header names and kind', async () => {
+    const harness = await startApp({
+      proxyAuth: { keys: () => [KEY] },
+      callerAuth: {
+        mode: 'required',
+        validator: stubPartnerValidator(),
+        client: {
+          userTokenHeader: 'x-mcp-auth-user-token',
+          scopeHeader: 'x-mcp-auth-scopes',
+          kind: 'enduser',
+        },
+      },
+    });
+    const configured = await postMcp(
+      harness.baseUrl,
+      toolsListBody(),
+      signed({
+        [SIGNED_KIND_HEADER]: 'enduser',
+        'x-mcp-auth-user-token': CLIENT_USER_TOKEN,
+      })
+    );
+    expect(configured.status).toBe(200);
+    const defaults = await postMcp(
+      harness.baseUrl,
+      toolsListBody(),
+      signedClientHeaders()
+    );
+    expect(defaults.status).toBe(401);
   });
 });

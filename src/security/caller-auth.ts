@@ -102,9 +102,18 @@ function nonBlank(value: string | undefined): string | undefined {
   return trimmed === undefined || trimmed === '' ? undefined : trimmed;
 }
 
+/** The configured names of the signed client identity (CLIENT_* settings). */
+export interface ClientIdentityNames {
+  userTokenHeader: string;
+  scopeHeader: string;
+  kind: string;
+}
+
 /** What a request presents as the client's user token. */
 export type PresentedUser =
   | { kind: 'none' }
+  /** A signed client kind with no usable user token. */
+  | { kind: 'missing' }
   | {
       kind: 'token';
       token: string;
@@ -119,7 +128,9 @@ export type PresentedUser =
  */
 export function presentedUserToken(
   headers: IncomingHttpHeaders,
-  behindProxy: boolean
+  behindProxy: boolean,
+  // Configured names; the I8 defaults when absent. Honoured in the next commit.
+  _client?: ClientIdentityNames
 ): PresentedUser {
   if (behindProxy) {
     const kind = nonBlank(single(headers[SIGNED_KIND_HEADER]));
