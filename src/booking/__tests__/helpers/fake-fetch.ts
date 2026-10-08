@@ -18,7 +18,7 @@ export type FakeReply =
   | ((call: RecordedCall) => FixtureResponse | Promise<FixtureResponse>);
 
 export interface FakeRoute {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   /** Path after the API base path, for example '/company/722227'. */
   path: string;
   reply: FakeReply;
@@ -63,7 +63,10 @@ function toResponse(fixture: FixtureResponse): Response {
     typeof fixture.body === 'string'
       ? fixture.body
       : JSON.stringify(fixture.body);
-  return new Response(body, {
+  // A 204, 205 or 304 answer has no body; a Response built with an empty string
+  // for one of them throws.
+  const noBody = [204, 205, 304].includes(fixture.status) && body === '';
+  return new Response(noBody ? null : body, {
     status: fixture.status,
     headers: fixture.headers,
   });

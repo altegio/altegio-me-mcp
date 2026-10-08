@@ -1,0 +1,50 @@
+{
+  "recorded_at": "2026-10-08T11:56:09.280Z",
+  "route": "booking_user_data",
+  "status": 200,
+  "data": {
+    "0": "[removed]",
+    "id": 0,
+    "user_token": "[removed]",
+    "name": "[removed]",
+    "surname": "[removed]",
+    "patronymic": "",
+    "phone": "+10000000000",
+    "login": "[removed]",
+    "email": "[removed]",
+    "lang_id": 2,
+    "avatar": "https://example.invalid/image.png"
+  },
+  "headers": {
+    "names": [
+      "access-control-allow-headers",
+      "access-control-allow-methods",
+      "access-control-allow-origin",
+      "access-control-expose-headers",
+      "cache-control",
+      "cf-cache-status",
+      "cf-ray",
+      "connection",
+      "content-encoding",
+      "content-type",
+      "date",
+      "p3p",
+      "server",
+      "set-cookie",
+      "strict-transport-security",
+      "transfer-encoding",
+      "vary",
+      "x-bounce-id",
+      "x-content-type-options",
+      "x-csp-token",
+      "x-dns-prefetch-control",
+      "x-feature-notification-next",
+      "x-feature-waiting-room-api",
+      "x-feature-waiting-room-web",
+      "x-node-id",
+      "x-request-id",
+      "x-xss-protection"
+    ],
+    "security": {}
+  }
+}

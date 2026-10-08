@@ -185,3 +185,188 @@ acceptance). No token, phone, name or code is in this record, and the link is de
 
 Owner review: completed 2026-10-08, pre-selection confirmed (the widget opened with the selection
 pre-filled).
+
+## Writes
+
+Research date: 2026-10-08 (plan 04.1-01, decisions D-02 and D-05). Answers what `me_book`,
+`me_reschedule_booking` and `me_cancel_booking` send and can read, from one live create, move and
+cancel of a real booking. The four routes were recorded: GET `/booking/user/data` (the profile),
+POST `/book_record/{loc}` (create), PUT `/book_record/{loc}/{record_id}` (move) and DELETE
+`/user/records/{record_id}/{hash}` (cancel). The sanitised recordings are
+`src/booking/__tests__/fixtures/live/booking_user_data.json`, `book_record_create.json`,
+`book_record_move.json` and `user_record_cancel.json`; the route schemas are `bookingUserDataSchema`,
+`bookRecordCreateDataSchema`, `bookRecordMoveDataSchema` and `userRecordCancelDataSchema` in
+`src/booking/schemas.ts`; the contract fixtures of the same four names under
+`src/booking/__tests__/fixtures/` carry the scenarios plans 04.1-02 and 04.1-03 test against.
+No token, record hash, phone, name, login or e-mail is in this section, in a recording or in git.
+
+### How the writes were recorded
+
+- **When:** the run that passed was the fourth, on 2026-10-08 at 11:56 UTC (18:56 UTC+7).
+- **Commit:** 976be82 (branch `phase-04.1-in-chat-booking`, plan 04.1-01).
+- **Command (the owner's shell, the executor never opens the env file):**
+  `ALTEGIO_E2E=1 ALTEGIO_E2E_USER=1 ALTEGIO_E2E_WRITE=1 ALTEGIO_E2E_RECORD=1 node --env-file=.env ./node_modules/jest/bin/jest.js --testPathPatterns=user-writes.live --runInBand`
+  (`src/booking/__tests__/user-writes.live.test.ts`). Direct calls with
+  `Authorization: Bearer <partner>, User <user>`, from the owner's machine, not from Cloud Run.
+- **Where:** location 726120 (the owner's own business), service 13884511 (prepaid `forbidden`, no
+  membership restriction, picked from `book_services`, not from a usual), team member 0 (any), first slot 2026-10-10T09:00+02:00, moved to 10:00+02:00.
+- **Calls:** 9 of at most 14: profile, `book_services`, `book_dates`, `book_times`, create,
+  `GET /user/records`, move, cancel, `GET /user/records`. Nothing was left behind: the closing
+  records check showed the record `deleted`, and no cleanup call was needed.
+- **Earlier attempts on the same day:** three runs stopped at the create with HTTP 422 before this
+  one (see "Required e-mail" below). They created nothing: no record id came back, and no later
+  step ran.
+
+| Step | Route | Status |
+| --- | --- | --- |
+| 1 | `GET /booking/user/data` | 200 |
+| 2 | `GET /book_services/726120` | 200 |
+| 3 | `GET /book_dates/726120`, `GET /book_times/726120/0/{date}` | 200, 200 |
+| 4 | `POST /book_record/726120` | **201**, record id present |
+| 5 | `GET /user/records` | 200, the new record is in the list |
+| 6 | `PUT /book_record/726120/{record_id}` | **200** |
+| 7 | `DELETE /user/records/{record_id}/0` | **204**, no body |
+| 8 | `GET /user/records` | 200, the record shows `deleted` |
+
+### GET /booking/user/data (the profile)
+
+- **Answer:** `data` is one object with the keys `0`, `id`, `user_token`, `name`, `surname`,
+  `patronymic`, `phone`, `login`, `email`, `lang_id` and `avatar`. Key `0` repeats the user token. There
+  is no `fullname` key in the recorded answer; the schema still accepts one.
+- **The name** is `name`, with `surname` after it when that is non-empty (`patronymic` was empty and is
+  not used). The suite sends `fullname` from the profile's `fullname`, else `name` and `surname` joined
+  by one space.
+- **The phone arrives as bare digits, with no plus** (11 digits for the owner). The documented create
+  contract wants `+<digits>` (error 431, "Invalid phone number format", otherwise), so the server sends
+  a plus and the digits only, whatever separators the profile used; an empty result means there is no
+  usable phone. The recording cannot say whether bare digits would also have been accepted: the first
+  run sent them and was refused for a reason that was not recorded, and the first run that sent
+  `+<digits>` was refused for the e-mail. The rule follows the documented contract and the run that
+  passed.
+- **The e-mail** is `email`, and is empty when the client set none.
+- Never returned to the chat: name, phone and e-mail only fill the create call.
+
+### POST /book_record/{loc} (create)
+
+- **Body sent, exactly:** `{ phone, fullname, email?, appointments: [{ id: 1, services: [service],
+  staff_id, datetime }] }`. `staff_id` is 0 for any team member, `datetime` is the slot string as
+  `book_times` wrote it. No `code` (the user token replaces the SMS code), `comment`, `notify_*` or
+  `api_id` key. `email` is present only when the profile has a non-empty one, and is never sent empty.
+- **Answer:** HTTP 201, `data` is `[{ id, record_id, record_hash }]`, one entry per appointment: `id` is
+  the appointment id of the request (1), `record_id` the new record, `record_hash` a secret that this
+  server never reads. A real 201 has a positive `record_id`; an entry without one means nothing was
+  created (the fake 201 of the anti-fraud path, documented, not seen live).
+- **The creation hash is not a field of the records list.** `GET /user/records` shows the new record
+  with `token` and `record_token` that equal neither the creation hash (compared in memory, two
+  booleans recorded, both false).
+
+### Required e-mail (observed, open question)
+
+- Three runs on 2026-10-08 stopped at the create with HTTP 422, before the passing one:
+  1. the first, with the profile phone as read (bare digits) and no e-mail; the refusal body was not
+     recorded then;
+  2. the second, with `+<digits>` and no e-mail: `meta.message` "An error occurred", no code, and an
+     `errors` that the first version of the recorder dropped because it is not a list;
+  3. the third, same body: `meta.errors` is an **object keyed by a bracketed field name**:
+     `{"[email]": ["The required parameter email was not passed."]}`, no `meta.code` and no code in
+     the entries. The owner's profile had an empty e-mail.
+- The passing run sent the profile e-mail (`email_sent` true) and `+<digits>`. Before it, the owner
+  both **added an e-mail to the client profile and hid the Email field in the BaBarber booking
+  form**, so the exact rule is not isolated: either "a field shown in the form makes the e-mail
+  required" or "a profile e-mail is enough". The contract documents `email` as optional; this
+  business, at least with the field shown, required it even for a signed-in client.
+- **The rule the server follows:** send the profile e-mail when it is a non-empty text, nothing
+  otherwise. When the profile has none and the business demands one, the create answers 422 with a
+  required-field message; that case is an ME-08 fallback (an in-band reason and the pre-filled widget
+  link), implemented in plans 04.1-02 and 04.1-03, keyed on the error record's
+  `kind: "required_field"`.
+- **Error shapes seen and documented.** HTTP 422 with `meta.errors` as a list of
+  `{code, message}` (433 slot taken, 436 no team member, 437 overlap, 431 phone, 432 code, 435 name),
+  HTTP 403 with code 434 (blacklisted), and the keyed object above. Only the keyed object was seen
+  live; the codes 431-437 are the documented ones, and the contract fixture `book_record_create.json`
+  has a scenario for each, with a message quoting the synthetic bait `+15550000001 Fixture Client` so
+  the tools can be tested not to echo it. `meta.errors` is therefore a list or an object keyed by
+  field, and any code is `meta.code`, the first code of the list, or a top-level `code`.
+
+### PUT /book_record/{loc}/{record_id} (move)
+
+- **Body sent, exactly:** `{ datetime }` with the new slot string. No `comment` (documented, optional).
+- **Answer:** HTTP 200, `data` is the moved record **in the shape of an entry of `GET /user/records`**:
+  `id`, `token` (null), `record_token`, `clients_count`, `date` (local, `Y-m-d H:i:s`), `datetime`
+  (ISO with an offset **without a colon**, here `+0200`), `create_date`, `last_change_date`,
+  `comment`, `deleted`, `attendance`, `length`, the `allow_*` flags, `services[]`, `company` and
+  `staff`. As in the records list, `company.timezone` (3) does not match the offset of `datetime`
+  (+0200): read the offset of `datetime`. The answer's `id` is the booking's own id (sanitised to 1 in the recording).
+- The move moved the booking to the next free slot with no confirmation step and no further field.
+
+### DELETE /user/records/{record_id}/{hash} (cancel)
+
+- **The hash segment answer:** the placeholder `0` was accepted. HTTP **204, no body**, with only the
+  user token and the record id. No second attempt (the records-list field, the creation hash) was
+  needed, so `hash_answer` is `placeholder`, and the creation hash is not needed to cancel a booking
+  of the signed-in client.
+- **The rule plan 04.1-03 follows:** `DELETE /user/records/{record_id}/0` with both tokens; a 2xx is a
+  cancel, and anything else is reported as "could not cancel, contact the business", never retried
+  with a different segment. A closing `GET /user/records` shows the record with `deleted` true.
+- A 204 has no body, so the contract fixture `user_record_cancel.json` has `cancelled` as
+  `{status: 204, body: ""}`; the test fake fetch serves such an answer with no body.
+
+### Anti-fraud observations
+
+- **Statuses seen on the three writes:** 201, 200 and 204. No 412 and no fake 201 (a 201 without a
+  record id) was seen: the create returned a record id and the booking appeared in the records list.
+- **Headers:** the recorder keeps the names of every response header of a write, and the values of
+  `x-app-security-level` and of any header whose name contains `fraud`. No such header was present on
+  the profile, the create, the move or the cancel (`security` is empty on all four recordings). The
+  names seen were the Cloudflare, CORS and platform ones (`cf-ray`, `cf-cache-status`,
+  `x-request-id`, `x-node-id`, `x-bounce-id`, `x-csp-token`, `x-feature-*`, `set-cookie` and the
+  like); no value of any of them is recorded.
+- **What a local run cannot show:** the run came from the owner's own network, with a residential
+  address, not from the Cloud Run egress the server will call from. The anti-fraud behaviour is keyed on
+  partner types and addresses (altegio-booking-api.md), so this says nothing about the egress. The
+  412 and the fake 201 stay documented, not observed, and the contract fixtures
+  `anti_fraud_412` (with a synthetic `X-App-Security-Level` value) and `fake_201` are built from the
+  documentation. **WRITE-07 and B3 stay open** until a run from the Cloud Run egress.
+
+### What the recorder removes
+
+| Key | Where | Sanitiser |
+| --- | --- | --- |
+| `name`, `surname`, `patronymic`, `fullname`, `login` | profile, top level | `[removed]` (an empty one stays) |
+| `id` | profile | `0` |
+| `user_token` and every all-digit key (`0`) | profile | `[removed]` |
+| `phone` | profile | `+10000000000` |
+| `email` | profile | `[removed]` (an empty one stays) |
+| `avatar` | profile, `staff`, `company` | placeholder image URL |
+| `record_hash` | create answer | `[removed]` |
+| `record_id` | create answer | `1` |
+| `id` | move answer | `1` |
+| `record_token`, `token`, `api_id` | move answer | `[removed]` (empty, null and numeric 0 stay) |
+| `company.title`, `company.public_title`, `address`, phones, coordinates | move answer | as for the records list |
+| `staff.name` | move answer | `Team member <staff id>` |
+| `comment` | move answer | `[removed]` |
+| both tokens | anywhere | `[redacted]` |
+
+The header capture keeps names and the two kinds of security value only, so a cookie value never
+reaches a file. The suite's own summary and run file (`loadtest-output/user-writes-run.json`,
+git-ignored) are built from an allow-list of ids, slot times, statuses, header names, booleans and
+the sanitised refusal records; the phone, name, e-mail, hash and both tokens are removed from every
+text of a refusal, and the summary is withheld if it would hold one.
+
+### What 04.1-02 and 04.1-03 build on
+
+- **Profile:** one `GET /booking/user/data` per request, cached for that request only: `name` (and
+  `surname` when set), `phone` (turn into `+<digits>`), `email` (only when non-empty).
+- **Create:** the body above, exactly; the answer's `record_id` is the booking id; never read or log
+  `record_hash`. A 201 without a positive `record_id` is the fake 201: no booking, say so and give the
+  widget link. A 422 with `kind: "required_field"` (a required field named in `meta.errors`) is the
+  missing-e-mail fallback; a 403 with code 434 is "contact the business"; 433, 436 and 437 are the
+  slot errors of the documented list. HTTP 412 with `X-App-Security-Level` is the anti-fraud path.
+- **Move:** `PUT /book_record/{loc}/{record_id}` with `{datetime}` only; the answer is a records-list
+  entry, so it can be rendered as `me_list_bookings` does.
+- **Cancel:** `DELETE /user/records/{record_id}/0`; 204 with no body.
+- **Reading an error:** `meta.errors` is a list or an object keyed by bracketed field names; do not
+  assume either.
+- **Open:** whether bare-digit phones are refused; the exact rule for the required e-mail; the
+  anti-fraud answers from the Cloud Run egress (WRITE-07, B3); the cancel and move rules of other
+  businesses (the placeholder segment and the `datetime`-only body were seen at 726120 only).

@@ -272,3 +272,66 @@ const userRecordSchema = z.looseObject({
 export const userRecordsDataSchema = z.array(userRecordSchema);
 
 export type UserRecordsData = z.infer<typeof userRecordsDataSchema>;
+
+/**
+ * `data` of GET /booking/user/data (documented, recorded 2026-10-08, plan
+ * 04.1-01): the signed-in client's profile. The name (`name` with an optional
+ * `surname`, or `fullname`), the phone and the e-mail are read, to fill the
+ * create call; they never reach a tool result. The token, login, avatar and the
+ * digit key that repeats the token stay untyped.
+ */
+export const bookingUserDataSchema = z.looseObject({
+  name: text,
+  fullname: text,
+  /** Seen in the 2026-10-08 profile (empty there); joined to the name when set. */
+  surname: text,
+  /** Recorded as bare digits, without the plus the create route wants. */
+  phone: text,
+  /** Empty when the client set none; the create route sends it only when non-empty. */
+  email: text,
+});
+
+export type BookingUserData = z.infer<typeof bookingUserDataSchema>;
+
+/**
+ * `data` of the create route of the booking API, a POST on the location
+ * (documented, recorded 2026-10-08): 201 with one entry per appointment sent,
+ * `{id, record_id, record_hash}`. `record_hash` is deliberately not declared,
+ * because it is never read. `record_id` stays nullish, so the fake
+ * 201 (an answer that created nothing) parses and the client can name it.
+ */
+export const bookRecordCreateDataSchema = z.array(
+  z.looseObject({
+    id: z.number().int().nullish(),
+    record_id: z.number().int().nullish(),
+  })
+);
+
+export type BookRecordCreateData = z.infer<typeof bookRecordCreateDataSchema>;
+
+/**
+ * `data` of the move route, a PUT on the location and the record id
+ * (documented, recorded 2026-10-08): 200 with the moved record, shaped like an
+ * entry of GET /user/records, with `date` (local, Y-m-d H:i:s) and `datetime`
+ * (offset without a colon) as the new moment. The body sent is `{datetime}`.
+ */
+export const bookRecordMoveDataSchema = z.looseObject({
+  id: z.number().int(),
+  datetime: text,
+  date: text,
+});
+
+export type BookRecordMoveData = z.infer<typeof bookRecordMoveDataSchema>;
+
+/**
+ * `data` of DELETE /user/records/{record_id}/{hash} (documented, recorded
+ * 2026-10-08): the answer is 204 with no body, so null, an empty list or any
+ * object is accepted and nothing is read from it.
+ */
+export const userRecordCancelDataSchema = z.union([
+  z.null(),
+  z.array(z.unknown()).max(0),
+  z.looseObject({}),
+]);
+
+export type UserRecordCancelData = z.infer<typeof userRecordCancelDataSchema>;

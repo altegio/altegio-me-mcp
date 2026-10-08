@@ -1,0 +1,42 @@
+{
+  "recorded_at": "2026-10-08T11:56:11.056Z",
+  "route": "book_record_create",
+  "status": 201,
+  "data": [
+    {
+      "id": 1,
+      "record_id": 1,
+      "record_hash": "[removed]"
+    }
+  ],
+  "headers": {
+    "names": [
+      "access-control-allow-headers",
+      "access-control-allow-methods",
+      "access-control-allow-origin",
+      "access-control-expose-headers",
+      "cache-control",
+      "cf-cache-status",
+      "cf-ray",
+      "connection",
+      "content-type",
+      "date",
+      "p3p",
+      "server",
+      "set-cookie",
+      "strict-transport-security",
+      "transfer-encoding",
+      "x-bounce-id",
+      "x-content-type-options",
+      "x-csp-token",
+      "x-dns-prefetch-control",
+      "x-feature-notification-next",
+      "x-feature-waiting-room-api",
+      "x-feature-waiting-room-web",
+      "x-node-id",
+      "x-request-id",
+      "x-xss-protection"
+    ],
+    "security": {}
+  }
+}

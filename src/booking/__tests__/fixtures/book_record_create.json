@@ -1,0 +1,194 @@
+{
+  "created": {
+    "status": 201,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [
+        {
+          "id": 1,
+          "record_id": 990001,
+          "record_hash": "fixture-hash-0002"
+        }
+      ],
+      "meta": []
+    }
+  },
+  "fake_201": {
+    "status": 201,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [],
+      "meta": []
+    }
+  },
+  "anti_fraud_412": {
+    "status": 412,
+    "headers": {
+      "content-type": "application/json",
+      "X-App-Security-Level": "high"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "Additional verification is required.",
+        "errors": []
+      }
+    }
+  },
+  "taken_433": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The selected time is not available: +15550000001 Fixture Client",
+        "errors": [
+          {
+            "code": 433,
+            "message": "The selected time is not available: +15550000001 Fixture Client"
+          }
+        ]
+      }
+    }
+  },
+  "blacklisted_434": {
+    "status": 403,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The client is blacklisted: +15550000001 Fixture Client",
+        "errors": [
+          {
+            "code": 434,
+            "message": "The client is blacklisted: +15550000001 Fixture Client"
+          }
+        ]
+      }
+    }
+  },
+  "no_team_member_436": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "No team member is available at the selected time: +15550000001 Fixture Client",
+        "errors": [
+          {
+            "code": 436,
+            "message": "No team member is available at the selected time: +15550000001 Fixture Client"
+          }
+        ]
+      }
+    }
+  },
+  "overlap_437": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The selected times overlap: +15550000001 Fixture Client",
+        "errors": [
+          {
+            "code": 437,
+            "message": "The selected times overlap: +15550000001 Fixture Client"
+          }
+        ]
+      }
+    }
+  },
+  "phone_431": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The phone number is not in a valid format: +15550000001 Fixture Client",
+        "errors": [
+          {
+            "code": 431,
+            "message": "The phone number is not in a valid format: +15550000001 Fixture Client"
+          }
+        ]
+      }
+    }
+  },
+  "name_435": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The client name is missing: +15550000001 Fixture Client",
+        "errors": [
+          {
+            "code": 435,
+            "message": "The client name is missing: +15550000001 Fixture Client"
+          }
+        ]
+      }
+    }
+  },
+  "code_432": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The confirmation code is incorrect: +15550000001 Fixture Client",
+        "errors": [
+          {
+            "code": 432,
+            "message": "The confirmation code is incorrect: +15550000001 Fixture Client"
+          }
+        ]
+      }
+    }
+  },
+  "required_email_422": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "An error occurred",
+        "errors": {
+          "[email]": ["The required parameter email was not passed."]
+        }
+      }
+    }
+  }
+}
