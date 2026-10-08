@@ -36,28 +36,27 @@ a separate server; this repository is that server.
 
 ## Product scope
 
-**Phase 1: discover in chat, book in the widget.** No end-user sign-in and no personal data in
-the chat. The caller (a partner's agent or app) presents its Altegio partner token.
+**Live today: a known business, booked in the widget.** The caller (a partner's agent or app)
+presents its Altegio partner token. The tools show a business card, its bookable services, team
+members, dates and free time slots, check that the chosen slot is still bookable, and return a
+link to the business's Altegio booking widget with service, team member and time already selected.
+The client confirms there, with the business's usual phone confirmation and prepayment rules. No
+personal data passes through the chat.
 
-- Search businesses that use Altegio and have online booking enabled.
-- Show a business card, its bookable services, team members, dates and free time slots.
-- Check that the chosen slot is still bookable, then return a link to the business's Altegio
-  booking widget with service, team member and time already selected. The client confirms
-  there, with the business's usual phone confirmation and prepayment rules.
+**Built: the client's own places** ([ADR 0005](docs/decisions/0005-own-places-first.md),
+[ADR 0006](docs/decisions/0006-in-chat-booking-at-own-places.md)). A signed-in client sees the
+places they already go to and their bookings, and books, moves and cancels appointments there in
+the chat with `me_book`, `me_reschedule_booking` and `me_cancel_booking`, each in two steps: a
+preview with a confirmation token, then the write. The client's name, phone and e-mail come from
+their Altegio profile and never from the chat. The widget link stays for partner and anonymous
+callers, services with online prepayment, memberships, inactive widgets and places without
+earlier visits. The sign-in itself (phone + SMS on the platform proxy's page, OAuth 2.1) is the
+proxy's: until it ships, the client tier runs locally with a direct user-token header. Next: the
+cases the Altegio.me app lacks (two people side by side, a freed slot at a favourite team member,
+a held slot). A searchable catalog of all businesses is parked.
 
-**Phase 4.1: book in chat at the client's own places (built).** A signed-in client books, moves
-and cancels appointments at the businesses they already go to, in the chat, with `me_book`,
-`me_reschedule_booking` and `me_cancel_booking`. The client's name and phone come from their
-Altegio profile and never from the chat. The widget link stays for partners, anonymous callers,
-services with online prepayment, memberships, inactive widgets and places without earlier visits.
-
-**Phase 2: sign-in for interactive hosts.** The client signs in with phone + SMS code on an
-Altegio.me page (OAuth 2.1), so that interactive hosts (claude.ai, ChatGPT, connector
-directories) can connect and reach the write tools, through the same OAuth. Interactive UI (MCP
-Apps) for hosts that render it.
-
-**Distribution.** Claude Connectors Directory, then ChatGPT plugins, the MCP Registry, and
-outreach to Perplexity, Mistral, xAI and Google. See
+**Distribution.** Claude Connectors Directory listing and promo inside the Altegio.me app; later
+ChatGPT, the MCP Registry, and outreach to Perplexity, Mistral, xAI and Google. See
 [`docs/research/ai-platforms-distribution.md`](docs/research/ai-platforms-distribution.md).
 
 ## Architecture
@@ -426,11 +425,15 @@ the pull request title.
 
 ## Deploy
 
-Status: live. The service is published at `https://mcp.alteg.io/me` through the platform proxy's
-anonymous lane (altegio-mcp-platform #250, deployed 2026-10-05) and reaches Cloud Run over https on
-its `run.app` address, which answers `/health` and refuses an unsigned `/mcp` with 401. Every
-revision comes from the trigger on `main`; the serving commit is reported by `/health`. What ran
-live, with dates and revisions, is in the deployment record in
+Status: live. First deployed by the trigger on 2026-10-05 (revision `altegio-me-mcp-00002-kih`,
+commit c73ecb7, version 0.2.0); the revision serving now is `altegio-me-mcp-b32ak5r5qmvb57g246qju3odyua`
+(commit 4c781e6, also version 0.2.0, deployed 2026-10-05). The service is published at
+`https://mcp.alteg.io/me` through the platform proxy's anonymous lane (altegio-mcp-platform #250,
+deployed 2026-10-05) and reaches Cloud Run over https on its `run.app` address, which answers
+`/health` and refuses an unsigned `/mcp` with 401. claude.ai completed the known-business flow
+through the public address on 2026-10-06 ([`docs/research/claude-connector-run.md`](docs/research/claude-connector-run.md#connector-run-results)).
+Every revision comes from the trigger on `main`; the serving commit is reported by `/health`. What
+ran live, with dates and revisions, is in the deployment record in
 [`docs/runbooks/gcp-hosting.md`](docs/runbooks/gcp-hosting.md); the operational contract is
 [`docs/runbooks/operations.md`](docs/runbooks/operations.md).
 
@@ -497,9 +500,9 @@ Compute Engine account, because the platform has granted that account access to 
 
 **Logs and who reads them.** One structured line per `POST /mcp` goes to Cloud Logging, bucket
 `_Default` of `altegio-mcp`: tool name, outcome, timings and counters, no tool arguments, no token
-and no client address. Retention is a project-wide setting owned by the platform: 30 days is the
-Google default for that bucket, and it is not confirmed for this project until the platform
-answers (I6). Staff can read the project's logs through the platform's logs MCP, and the proxy
+and no client address. Retention is a project-wide setting owned by the platform: the bucket
+keeps logs for 30 days (read from the project on 2026-10-05 and again on 2026-10-06; we never change
+it). Staff can read the project's logs through the platform's logs MCP, and the proxy
 writes its own request line for `/me` (route, tool, method) to the platform's BigQuery dataset
 `mcp_requests`, which keeps 90-day partitions. Our logs hold no personal data.
 
@@ -525,26 +528,35 @@ no LLM: the model runs on the AI host's side. The platform proxy in front of the
 (`mcp.alteg.io`, ADR 0002) is the platform's cost and is not counted here. Free allotments are not
 subtracted, except for the uptime checks (see below).
 
-| Item | Expected (≈100k tool calls / month) | Peak (≈1M tool calls / month) |
+The expected column is the MVP assumption the owner set on 2026-10-07: at most 10,000 bookings a
+month for the first weeks to months after launch, at about 10 tool calls each. The peak column is
+ten times that: the headroom the hosting and the request gate were measured against
+([`docs/loadtest/results.md`](docs/loadtest/results.md)), not a forecast. In the MVP peak hour the
+gate runs at about a fifth of its ceiling (90 upstream calls a minute per process); capacity is
+revisited only if growth exceeds the assumption.
+
+| Item | Expected (MVP, ≤10k bookings ≈ 100k tool calls / month) | Peak (10x headroom, ≈1M tool calls / month) |
 |---|---|---|
 | Cloud Run: one idle minimum instance, 2,592,000 s at $0.00000375 per second | $9.72 | $9.72 |
 | Cloud Run: busy time above the idle rate ($0.0000215 per second) and requests ($0.40 per million) | $3.90 | $29.26 |
-| Uptime checks: two, every 5 minutes, three regions, 51,840 executions at $0.30 per 1,000 | $3.30 | $3.30 |
+| Uptime checks: one (`/health`), every 5 minutes, three regions, 25,920 executions, inside the free allotment the platform's checks leave | $0 | $0 |
 | Secret Manager: at most 86,400 secret reads at $0.03 per 10,000 | $0.30 | $0.30 |
 | Cloud Logging: 50 GiB a month free, then $0.50 per GiB | $0 | $1 |
 | Network egress: first GiB free, then $0.12 per GiB | $0 | $1 |
 | Cloud Build: about 6 minutes a deploy at $0.003 per minute, normally inside 2,500 free minutes | $0.40 | $0.40 |
 | Artifact Registry: about 4 GiB of images kept, $0.10 per GiB-month after 0.5 GiB | $0.40 | $0.40 |
-| **Hosting total** | **≈ $18** | **≈ $45** |
+| **Hosting total** | **≈ $15** | **≈ $42** |
 | Product, later: OAuth state store (Firestore), unless the platform proxy holds it (ADR 0002) | $1–5 | $5–15 |
 | Product, later: SMS sign-in codes, $0.02–0.10 each | ≈ $20–100 per 1,000 sign-ins | scales with sign-ins |
 | Product, later: catalog refresh job, Scheduler, storage | $1–5 | $1–5 |
 | Product, later: nightly evals via Anthropic API (optional) | $10–30 | $10–30 |
 
-Uptime checks cost about $3 a month at 5 minutes because the platform's own checks leave about
-41,000 of the 1,000,000 free monthly executions; at 1 minute they would cost about $140, which is
-why the period is 5 minutes. Without any free allotment the two checks would cost about $16. Alert
-policies are not charged before September 2027 at the earliest.
+The one uptime check costs nothing at 5 minutes: it runs 25,920 executions a month and the
+platform's own checks leave about 41,000 of the 1,000,000 free monthly executions. At 1 minute it
+would run 129,600 and cost about $27, which is why the period is 5 minutes; without any free
+allotment it would cost about $8 at 5 minutes. A second, public check was not created: on
+2026-10-06 the owner decided to rely on the platform's monitors, which probe `/me` themselves (see
+the runbook, "Monitoring"). Alert policies are not charged before September 2027 at the earliest.
 
 Prices read on 2026-10-05 from https://cloud.google.com/run/pricing,
 https://cloud.google.com/monitoring/pricing, https://cloud.google.com/logging/pricing,

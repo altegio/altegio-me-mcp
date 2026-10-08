@@ -112,8 +112,13 @@ Resource names:
 
 ## Implementation (Phase 3)
 
-Status of this decision stays accepted. Phase 3 built the setup in the repository; nothing has
-been run live yet (the first deploy waits for the platform team, I5 and I6).
+Status of this decision stays accepted. Phase 3 built the setup in the repository.
+
+Status note (2026-10-06): the service has been hosted in `altegio-mcp` since 2026-10-05. The
+bootstrap was applied that day, the trigger's first git-only deploy succeeded the same day
+(revision `altegio-me-mcp-00002-kih`, commit c73ecb7), and the revision serving on 2026-10-06 is
+`altegio-me-mcp-b32ak5r5qmvb57g246qju3odyua` at commit 4c781e6. The platform accepted Cloud Run and
+the shared repository `cloud-run` (I6); the dated steps are in the deployment record of the runbook.
 
 - One-time setup: [`scripts/gcp/bootstrap.sh`](../../scripts/gcp/bootstrap.sh), idempotent, with
   `--print` as the review artifact for the platform engineer.

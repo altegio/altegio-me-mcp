@@ -111,3 +111,7 @@ discovery document is 404 in both forms, and an unsigned direct `POST /mcp` on `
 The route signs with its own key `MCP_PROXY_BACKEND_KEY_ME`, carries the client address in
 `x-mcp-auth-client-ip` and a correlation id in `x-mcp-auth-request-id`, and is outside the VM
 autoheal metric, which selects the internal proxy only. The own-domain fallback was not needed.
+
+Status note (2026-10-06): the `/me` lane has been live since 2026-10-05, and on 2026-10-06 claude.ai
+itself completed the known-business flow through `https://mcp.alteg.io/me` (record in
+[`docs/research/claude-connector-run.md`](../research/claude-connector-run.md#connector-run-results)).

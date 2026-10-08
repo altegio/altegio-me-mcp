@@ -90,5 +90,38 @@ If the run fails before any line appears, Claude checks the proxy side through t
 
 ## Connector run results
 
-Run: pending
-Owner review: pending
+Run: 2026-10-06 15:28:25 to 15:31:20 UTC (tool calls; the owner's machine clock is UTC+7, so 22:28 to 22:31 local). The connector was added at about 15:26 UTC.
+Revision: `altegio-me-mcp-b32ak5r5qmvb57g246qju3odyua` (version 0.2.0, release sequence 2), serving 100% of traffic.
+Commit: 4c781e6 (`/health` on the `run.app` address reported `4c781e6f68813f16af7b5ebef49ac7ee51191283`; every `mcp_call` line of the window carries the same commit).
+Connector: `https://mcp.alteg.io/me`, anonymous, added as a custom connector in the Altegio organization's Claude account (an organization owner adds custom connectors there). Location 726120 "BaBarber", Europe/Warsaw.
+Evidence: the owner's transcript and a screenshot of the widget, kept locally and not committed (git-ignored): `.planning/phases/03-hosting-and-launch-safeguards/evidence/03-16-claude-connector-transcript.md` and `03-16-widget-preselected.png` in the same folder. The log reading is the read-only `gcloud logging read` query above, for 15:20:00Z to 15:35:00Z.
+
+Each row is one prompt of the step list. Every call was one `POST /mcp` with `http_status` 200, `outcome` ok, `limited_by` and `upstream_kind` empty, `protocol_version` 2025-11-25, and `latency_ms` far below the 25 s tool deadline.
+
+| Step | Asked | Result | Observation |
+| --- | --- | --- | --- |
+| business_get | Show the business card of location 726120 | pass | 15:28:25Z, 183 ms. Name, premium barbershop in Warszawa, time zone Europe/Warsaw, currency zł, online booking enabled and widget active, two booking forms. It also reported "next free slot today 17:30" (see the content observations) |
+| business_list_services | What services does location 726120 offer | pass | 15:29:27Z, 677 ms. 21 bookable services with prices, among them Classic Haircut 700 zł |
+| business_list_team_members | Who works there | pass | 15:29:53Z, 181 ms. Seven team members, all bookable online. The answer said none of them has a next free date, which differs from the card (see the content observations) |
+| business_list_dates | On which dates in the next two weeks is there free time for a haircut with any team member | pass | 15:30:20Z, 152 ms. Every day from 6 to 20 October, and also 21 October, one day past the two weeks asked (see the content observations) |
+| business_list_time_slots | Show the free time slots on the earliest of those dates, at least one day ahead | pass | 15:30:49Z, 307 ms. Wednesday 7 October, Classic Haircut with any barber, every 30 minutes from 09:00 to 21:00 (25 slots) |
+| book_check | Check that the first of those slots can be booked and give me the link | pass | 15:31:20Z, 1267 ms. Slot confirmed as bookable, link `https://n1472304.alteg.io/company/726120?o=m-1s13884490d2607100900` returned |
+| widget | Open the returned link in Chrome (owner) | pass | The link redirected to `/company/726120/personal/menu?o=m-1s13884490d2607100900` |
+
+What the widget showed pre-selected: "Any available professional", "Wednesday, 7 October 9:00" and, under Services, "Classic Haircut 700 zł", with the Continue button active. Nothing had to be chosen again before the contact step. No booking was made.
+
+Observations from the service's own log (not failures; the flow completed):
+
+- **Origin.** `origin_host` is empty on every line of the window, so no origin was refused and the allow-list needs no change (`EXTRA_ALLOWED_ORIGINS` stays as it is). Whether claude.ai sends an `Origin` header at all is not visible: an allowed origin is not logged.
+- **X-Forwarded-For.** `forwarded_for_count` is 1 on every line, which matches `TRUSTED_PROXY_HOPS` as configured (no change).
+- **POSTs per tool call.** The client keeps no session. After a handshake of three POSTs (`initialize`, `notifications/initialized`, `tools/list`, 15:28:13Z to 15:28:14Z) each of the six tool calls was a single POST. Over the whole session, including the handshakes made while the connector was being added, claude.ai produced 20 lines for 6 tool calls (about 3.3 per call, near the 3.5 of the cost estimate); in steady state it is 1 per call.
+- **Errors at our edge.** None: no 401, 403 or 429 from either client in the window.
+- **Protocol version.** Three requests (15:26:43Z, 15:26:46Z and 15:28:12Z) carried `MCP-Protocol-Version` 2026-07-28 and were answered 400 `protocol_error`, because the installed MCP SDK 1.32.0 lists 2025-11-25 as its newest version. Each was followed within about 0.5 s by a fresh `initialize`, and the client then used 2025-11-25. Follow-up before directory submission: upgrade the SDK so the newer version is accepted, then repeat the run and read the log again.
+- **Other client.** Lines with `mcp_client` "other" (protocol 2025-03-26, a handshake and `business_get` every four to six minutes since before the connector existed) are not part of this run; they look like the platform's own canary.
+
+Content observations from the transcript (separate tickets, not failures of this check):
+
+1. `business_get` reported a next free slot "today 17:30", while `business_list_team_members` showed no next free date for any of the seven team members.
+2. `business_list_dates` returned 21 October, one day past the two weeks requested.
+
+Owner review: 2026-10-06, owner ran the six prompts in claude.ai (Altegio organization account) and confirmed in Chrome that the widget showed Any available professional, Wednesday 7 October 9:00 and Classic Haircut pre-selected
