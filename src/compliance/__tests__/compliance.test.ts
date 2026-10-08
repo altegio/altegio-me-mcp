@@ -26,9 +26,13 @@ import {
   type RuleId,
   type Violation,
 } from '../rules.js';
-import { SCOPE_READ } from '../../tools/scopes.js';
+import { SCOPE_DISCOVER, SCOPE_READ } from '../../tools/scopes.js';
 
-const SINGLE: ToolMeta = { kind: 'single', upstream: [], scopes: [SCOPE_READ] };
+const SINGLE: ToolMeta = {
+  kind: 'single',
+  upstream: [],
+  scopes: [SCOPE_DISCOVER],
+};
 
 function rules(violations: readonly Violation[]): RuleId[] {
   return violations.map((violation) => violation.rule);
@@ -141,6 +145,32 @@ describe('compliant tools', () => {
 
   it('reports nothing for the production registry alone', () => {
     expect(checkRegistry(productionTools, { production: true })).toEqual([]);
+  });
+});
+
+describe('R14 base tier', () => {
+  it('reports a tool whose scopes lack mcp:me:discover, even with mcp:me:read', () => {
+    const violations = checkTool(compliantListTool.spec, {
+      ...compliantListTool.meta,
+      scopes: [SCOPE_READ],
+    });
+    expect(violations).toContainEqual(
+      expect.objectContaining({
+        rule: 'R14',
+        message: 'scopes must include mcp:me:discover',
+      })
+    );
+  });
+
+  it('accepts a tool that holds mcp:me:discover', () => {
+    expect(
+      rules(
+        checkTool(compliantListTool.spec, {
+          ...compliantListTool.meta,
+          scopes: [SCOPE_DISCOVER],
+        })
+      )
+    ).not.toContain('R14');
   });
 });
 
@@ -411,7 +441,7 @@ describe('compliant paginated tool through an SDK client', () => {
       toolDeps: undefined,
       secrets: [],
       record: createCallRecord(),
-      caller: { kind: 'anonymous', scopes: new Set([SCOPE_READ]) },
+      caller: { kind: 'anonymous', scopes: new Set([SCOPE_DISCOVER]) },
     });
     const client = new Client({ name: 'jest-client', version: '0.0.0' });
     const [clientTransport, serverTransport] =

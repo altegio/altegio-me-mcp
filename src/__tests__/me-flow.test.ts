@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
+import { z } from 'zod';
 import { BookingClient } from '../booking/client.js';
 import { ALTEGIO_ACCEPT } from '../booking/http.js';
 import {
@@ -13,15 +14,19 @@ import {
   SIGNED_USER_TOKEN_HEADER,
 } from '../security/caller-auth.js';
 import { PROXY_AUTH_HEADER } from '../security/proxy-auth.js';
+import { defineTool, type DefinedTool } from '../tools/factory.js';
 import { productionTools } from '../tools/registry.js';
+import { SCOPE_BOOK } from '../tools/scopes.js';
 import {
   CANARY_SECRET,
   CLIENT_USER_TOKEN,
+  PARTNER_TOKEN,
   closeAllApps,
   postMcp,
   startApp,
   stubPartnerValidator,
   toolCallBody,
+  toolsListBody,
   waitForLogs,
   type Harness,
 } from './helpers/http-harness.js';
@@ -37,6 +42,7 @@ const PLACES_PATH = '/user/companies/yplaces';
 
 interface RpcResult {
   result?: {
+    tools?: { name: string }[];
     content?: { type: string; text: string }[];
     structuredContent?: {
       items: {
@@ -49,6 +55,28 @@ interface RpcResult {
     isError?: boolean;
   };
 }
+
+let bookHandlerRuns = 0;
+// A tool of the future client tier: it needs mcp:me:book, which nobody holds.
+const bookTool: DefinedTool<unknown> = defineTool({
+  name: 'demo_book_thing',
+  title: 'Book a demo thing',
+  description: 'Books one demo thing for the signed-in client.',
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    openWorldHint: false,
+    idempotentHint: false,
+  },
+  scopes: [SCOPE_BOOK],
+  input: z.strictObject({}),
+  output: z.strictObject({ ok: z.boolean() }),
+  render: () => 'booked',
+  handler: () => {
+    bookHandlerRuns += 1;
+    return Promise.resolve({ ok: true });
+  },
+});
 
 afterEach(async () => {
   await closeAllApps();
@@ -232,5 +260,155 @@ describe('me_list_places with a signed client identity behind the proxy', () => 
     expect(line).toMatchObject({ caller: 'client', outcome: 'ok' });
     expect(text).not.toContain(CLIENT_USER_TOKEN);
     expect(JSON.stringify(harness.logs)).not.toContain(CLIENT_USER_TOKEN);
+  });
+});
+
+describe('tier separation: discover for everyone, read for a signed-in client', () => {
+  const REQUIRED = {
+    callerAuth: {
+      mode: 'required' as const,
+      validator: stubPartnerValidator(),
+    },
+  };
+
+  it('refuses an anonymous caller in band, names the sign-in and sends nothing upstream', async () => {
+    const { harness, upstream } = await start('default');
+    const res = await postMcp(
+      harness.baseUrl,
+      toolCallBody('me_list_places', {})
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as RpcResult;
+    expect(body.result?.isError).toBe(true);
+    expect(body.result?.content?.[0]?.text).toContain('sign-in');
+    expect(upstream.calls).toEqual([]);
+    const [line] = await waitForLogs(harness, 1);
+    expect(line).toMatchObject({
+      caller: 'anonymous',
+      tool: 'me_list_places',
+      outcome: 'tool_error',
+      error_type: 'InsufficientScope',
+    });
+  });
+
+  it('refuses a partner caller in band, names the sign-in and sends nothing upstream', async () => {
+    const { harness, upstream } = await start('default', REQUIRED);
+    const res = await postMcp(
+      harness.baseUrl,
+      toolCallBody('me_list_places', {}),
+      { authorization: `Bearer ${PARTNER_TOKEN}` }
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as RpcResult;
+    expect(body.result?.isError).toBe(true);
+    expect(body.result?.content?.[0]?.text).toContain('sign-in');
+    expect(upstream.calls).toEqual([]);
+    const [line] = await waitForLogs(harness, 1);
+    expect(line).toMatchObject({
+      caller: 'partner',
+      error_type: 'InsufficientScope',
+    });
+  });
+
+  it('still serves a partner caller the known-business tools', async () => {
+    const { harness, upstream } = await start('default', REQUIRED);
+    const res = await postMcp(
+      harness.baseUrl,
+      toolCallBody('business_get', { location_id: 722227 }),
+      { authorization: `Bearer ${PARTNER_TOKEN}` }
+    );
+    const body = (await res.json()) as RpcResult;
+    expect(body.result?.isError).not.toBe(true);
+    expect(
+      upstream.calls.map((call) => call.headers.get('authorization'))
+    ).toEqual([`Bearer ${PARTNER_TOKEN}`]);
+  });
+
+  it('lists the same tools for an anonymous, a partner and a client caller', async () => {
+    const names: string[][] = [];
+    const callers: [Parameters<typeof startApp>[0], Record<string, string>][] =
+      [
+        [{}, {}],
+        [REQUIRED, { authorization: `Bearer ${PARTNER_TOKEN}` }],
+        [{}, { [DIRECT_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN }],
+      ];
+    for (const [overrides, headers] of callers) {
+      const { harness } = await start('default', overrides);
+      const res = await postMcp(harness.baseUrl, toolsListBody(), headers);
+      const body = (await res.json()) as RpcResult;
+      names.push((body.result?.tools ?? []).map((tool) => tool.name));
+    }
+    expect(names[0]).toContain('me_list_places');
+    expect(names[1]).toEqual(names[0]);
+    expect(names[2]).toEqual(names[0]);
+  });
+
+  it.each([
+    ['no scope header', undefined],
+    ['only mcp:me:book', 'mcp:me:book'],
+    ['an unknown scope', 'mcp:pro:write'],
+  ])(
+    'refuses me_list_places to a signed client whose scope list has %s',
+    async (_label, scope) => {
+      const { harness, upstream } = await start('default', BEHIND_PROXY);
+      const res = await postMcp(
+        harness.baseUrl,
+        toolCallBody('me_list_places', {}),
+        signedClient(scope)
+      );
+      const body = (await res.json()) as RpcResult;
+      expect(body.result?.isError).toBe(true);
+      expect(body.result?.content?.[0]?.text).toContain('sign-in');
+      expect(upstream.calls).toEqual([]);
+    }
+  );
+
+  it('grants mcp:me:read from the signed list but never mcp:me:book', async () => {
+    bookHandlerRuns = 0;
+    const { harness } = await start('default', {
+      ...BEHIND_PROXY,
+      tools: [...productionTools, bookTool],
+    });
+    const list = await postMcp(
+      harness.baseUrl,
+      toolCallBody('me_list_places', {}),
+      signedClient('mcp:me:read mcp:me:book')
+    );
+    const listBody = (await list.json()) as RpcResult;
+    expect(listBody.result?.isError).not.toBe(true);
+
+    const book = await postMcp(
+      harness.baseUrl,
+      toolCallBody('demo_book_thing', {}),
+      signedClient('mcp:me:read mcp:me:book')
+    );
+    const bookBody = (await book.json()) as RpcResult;
+    expect(bookBody.result?.isError).toBe(true);
+    expect(bookBody.result?.content?.[0]?.text).toContain(
+      'acts for a signed-in client'
+    );
+    expect(bookHandlerRuns).toBe(0);
+  });
+
+  it('gives a direct-header client the discover and read scopes and not book', async () => {
+    bookHandlerRuns = 0;
+    const { harness } = await start('default', {
+      tools: [...productionTools, bookTool],
+    });
+    const headers = { [DIRECT_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN };
+    for (const [tool, args, refused] of [
+      ['business_get', { location_id: 722227 }, false],
+      ['me_list_places', {}, false],
+      ['demo_book_thing', {}, true],
+    ] as const) {
+      const res = await postMcp(
+        harness.baseUrl,
+        toolCallBody(tool, args),
+        headers
+      );
+      const body = (await res.json()) as RpcResult;
+      expect(body.result?.isError === true).toBe(refused);
+    }
+    expect(bookHandlerRuns).toBe(0);
   });
 });

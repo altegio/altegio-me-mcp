@@ -18,7 +18,10 @@ export const SCOPE_READ = 'mcp:me:read' as const;
  */
 export const SCOPE_BOOK = 'mcp:me:book' as const;
 
-export const SCOPES = [SCOPE_READ, SCOPE_BOOK] as const;
+/** Base tier under its own name once SCOPE_READ means the signed-in client's read scope. */
+export const SCOPE_DISCOVER = 'mcp:me:discover' as const;
+
+export const SCOPES = [SCOPE_DISCOVER, SCOPE_READ, SCOPE_BOOK] as const;
 
 export type Scope = (typeof SCOPES)[number];
 
