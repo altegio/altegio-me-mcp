@@ -21,8 +21,11 @@ export interface UpstreamErrorInit {
   cause?: unknown;
 }
 
-/** 'caller': the caller's own partner token (ADR 0004); 'server': ours. */
-export type UpstreamCredential = 'server' | 'caller';
+/**
+ * 'caller': the caller's own partner token (ADR 0004); 'server': ours; 'user':
+ * the call carried a signed-in client's user token (ADR 0005).
+ */
+export type UpstreamCredential = 'server' | 'caller' | 'user';
 
 export class UpstreamError extends Error {
   readonly kind: UpstreamErrorKind;

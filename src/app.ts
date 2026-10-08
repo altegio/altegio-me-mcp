@@ -23,6 +23,7 @@ import {
 import {
   createCallerAuthMiddleware,
   type CallerAuthMode,
+  type ClientIdentityNames,
 } from './security/caller-auth.js';
 import type { PartnerTokenValidator } from './security/partner-token.js';
 import { createProxyAuthMiddleware } from './security/proxy-auth.js';
@@ -49,7 +50,13 @@ export interface AppDeps<D> {
   // from the proxy's signed header when proxyAuth is on, else sent directly.
   // Required: there is no configuration without a caller check, and a request
   // that reaches the MCP handler without an admitted caller is granted nothing.
-  callerAuth: { mode: CallerAuthMode; validator: PartnerTokenValidator };
+  callerAuth: {
+    mode: CallerAuthMode;
+    validator: PartnerTokenValidator;
+    // The signed client identity (ADR 0005): header names and kind value, the
+    // I8 defaults when absent. Header names must keep the x-mcp-auth- prefix.
+    client?: ClientIdentityNames;
+  };
   // The deployed commit, reported by /health.
   commit?: string | null;
   // Edge abuse protection for POST /mcp (OPS-06): the client identity step and
@@ -240,6 +247,7 @@ export function createApp<D>(deps: AppDeps<D>): Express {
       mode: deps.callerAuth.mode,
       behindProxy: proxyAuth.length > 0,
       validator: deps.callerAuth.validator,
+      client: deps.callerAuth.client,
     }),
     express.json({ limit: MCP_BODY_LIMIT }),
     rejectBatch,

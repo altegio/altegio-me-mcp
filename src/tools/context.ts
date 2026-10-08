@@ -1,4 +1,5 @@
 import type { UpstreamCallOptions } from '../booking/http.js';
+import { ToolError } from './errors.js';
 
 // Per-call tool context (WR-04, D-01): the abort signal every upstream wait
 // listens to, the caller key the gate's per-key queue cap counts, and the
@@ -23,6 +24,11 @@ export interface ToolContext {
    */
   readonly partnerToken: string | null;
   /**
+   * The signed-in client's Altegio user token (ADR 0005); null for every other
+   * caller. Only userCall hands it to an upstream call.
+   */
+  readonly userToken: string | null;
+  /**
    * A signal that aborts after `ms`: the budget of one step inside the call
    * (book_check's slot check). A seam, so tests need not wait out real time.
    */
@@ -38,6 +44,7 @@ export const NO_TOOL_CONTEXT: ToolContext = Object.freeze({
   signal: new AbortController().signal,
   clientKey: null,
   partnerToken: null,
+  userToken: null,
   timeout: stepTimeout,
 });
 
@@ -51,12 +58,13 @@ export function createToolContext(
   parent: AbortSignal | undefined,
   clientKey: string | null,
   deadlineMs: number = TOOL_DEADLINE_MS,
-  partnerToken: string | null = null
+  partnerToken: string | null = null,
+  userToken: string | null = null
 ): ToolContext {
   const deadline = AbortSignal.timeout(deadlineMs);
   const signal =
     parent === undefined ? deadline : AbortSignal.any([parent, deadline]);
-  return { signal, clientKey, partnerToken, timeout: stepTimeout };
+  return { signal, clientKey, partnerToken, userToken, timeout: stepTimeout };
 }
 
 /** What every upstream call of a tool carries: its signal, gate key and token. */
@@ -68,6 +76,24 @@ export function upstreamCall(ctx: ToolContext): UpstreamCallOptions {
         key: ctx.clientKey,
         partnerToken: ctx.partnerToken,
       };
+}
+
+/**
+ * The call options of a tool that reads the signed-in client's own data: those
+ * of upstreamCall plus the user token. It throws before anything is sent when
+ * the caller has no client sign-in. upstreamCall never carries the user token,
+ * so a business route cannot send it by accident.
+ */
+export function userCall(
+  ctx: ToolContext
+): UpstreamCallOptions & { userToken: string } {
+  if (ctx.userToken === null) {
+    throw new ToolError(
+      "This tool reads the signed-in client's own data, and this connection has no client sign-in.",
+      'tell the user to connect this server with their Altegio sign-in, which happens on the sign-in page and never in the chat; do not retry.'
+    );
+  }
+  return { ...upstreamCall(ctx), userToken: ctx.userToken };
 }
 
 /**

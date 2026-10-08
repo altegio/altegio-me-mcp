@@ -1,16 +1,20 @@
 # Altegio.me MCP Server
 
-Status: the stateless MCP server serves six read-only booking tools for a known business:
+Status: the stateless MCP server serves eight read-only tools. Six are for a known business:
 business card (`business_get`), services (`business_list_services`), team members
 (`business_list_team_members`), dates with free time (`business_list_dates`), free time slots
 (`business_list_time_slots`) and a slot check that hands off a pre-selected booking widget link
-(`book_check`). They call the Altegio public booking API through a throttled client
+(`book_check`). Two are for a signed-in client's own data: the places the client already goes to
+(`me_list_places`) and their bookings (`me_list_bookings`), each with the usual service and team
+member, so that "book my usual" ends in the same pre-selected widget link. They call the Altegio public booking API through a throttled client
 (`src/booking`), and a live suite has checked that client against a real business. The hosting
 setup (a Cloud Run pipeline behind the platform proxy, edge limits, secrets as files, alerts) is
 in the repository and live since 2026-10-05 at `https://mcp.alteg.io/me`, see [Deploy](#deploy).
 Callers authenticate with their own Altegio partner token, which the server checks with Altegio
-and uses for their upstream calls; actions for one signed-in client come with OAuth in Phase 2
-([ADR 0004](docs/decisions/0004-caller-authorization-tiers.md), see [Access](#access)).
+and uses for their upstream calls. A signed-in client's own tools run on the platform proxy's
+signed client identity; the proxy's phone sign-in page waits for the platform team (I8)
+([ADR 0004](docs/decisions/0004-caller-authorization-tiers.md),
+[ADR 0005](docs/decisions/0005-own-places-first.md), see [Access](#access)).
 The catalog of bookable
 businesses and search come next. Decisions and research are in [`docs/`](docs/).
 
@@ -141,6 +145,9 @@ values) when one is missing or invalid.
 | `MCP_PROXY_BACKEND_KEY` | Shared key of the proxy signature, a comma-separated list during a rotation, each key at least 32 characters. Production uses the file form below | none | with `PROXY_AUTH=required`, this or `MCP_PROXY_BACKEND_KEY_FILE` |
 | `MCP_PROXY_BACKEND_KEY_FILE` | Absolute path of a mounted file that holds the proxy key; wins over `MCP_PROXY_BACKEND_KEY` and is re-read lazily every 60 s, so a rotation needs no restart | none | with `PROXY_AUTH=required`, this or `MCP_PROXY_BACKEND_KEY` |
 | `CALLER_AUTH` | `required` or `optional`. With `required`, every `POST /mcp` needs the caller's own Altegio partner token: behind the proxy (`PROXY_AUTH=required`) only in the proxy's signed `x-mcp-auth-altegio-partner-token` header, without it as `Authorization: Bearer <token>` or `X-Altegio-Partner-Token`. The token is checked with Altegio (cached by hash: valid 5 min, invalid 30 s) and signs that caller's upstream calls. `optional` serves a caller without a token with `ALTEGIO_API_TOKEN`, logs one `config_warning` at startup, and exists for the proxy rollout and local runs; a token that is sent is still checked. `.env.example` sets `optional` | `required` | no |
+| `CLIENT_USER_TOKEN_HEADER` | Name of the signed header that carries the client's Altegio user token behind the proxy. It must start with `x-mcp-auth-` (the proxy signature covers only those headers) and is lower-cased. Change it only if the platform's I8 header names differ. `.env.example` leaves it empty | `x-mcp-auth-altegio-user-token` | no |
+| `CLIENT_SCOPE_HEADER` | Name of the signed header that carries the client's space-separated scope list; same rules as `CLIENT_USER_TOKEN_HEADER`. Only `mcp:me:read` in it is honoured, and `mcp:me:book` is granted to nobody. `.env.example` leaves it empty | `x-mcp-auth-scope` | no |
+| `CLIENT_CALLER_KIND` | Value of `x-mcp-auth-kind` that marks a client sign-in; it must not be `partner`. `.env.example` leaves it empty | `client` | no |
 | `COMMIT_SHA` | Commit of the deployed build, 7 to 40 lowercase hex characters; reported as `commit` by `GET /health` | none (`commit` is `null`) | no |
 | `TRUSTED_PROXY_HOPS` | Proxies between the caller and the server, counted from the right of `X-Forwarded-For`. It picks the client address when the proxy does not sign `x-mcp-auth-client-ip`, and with `PROXY_AUTH=off`. `0` means no proxy. The leftmost entries and the TCP peer are never used | `1` | no |
 | `SHARED_EGRESS_CIDRS` | Comma-separated IPv4 or IPv6 CIDRs whose addresses share one request budget and are not limited per address, because many users sit behind them. The default is Anthropic's outbound range used by claude.ai | `160.79.104.0/21` | no |
@@ -186,12 +193,50 @@ Altegio's per-partner limits and licence terms apply to the caller. Without a to
 HTTP 401; with a token Altegio refuses, 401 `invalid_token`; when Altegio cannot be reached for
 the check, 503 with `Retry-After`.
 
-Access is tiered by scope ([ADR 0004](docs/decisions/0004-caller-authorization-tiers.md)). A
-partner token grants `mcp:me:read`, which the six current tools need. Tools that act for one
-client (Phase 2) need `mcp:me:book`, which only that client's OAuth sign-in grants; a call
-without it gets an in-band error naming the missing access, and `tools/list` shows the same tools
-to everyone. Interactive hosts such as claude.ai and ChatGPT cannot send a partner token and
-connect once OAuth arrives in Phase 2.
+Access is tiered by scope ([ADR 0004](docs/decisions/0004-caller-authorization-tiers.md), amended
+by ADR 0005, own places first). Three scopes:
+
+- `mcp:me:discover` is the base tier. Every admitted caller holds it (a partner token, a client
+  sign-in, or no token while `CALLER_AUTH=optional`), and the six known-business tools need only it.
+- `mcp:me:read` is the signed-in client's own places and bookings. Only a client sign-in grants it,
+  and `me_list_places` and `me_list_bookings` require it. An anonymous or partner caller who calls
+  one of them gets an in-band error that names the client sign-in.
+- `mcp:me:book` is declared for later writes and granted to nobody yet, whatever a scope header says.
+
+`tools/list` shows the same tools to everyone.
+
+**The client tier as built.** The platform proxy signs the client's Altegio user token into
+`x-mcp-auth-altegio-user-token`, with `x-mcp-auth-kind: client` and the client's scope list in
+`x-mcp-auth-scope`. The three names are settings (`CLIENT_USER_TOKEN_HEADER`,
+`CLIENT_SCOPE_HEADER`, `CLIENT_CALLER_KIND`, see the table above) in case the platform picks other
+ones. Behind the proxy, `CALLER_AUTH=required` admits such a signed client; a direct user token is
+refused there. The server never sees a phone number or an SMS code and never calls the sign-in
+routes. With `mcp:me:read` in the scope list the client can run `me_list_places` and
+`me_list_bookings`; the six known-business tools accept the client too; no caller holds
+`mcp:me:book`. Without the sign-in, the two tools answer in band and name it. The user token goes
+to Altegio only on the two signed-in routes, `GET /user/companies/yplaces` and
+`GET /user/records`, next to the partner token (the one the proxy sends with the client, else the
+server's), and never appears in a result or a log. Both routes are undocumented: the contract
+recorded from a live run, and the end-to-end run with a real account, are in
+[`docs/research/signed-in-routes.md`](docs/research/signed-in-routes.md), and some fields can be
+empty. The recorded flow is `me_list_places`, `business_list_dates`, `business_list_time_slots`,
+`book_check`, ending at the pre-selected widget link with the usual service and team member; the
+client confirms in the widget, and no tool writes a booking.
+
+**What waits for I8**, the platform team's request for the proxy's end-client sign-in on `/me`
+(asked 2026-10-08):
+
+- the proxy's own phone and SMS sign-in page with OAuth, so that a client can connect from an
+  interactive host;
+- the protected-resource metadata and the `_meta["mcp/www_authenticate"]` step-up on the in-band
+  refusal, which today only says that a sign-in is needed;
+- the partner token the proxy sends with a client, the SMS payer, and the use of the undocumented
+  routes, all open with the platform team;
+- the end-to-end run from claude.ai, a Phase 6 acceptance item.
+
+Until I8 ships, the client tier is verified on fixtures, with the direct header on a local run and
+in the container with a signed client identity. Interactive hosts such as claude.ai and ChatGPT
+cannot send a partner token and connect through the platform's sign-in once it ships.
 
 ## Local run
 
@@ -210,11 +255,19 @@ curl -s localhost:8080/health
 npx -y @modelcontextprotocol/inspector@2.9.0 --cli http://localhost:8080/mcp --transport http --method tools/list
 ```
 
-`GET /health` returns the status, version and commit. `tools/list` lists the six booking tools. Tool
+`GET /health` returns the status, version and commit. `tools/list` lists the eight tools. Tool
 calls reach the Altegio API, so they need the real partner token in `.env`; with the placeholder
 token they return an in-band error. `.env.example` sets `CALLER_AUTH=optional`, so these calls
 need no caller token; with `CALLER_AUTH=required` send `Authorization: Bearer <partner token>`. Raw HTTP clients must send `Accept: application/json, text/event-stream` on
 `POST /mcp`, as the Streamable HTTP transport requires.
+
+To try the client tools without the proxy, keep `CALLER_AUTH=optional` and add the header
+`X-Altegio-User-Token: <user token>` to the `tools/call` of `me_list_places` or `me_list_bookings`.
+A user token comes from the documented phone-code sign-in run by hand, outside this repository
+(steps in [`docs/research/signed-in-routes.md`](docs/research/signed-in-routes.md)); it stays in
+`.env` as `ALTEGIO_USER_TOKEN`, only the live suites read it, and no run prints it. Set
+`ALTEGIO_E2E_USER=1` next to `ALTEGIO_E2E=1` to run the live suites of the signed-in routes
+(see [Checks](#checks)).
 
 ## Checks
 
@@ -254,6 +307,19 @@ removes exactly this: the token, e-mail addresses, phone numbers, team-member an
 addresses, coordinates, business titles and account ids (plus free text, links and image URLs);
 the required test run fails on any real value for those keys and parses the recordings with the
 route schemas. Without `ALTEGIO_E2E=1`, which only `test:live` sets, every live test is skipped.
+
+Two more live suites need a user token (`ALTEGIO_USER_TOKEN` in `.env`) and `ALTEGIO_E2E_USER=1`
+as well; they are skipped without both flags. `user-routes.live.test.ts` records the contract of
+the two signed-in routes (two upstream calls). `me-flow.live.test.ts` drives the own-place flow
+from `me_list_places` to the pre-selected widget link through the real app with the direct user
+token header (at most 12 upstream calls, nothing booked):
+
+```bash
+ALTEGIO_E2E=1 ALTEGIO_E2E_USER=1 node --env-file=.env ./node_modules/jest/bin/jest.js \
+  --testPathPatterns=me-flow.live --runInBand
+```
+
+It prints the link and the counts and writes them to the git-ignored `loadtest-output/`.
 
 The real-browser check of the widget link lives in `scripts/browser-check`, an isolated package
 with its own pinned Playwright. It runs only locally and is never part of CI or the Docker image:

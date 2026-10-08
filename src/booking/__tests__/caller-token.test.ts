@@ -17,6 +17,7 @@ import {
 const BASE = 'https://api.alteg.io/api/v1';
 const SERVER_TOKEN = 'server-partner-token-0001';
 const CALLER_TOKEN = 'caller-partner-token-0001';
+const USER_TOKEN = 'client-user-token-0001-abcdef';
 
 const CALL: UpstreamCallSpec = {
   method: 'GET',
@@ -198,5 +199,253 @@ describe('BookingClient.probePartnerToken', () => {
       fetch: () => Promise.reject(new TypeError('fetch failed')),
     });
     expect(await booking.probePartnerToken(CALLER_TOKEN)).toBe('unavailable');
+  });
+});
+
+// ADR 0005, D-02: a signed-in call carries the client's user token next to the
+// partner token, on the two signed-in routes only.
+describe('BookingHttp with the client user token', () => {
+  const PLACES: UpstreamCallSpec = {
+    method: 'GET',
+    route: '/user/companies/yplaces',
+    path: '/user/companies/yplaces',
+  };
+
+  function unchangedSource(): SecretSource & { refreshes: () => number } {
+    const refresh = jest.fn(() => Promise.resolve(false));
+    return {
+      current: () => SERVER_TOKEN,
+      known: () => [SERVER_TOKEN],
+      refresh,
+      refreshes: () => refresh.mock.calls.length,
+    };
+  }
+
+  it('writes Bearer <partner>, User <user> and Bearer alone without a user token', async () => {
+    const upstream = fakeFetch([
+      {
+        method: 'GET',
+        path: PLACES.path,
+        reply: loadFixture('user_yplaces', 'default'),
+      },
+      {
+        method: 'GET',
+        path: CALL.path,
+        reply: loadFixture('company', 'default'),
+      },
+    ]);
+    const http = new BookingHttp({
+      base: BASE,
+      tokenSource: spySource(),
+      fetch: upstream.fetch,
+    });
+    await http.send({ ...PLACES, userToken: USER_TOKEN });
+    await http.send({
+      ...PLACES,
+      userToken: USER_TOKEN,
+      partnerToken: CALLER_TOKEN,
+    });
+    await http.send(CALL);
+    expect(
+      upstream.calls.map((call) => call.headers.get('authorization'))
+    ).toEqual([
+      `Bearer ${SERVER_TOKEN}, User ${USER_TOKEN}`,
+      `Bearer ${CALLER_TOKEN}, User ${USER_TOKEN}`,
+      `Bearer ${SERVER_TOKEN}`,
+    ]);
+  });
+
+  it('sends one request on a 401 when the server token is unchanged, and names the user', async () => {
+    const source = unchangedSource();
+    const upstream = fakeFetch([
+      {
+        method: 'GET',
+        path: PLACES.path,
+        reply: refusal(`User ${USER_TOKEN} is not valid`),
+      },
+    ]);
+    const http = new BookingHttp({
+      base: BASE,
+      tokenSource: source,
+      fetch: upstream.fetch,
+    });
+    const error = (await http
+      .send({ ...PLACES, userToken: USER_TOKEN })
+      .catch((caught: unknown) => caught)) as UpstreamError;
+    expect(error).toBeInstanceOf(UpstreamError);
+    expect(error.kind).toBe('unauthorized');
+    expect(error.credential).toBe('user');
+    expect(error.upstreamMessage).toBe('User [redacted] is not valid');
+    expect(upstream.calls).toHaveLength(1);
+  });
+
+  it('sends one request on a 403 with a caller partner token and names the user', async () => {
+    const source = spySource();
+    const upstream = fakeFetch([
+      {
+        method: 'GET',
+        path: PLACES.path,
+        reply: { status: 403, body: { success: false, meta: {} } },
+      },
+    ]);
+    const http = new BookingHttp({
+      base: BASE,
+      tokenSource: source,
+      fetch: upstream.fetch,
+    });
+    const error = (await http
+      .send({ ...PLACES, userToken: USER_TOKEN, partnerToken: CALLER_TOKEN })
+      .catch((caught: unknown) => caught)) as UpstreamError;
+    expect(error.credential).toBe('user');
+    expect(upstream.calls).toHaveLength(1);
+    expect(source.refreshes()).toBe(0);
+  });
+
+  it('keeps the same user token on the one rotation retry of the server token', async () => {
+    let attempt = 0;
+    let current = SERVER_TOKEN;
+    const source: SecretSource = {
+      current: () => current,
+      known: () => [SERVER_TOKEN, current],
+      refresh: () => {
+        current = 'server-partner-token-0002';
+        return Promise.resolve(true);
+      },
+    };
+    const upstream = fakeFetch([
+      {
+        method: 'GET',
+        path: PLACES.path,
+        reply: () => {
+          attempt += 1;
+          return attempt === 1
+            ? { status: 401, body: { success: false, meta: {} } }
+            : loadFixture('user_yplaces', 'default');
+        },
+      },
+    ]);
+    const http = new BookingHttp({
+      base: BASE,
+      tokenSource: source,
+      fetch: upstream.fetch,
+    });
+    await http.send({ ...PLACES, userToken: USER_TOKEN });
+    expect(
+      upstream.calls.map((call) => call.headers.get('authorization'))
+    ).toEqual([
+      `Bearer ${SERVER_TOKEN}, User ${USER_TOKEN}`,
+      `Bearer server-partner-token-0002, User ${USER_TOKEN}`,
+    ]);
+  });
+
+  it('words a refused sign-in as the client sign-in, with a next action to reconnect', () => {
+    const error = toToolError(
+      new UpstreamError('unauthorized', PLACES.route, {
+        status: 401,
+        credential: 'user',
+      })
+    ) as Error & { nextAction: string };
+    expect(error.message).toBe(
+      "The booking service did not accept the client's sign-in for this connection."
+    );
+    expect(error.nextAction).toContain('connect again');
+    expect(error.nextAction).toContain('do not retry');
+  });
+});
+
+describe('BookingClient.myPlaces', () => {
+  function client(reply: FakeReply) {
+    const upstream = fakeFetch([
+      { method: 'GET', path: '/user/companies/yplaces', reply },
+    ]);
+    return {
+      upstream,
+      booking: new BookingClient({
+        base: BASE,
+        tokenSource: spySource(),
+        fetch: upstream.fetch,
+      }),
+    };
+  }
+
+  it.each([undefined, ''])(
+    'sends nothing without a user token (%p)',
+    async (userToken) => {
+      const { upstream, booking } = client(
+        loadFixture('user_yplaces', 'default')
+      );
+      await expect(
+        booking.myPlaces(userToken === undefined ? {} : { userToken })
+      ).rejects.toThrow(TypeError);
+      expect(upstream.calls).toEqual([]);
+    }
+  );
+
+  it('maps the recorded places and keeps only an https logo', async () => {
+    const { booking } = client({
+      status: 200,
+      body: {
+        success: true,
+        meta: [],
+        data: [
+          {
+            id: 7,
+            title: 'Plain title',
+            public_title: '',
+            address: 'Somewhere 1',
+            logo: 'http://assets.example.invalid/logo.png',
+            active_status: { is_active: true, is_enabled_gca: false },
+          },
+          {
+            id: 8,
+            title: 'T',
+            public_title: 'Public',
+            logo: 'https://assets.example.invalid/logo.png',
+            active: 0,
+          },
+          { id: 9, title: null, logo: 'not a url', active_status: [] },
+        ],
+      },
+    });
+    const places = await booking.myPlaces({ userToken: USER_TOKEN });
+    expect(places).toEqual([
+      {
+        locationId: 7,
+        name: 'Plain title',
+        address: 'Somewhere 1',
+        city: null,
+        logoUrl: null,
+        onlineBooking: true,
+        lastVisit: null,
+      },
+      {
+        locationId: 8,
+        name: 'Public',
+        address: null,
+        city: null,
+        logoUrl: 'https://assets.example.invalid/logo.png',
+        onlineBooking: false,
+        lastVisit: null,
+      },
+      {
+        locationId: 9,
+        name: null,
+        address: null,
+        city: null,
+        logoUrl: null,
+        onlineBooking: false,
+        lastVisit: null,
+      },
+    ]);
+  });
+
+  it('treats a body that is not a list as contract drift', async () => {
+    const { booking } = client({
+      status: 200,
+      body: { success: true, data: { places: [] }, meta: [] },
+    });
+    await expect(
+      booking.myPlaces({ userToken: USER_TOKEN })
+    ).rejects.toMatchObject({ kind: 'contract_drift' });
   });
 });

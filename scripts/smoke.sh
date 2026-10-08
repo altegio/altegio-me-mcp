@@ -3,8 +3,10 @@
 # Runs the image with a canary token and a proxy key file, and checks /health
 # (version and the COMMIT_SHA the container was given), the stateless /mcp
 # endpoint with requests signed the way the platform proxy signs them, the 401
-# for an unsigned request, that no secret reaches the logs or the image config,
-# the container user and the SIGTERM shutdown.
+# for an unsigned request, the in-band refusal of me_list_places for a signed
+# client identity without the mcp:me:read scope (ME-01), that no secret
+# reaches the logs or the image config (the canary user token included), the
+# container user and the SIGTERM shutdown.
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
@@ -24,6 +26,7 @@ fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CANARY_TOKEN="smoke-token-$(date +%s)-$RANDOM"
 CANARY_ARG="smoke-arg-$RANDOM"
+CANARY_USER_TOKEN="smoke-user-$RANDOM-$(date +%s)"
 WORK_DIR="$(mktemp -d)"
 # Random per run; the container reads it from a file, as production reads the
 # Secret Manager mount. The verifier takes the text of the key as the HMAC key.
@@ -46,14 +49,19 @@ fail() {
   exit 1
 }
 
-# sign_post_mcp: the x-mcp-proxy-auth value for POST /mcp now (research
-# Pattern 1): v1:<seconds>:<hex HMAC-SHA256> over 'mcp-proxy-auth/v1', the
-# seconds, the method and the path, joined by newlines. No x-mcp-auth-* header
-# is sent, so no identity lines follow.
+# sign_post_mcp [NAME:VALUE...]: the x-mcp-proxy-auth value for POST /mcp now
+# (research Pattern 1): v1:<seconds>:<hex HMAC-SHA256> over 'mcp-proxy-auth/v1',
+# the seconds, the method and the path, then one name:value line per x-mcp-auth-*
+# header, all joined by newlines. The identity lines are given already sorted by
+# name; with none, no x-mcp-auth-* header is sent.
 sign_post_mcp() {
-  local seconds mac
+  local seconds mac line text
   seconds="$(date +%s)"
-  mac="$(printf 'mcp-proxy-auth/v1\n%s\nPOST\n/mcp' "$seconds" |
+  text="$(printf 'mcp-proxy-auth/v1\n%s\nPOST\n/mcp' "$seconds")"
+  for line in "$@"; do
+    text="$(printf '%s\n%s' "$text" "$line")"
+  done
+  mac="$(printf '%s' "$text" |
     openssl dgst -sha256 -hmac "$PROXY_KEY" |
     sed 's/^.*= //')"
   printf 'v1:%s:%s' "$seconds" "$mac"
@@ -68,6 +76,22 @@ post_mcp() {
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -H "x-mcp-proxy-auth: $(sign_post_mcp)" \
+    --data "$2"
+}
+
+# post_mcp_client NAME JSON: signed POST to /mcp with the identity of a signed-in
+# client (x-mcp-auth-kind client and the canary user token), and no
+# x-mcp-auth-scope header. The identity lines are sorted by header name.
+post_mcp_client() {
+  curl -sS -D "$WORK_DIR/$1.headers" -o "$WORK_DIR/$1.body" -w '%{http_code}' \
+    -X POST "$BASE_URL/mcp" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -H "x-mcp-auth-altegio-user-token: $CANARY_USER_TOKEN" \
+    -H 'x-mcp-auth-kind: client' \
+    -H "x-mcp-proxy-auth: $(sign_post_mcp \
+      "x-mcp-auth-altegio-user-token:$CANARY_USER_TOKEN" \
+      'x-mcp-auth-kind:client')" \
     --data "$2"
 }
 
@@ -153,6 +177,20 @@ post_mcp call "$call_body" >/dev/null
 jq -e '.error' "$WORK_DIR/call.body" >/dev/null ||
   fail "tools/call with an unknown tool returned no JSON-RPC error: $(cat "$WORK_DIR/call.body")"
 
+# A signed client identity without mcp:me:read: HTTP 200 and an in-band refusal
+# of me_list_places that names the sign-in (ME-01). Nothing reaches Altegio, so
+# the canary user token goes nowhere but the log scan below.
+me_body="$(jq -nc '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"me_list_places",arguments:{}}}')"
+me_status="$(post_mcp_client me-refusal "$me_body")"
+[ "$me_status" = "200" ] || fail "me_list_places for a client without mcp:me:read returned HTTP $me_status, expected 200"
+jq -e '.result.isError == true' "$WORK_DIR/me-refusal.body" >/dev/null ||
+  fail "me_list_places for a client without mcp:me:read is not an in-band refusal: $(cat "$WORK_DIR/me-refusal.body")"
+jq -e '.result.content[0].text | contains("sign-in")' "$WORK_DIR/me-refusal.body" >/dev/null ||
+  fail "the me_list_places refusal does not name the sign-in: $(cat "$WORK_DIR/me-refusal.body")"
+if grep -qF "$CANARY_USER_TOKEN" "$WORK_DIR/me-refusal.body"; then
+  fail "the canary user token appears in the me_list_places refusal"
+fi
+
 # An unsigned request is refused before its body is read: 401 and the fixed
 # proxy_auth_required body (OPS-03, D-04).
 unsigned_status="$(post_mcp_unsigned unsigned '{"jsonrpc":"2.0","id":4,"method":"tools/list"}')"
@@ -184,16 +222,19 @@ stop_seconds=$((stop_finished - stop_started))
 exit_code="$(docker inspect --format '{{.State.ExitCode}}' "$NAME")"
 [ "$exit_code" = "0" ] || fail "container exit code is $exit_code, expected 0"
 
-# Logs: exactly one mcp_call line per POST (five signed, one unsigned), the
-# unsigned one with its auth_reason, no canary token, no canary key, no canary
-# argument.
+# Logs: exactly one mcp_call line per POST (six signed, one unsigned), the
+# unsigned one with its auth_reason, no canary token, no canary user token, no
+# canary key, no canary argument.
 docker logs "$NAME" >"$WORK_DIR/container.log" 2>&1
 call_lines="$(grep -c '"event":"mcp_call"' "$WORK_DIR/container.log" || true)"
-[ "$call_lines" = "6" ] || fail "expected 6 mcp_call log lines, found $call_lines"
+[ "$call_lines" = "7" ] || fail "expected 7 mcp_call log lines, found $call_lines"
 refusal_lines="$(grep -c '"auth_reason":"missing"' "$WORK_DIR/container.log" || true)"
 [ "$refusal_lines" -ge "1" ] || fail "expected at least 1 log line with auth_reason missing, found $refusal_lines"
 if grep -qF "$CANARY_TOKEN" "$WORK_DIR/container.log"; then
   fail "the canary token appears in the container logs"
+fi
+if grep -qF "$CANARY_USER_TOKEN" "$WORK_DIR/container.log"; then
+  fail "the canary user token appears in the container logs"
 fi
 if grep -qF "$PROXY_KEY" "$WORK_DIR/container.log"; then
   fail "the canary proxy key appears in the container logs"

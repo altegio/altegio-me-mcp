@@ -43,6 +43,11 @@ export interface GateCallOptions {
 export interface UpstreamCallOptions extends GateCallOptions {
   /** The caller's validated partner token; missing signs with the server's. */
   partnerToken?: string;
+  /**
+   * The signed-in client's user token (ADR 0005). Sent as `User <token>` next
+   * to the partner token; only the signed-in routes pass it.
+   */
+  userToken?: string;
 }
 
 /** Admission control for upstream calls; the throttle implements it. */
@@ -227,7 +232,10 @@ export class BookingHttp {
     const initFor = (token: string): RequestInit => {
       const headers: Record<string, string> = {
         Accept: ALTEGIO_ACCEPT,
-        Authorization: `Bearer ${token}`,
+        Authorization:
+          call.userToken === undefined
+            ? `Bearer ${token}`
+            : `Bearer ${token}, User ${call.userToken}`,
       };
       if (hasBody) headers['Content-Type'] = 'application/json';
       return {
@@ -305,7 +313,8 @@ export class BookingHttp {
       reply.status,
       reply.text,
       retryAfter,
-      callerToken
+      callerToken,
+      call.userToken
     );
   }
 
@@ -383,13 +392,22 @@ export class BookingHttp {
     status: number,
     text: string,
     retryAfter: number | null,
-    callerToken: string | undefined
+    callerToken: string | undefined,
+    userToken: string | undefined
   ): UpstreamError {
     const meta = readErrorMeta(text);
     const kind = kindOfStatus(status);
     return new UpstreamError(kind, route, {
       status,
-      credential: callerToken === undefined ? 'server' : 'caller',
+      // A call that carried the client's user token names the client's
+      // sign-in, whoever's partner token backed it: that is the party who can
+      // fix it by connecting again.
+      credential:
+        userToken !== undefined
+          ? 'user'
+          : callerToken === undefined
+            ? 'server'
+            : 'caller',
       codes: kind === 'rejected' ? meta.codes : [],
       retryAfterSeconds: kind === 'rate_limited' ? retryAfter : null,
       // Scrubbed before anything else touches it (WR-04): later sanitising
@@ -397,12 +415,11 @@ export class BookingHttp {
       upstreamMessage:
         meta.message === null
           ? null
-          : scrubSecrets(
-              meta.message,
-              callerToken === undefined
-                ? this.tokenSource.known()
-                : [callerToken, ...this.tokenSource.known()]
-            ),
+          : scrubSecrets(meta.message, [
+              ...(callerToken === undefined ? [] : [callerToken]),
+              ...(userToken === undefined ? [] : [userToken]),
+              ...this.tokenSource.known(),
+            ]),
     });
   }
 }

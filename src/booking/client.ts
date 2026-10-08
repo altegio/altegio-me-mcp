@@ -14,9 +14,13 @@ import {
   servicesDataSchema,
   teamMembersDataSchema,
   timeSlotsDataSchema,
+  userPlacesDataSchema,
+  userRecordsDataSchema,
   type CompanyData,
   type ServicesData,
   type TeamMembersData,
+  type UserPlacesData,
+  type UserRecordsData,
 } from './schemas.js';
 
 // Typed client of the public Altegio booking API (D-01). The route table is
@@ -53,6 +57,22 @@ export const BOOKING_ROUTES = Object.freeze({
   } as const),
 });
 
+/**
+ * The two signed-in routes (ADR 0005, D-02): the only routes that carry the
+ * client's user token next to the partner token. Both are undocumented; their
+ * recorded contract is docs/research/signed-in-routes.md.
+ */
+export const USER_ROUTES = Object.freeze({
+  places: Object.freeze({
+    method: 'GET',
+    route: '/user/companies/yplaces',
+  } as const),
+  records: Object.freeze({
+    method: 'GET',
+    route: '/user/records',
+  } as const),
+});
+
 export interface BookingForm {
   id: number;
   title: string | null;
@@ -81,6 +101,49 @@ export interface BusinessCard {
   bookingForms: BookingForm[];
   /** The default form's URL, else default_bookform_url, else the first form's URL, else null. */
   bookingFormUrl: string | null;
+}
+
+/**
+ * One of the signed-in client's own places, as GET /user/companies/yplaces
+ * describes it. Strings are raw business text.
+ */
+export interface OwnPlace {
+  locationId: number;
+  name: string | null;
+  address: string | null;
+  /** Null for the recorded shape, which carries only city_id. */
+  city: string | null;
+  /** An https URL, or null. */
+  logoUrl: string | null;
+  /** The place's active_status.is_active flag. */
+  onlineBooking: boolean;
+  /** YYYY-MM-DD; null while the route gives none (the recorded shape has no such key). */
+  lastVisit: string | null;
+}
+
+/**
+ * One of the signed-in client's own records, as GET /user/records describes
+ * it, reduced to what a tool may show. The record id, token, record token,
+ * api id and comment are never read (ME-05).
+ */
+export interface OwnRecord {
+  locationId: number;
+  businessName: string | null;
+  /** The business's city text, from the record's company. */
+  city: string | null;
+  /** The business's currency sign, for the prices of this record. */
+  currency: string | null;
+  services: { id: number; title: string | null; price: number | null }[];
+  /** Null when the record has no team member. */
+  teamMember: { id: number; name: string | null } | null;
+  /** Exactly as the records route wrote it, offset without a colon. */
+  datetime: string;
+  /** The record's `deleted` flag: the booking was cancelled. */
+  cancelled: boolean;
+  /** 1 and -1 are seen on past records; the meaning is inferred. */
+  attendance: number | null;
+  /** Sum of the service prices; null when any is unknown or none exist. */
+  price: number | null;
 }
 
 export interface ServiceCategory {
@@ -160,6 +223,12 @@ export interface TimeSlot {
 function assertPositiveId(value: number, label: string): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new TypeError(`${label} must be a positive safe integer`);
+  }
+}
+
+function assertUserToken(token: string | undefined): void {
+  if (token === undefined || token === '') {
+    throw new TypeError('a user token is required for a signed-in route');
   }
 }
 
@@ -280,6 +349,117 @@ function toCard(data: CompanyData): BusinessCard {
       nonEmpty(data.default_bookform_url) ??
       bookingForms[0]?.url ??
       null,
+  };
+}
+
+/** A logo address is kept only when it is an https URL. */
+function httpsUrlOrNull(value: string | null | undefined): string | null {
+  const text = nonEmpty(value);
+  if (text === null) return null;
+  try {
+    return new URL(text).protocol === 'https:' ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+function toOwnPlace(place: UserPlacesData[number]): OwnPlace {
+  const status = place.active_status;
+  const flag =
+    status !== null &&
+    status !== undefined &&
+    !Array.isArray(status) &&
+    status.is_active !== null &&
+    status.is_active !== undefined
+      ? status.is_active
+      : place.active;
+  return {
+    locationId: place.id,
+    name: nonEmpty(place.public_title) ?? nonEmpty(place.title),
+    address: nonEmpty(place.address),
+    city: nonEmpty(place.city),
+    logoUrl: httpsUrlOrNull(place.logo),
+    onlineBooking: truthy(flag),
+    // The recorded places route has no last-visit key (docs/research/signed-in-routes.md).
+    lastVisit: null,
+  };
+}
+
+/** The value when it is an object; null for [] (PHP's empty map), null or absent. */
+function objectOrNull<T>(
+  value: T
+): Exclude<T, readonly unknown[] | null | undefined> | null {
+  return value === null || value === undefined || Array.isArray(value)
+    ? null
+    : (value as Exclude<T, readonly unknown[] | null | undefined>);
+}
+
+type UserRecord = UserRecordsData[number];
+
+/**
+ * The price of one service line: cost times amount. The recorded `discount`
+ * has no documented unit, so a discounted line has no price rather than a
+ * guessed one.
+ */
+function lineItemPrice(
+  service: NonNullable<UserRecord['services']>[number]
+): number | null {
+  const cost = service.cost;
+  if (typeof cost !== 'number') return null;
+  if (typeof service.discount === 'number' && service.discount !== 0) {
+    return null;
+  }
+  const amount = typeof service.amount === 'number' ? service.amount : 1;
+  return cost * amount;
+}
+
+function sumPrices(prices: readonly (number | null)[]): number | null {
+  if (prices.length === 0) return null;
+  let total = 0;
+  for (const price of prices) {
+    if (price === null) return null;
+    total += price;
+  }
+  return total;
+}
+
+/**
+ * A record as an OwnRecord, or null when it names no place or no moment: such
+ * a record can be neither shown under a place nor ordered. Only the keys the
+ * recorded contract names are read; the id, token and comment are not.
+ */
+function toOwnRecord(record: UserRecord): OwnRecord | null {
+  const company = objectOrNull(record.company);
+  const datetime = nonEmpty(record.datetime);
+  if (company === null || datetime === null) return null;
+  const locationId = company.id;
+  if (typeof locationId !== 'number' || locationId <= 0) return null;
+
+  const staff = objectOrNull(record.staff);
+  const teamMemberId =
+    staff !== null && typeof staff.id === 'number' && staff.id > 0
+      ? staff.id
+      : null;
+  const prices = (record.services ?? []).map(lineItemPrice);
+  return {
+    locationId,
+    businessName: nonEmpty(company.public_title) ?? nonEmpty(company.title),
+    city: nonEmpty(company.city),
+    currency: nonEmpty(company.currency_short_title),
+    services: (record.services ?? []).map((service, index) => ({
+      id: service.id,
+      title: nonEmpty(service.title),
+      price: prices[index] ?? null,
+    })),
+    teamMember:
+      teamMemberId === null
+        ? null
+        : { id: teamMemberId, name: nonEmpty(staff?.name) },
+    datetime,
+    cancelled: truthy(record.deleted),
+    attendance:
+      typeof record.attendance === 'number' ? record.attendance : null,
+    price: sumPrices(prices),
   };
 }
 
@@ -565,6 +745,41 @@ export class BookingClient {
         status: reply.status,
       });
     }
+  }
+
+  /**
+   * The signed-in client's own places (ME-02), in upstream order: businesses
+   * where they already have records. `call.userToken` is required and goes
+   * next to the partner token in the Authorization header. Nothing is sent
+   * without it.
+   */
+  async myPlaces(call: UpstreamCallOptions): Promise<OwnPlace[]> {
+    assertUserToken(call.userToken);
+    const { route, method } = USER_ROUTES.places;
+    const data = await this.read(
+      { method, route, path: route, ...call },
+      userPlacesDataSchema
+    );
+    return data.map(toOwnPlace);
+  }
+
+  /**
+   * The signed-in client's own records (ME-03, ME-04), in upstream order
+   * (oldest first). `call.userToken` is required, as for myPlaces.
+   */
+  async myRecords(call: UpstreamCallOptions): Promise<OwnRecord[]> {
+    assertUserToken(call.userToken);
+    const { route, method } = USER_ROUTES.records;
+    const data = await this.read(
+      { method, route, path: route, ...call },
+      userRecordsDataSchema
+    );
+    const records: OwnRecord[] = [];
+    for (const entry of data) {
+      const record = toOwnRecord(entry);
+      if (record !== null) records.push(record);
+    }
+    return records;
   }
 
   /**

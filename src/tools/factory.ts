@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { UpstreamError, type UpstreamErrorKind } from '../booking/errors.js';
 import { NO_TOOL_CONTEXT, isDeadline, type ToolContext } from './context.js';
-import { SCOPE_READ, type Scope } from './scopes.js';
+import { SCOPE_DISCOVER, type Scope } from './scopes.js';
 import { textResult, toolErrorResult } from './result.js';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from './untrusted.js';
 
@@ -136,9 +136,10 @@ export interface ToolDefinition<
   /** Upstream calls this tool makes, for the read-only route check (R7). */
   upstream?: readonly UpstreamCall[];
   /**
-   * Scopes the caller needs (ADR 0004). Defaults to the base tier, so no tool
-   * is ever callable without a partner token; a tool that acts for a signed-in
-   * client adds SCOPE_BOOK (compliance rule R14).
+   * Scopes the caller needs (ADR 0004, ADR 0005). Every tool holds the base
+   * tier, SCOPE_DISCOVER, so no tool is ever callable without an admitted
+   * caller; a tool that reads a signed-in client's own data adds SCOPE_READ,
+   * and one that acts for the client adds SCOPE_BOOK (compliance rule R14).
    */
   scopes?: readonly Scope[];
   input: I;
@@ -226,7 +227,7 @@ export function defineTool<
     kind: def.kind ?? 'single',
     upstream: Object.freeze([...(def.upstream ?? [])]),
     scopes: Object.freeze([
-      ...new Set<Scope>([SCOPE_READ, ...(def.scopes ?? [])]),
+      ...new Set<Scope>([SCOPE_DISCOVER, ...(def.scopes ?? [])]),
     ]),
   });
 

@@ -48,6 +48,16 @@ function defaultText(error: UpstreamError): UpstreamErrorText {
     case 'rejected':
       return REJECTED_REQUEST;
     case 'unauthorized':
+      // The call carried the signed-in client's user token: their sign-in
+      // expired or was revoked, and only a new sign-in helps.
+      if (error.credential === 'user') {
+        return {
+          message:
+            "The booking service did not accept the client's sign-in for this connection.",
+          nextAction:
+            'tell the user their sign-in has expired or was revoked and they need to connect again; do not retry.',
+        };
+      }
       // The caller's own partner token was refused after it passed admission
       // (revoked or blocked since): only the integrator can renew it.
       if (error.credential === 'caller') {

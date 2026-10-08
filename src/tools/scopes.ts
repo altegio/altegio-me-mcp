@@ -1,26 +1,46 @@
-// Access tiers (ADR 0004). A scope names what a caller may do, not who it is:
-// every tool declares the scopes it needs, and the call is checked against the
-// caller's grant in tools/call only. tools/list is never filtered, so every
-// connection to the address sees the same tools; a tool the caller cannot run
-// says why when it is called.
+// Access tiers (ADR 0004, amended by ADR 0005). A scope names what a caller may
+// do, not who it is: every tool declares the scopes it needs, and the call is
+// checked against the caller's grant in tools/call only. tools/list is never
+// filtered, so every connection to the address sees the same tools; a tool the
+// caller cannot run says why when it is called.
+//
+// Three tiers. mcp:me:discover is the base: every admitted caller (partner
+// token, client sign-in, or anonymous while CALLER_AUTH=optional) holds it, and
+// the known-business tools need only it. mcp:me:read is the signed-in client's
+// own places and bookings: only a client sign-in grants it. mcp:me:book is the
+// client's writes (Phase 5): declared, and granted by nobody yet.
 //
 // The names follow the platform's per-service vocabulary (`mcp:pro:read`,
-// `mcp:pro:write` on /pro), so the proxy can issue them unchanged once it
-// mints OAuth tokens for /me.
+// `mcp:pro:write` on /pro), so the proxy can issue them unchanged when it mints
+// OAuth tokens for /me.
 
-/** Base tier: business discovery and the slot check. Any partner token grants it. */
+/**
+ * Base tier: business discovery and the slot check. Every admitted caller
+ * holds it. (Until ADR 0005 this tier was called mcp:me:read.)
+ */
+export const SCOPE_DISCOVER = 'mcp:me:discover' as const;
+
+/**
+ * Client tier, read: the signed-in client's own places and bookings. Only a
+ * client sign-in grants it.
+ */
 export const SCOPE_READ = 'mcp:me:read' as const;
 
 /**
- * Client tier: acting for one signed-in client (book, reschedule, cancel, list
- * their bookings). Only an OAuth token from the client's phone sign-in grants
- * it; no tool needs it yet.
+ * Client tier, write: acting for one signed-in client (book, reschedule,
+ * cancel; Phase 5). Declared so a tool can require it; no caller is granted it
+ * yet, whatever a scope header says.
  */
 export const SCOPE_BOOK = 'mcp:me:book' as const;
 
-export const SCOPES = [SCOPE_READ, SCOPE_BOOK] as const;
+export const SCOPES = [SCOPE_DISCOVER, SCOPE_READ, SCOPE_BOOK] as const;
 
 export type Scope = (typeof SCOPES)[number];
+
+/** The scopes a client sign-in may carry; the proxy's scope list is cut to these. */
+export const CLIENT_GRANTABLE_SCOPES: readonly Scope[] = Object.freeze([
+  SCOPE_READ,
+]);
 
 /** The scopes a grant lacks for a tool, in the tool's own order. */
 export function missingScopes(
@@ -41,8 +61,11 @@ export function scopeRefusalText(
   tool: string,
   missing: readonly Scope[]
 ): string {
-  const needsClient = missing.includes(SCOPE_BOOK);
-  return needsClient
-    ? `${tool} acts for a signed-in client, and this connection has no client sign-in. Next: tell the user this step is done in the business's booking widget; do not retry.`
-    : `${tool} needs the ${missing.join(', ')} access, which this connection does not have. Next: tell the user the connection needs a valid Altegio partner token; do not retry.`;
+  if (missing.includes(SCOPE_BOOK)) {
+    return `${tool} acts for a signed-in client, and this connection has no client sign-in. Next: tell the user this step is done in the business's booking widget; do not retry.`;
+  }
+  if (missing.includes(SCOPE_READ)) {
+    return `${tool} reads the signed-in client's own places and bookings, and this connection has no client sign-in. Next: tell the user to connect this server with their Altegio sign-in, which happens on the sign-in page and never in the chat; do not retry.`;
+  }
+  return `${tool} needs the ${missing.join(', ')} access, which this connection does not have. Next: tell the user the connection needs a valid Altegio partner token; do not retry.`;
 }

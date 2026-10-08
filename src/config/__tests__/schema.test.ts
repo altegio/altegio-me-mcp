@@ -89,6 +89,9 @@ describe('loadConfig defaults and required keys', () => {
       NODE_ENV: 'production',
       PROXY_AUTH: 'off',
       CALLER_AUTH: 'required',
+      CLIENT_USER_TOKEN_HEADER: 'x-mcp-auth-altegio-user-token',
+      CLIENT_SCOPE_HEADER: 'x-mcp-auth-scope',
+      CLIENT_CALLER_KIND: 'client',
       TRUSTED_PROXY_HOPS: 1,
       SHARED_EGRESS_CIDRS: ['160.79.104.0/21'],
       EXTRA_ALLOWED_ORIGINS: ['https://claude.ai', 'https://claude.com'],
@@ -261,6 +264,71 @@ describe('loadConfig URLs and enums', () => {
   );
 });
 
+describe('the client sign-in settings (ADR 0005, D-01)', () => {
+  it('lower-cases a header name and keeps the kind as written', () => {
+    expect(
+      loadConfig({
+        ...VALID,
+        CLIENT_USER_TOKEN_HEADER: 'X-Mcp-Auth-User',
+        CLIENT_SCOPE_HEADER: 'X-MCP-Auth-Scopes',
+        CLIENT_CALLER_KIND: 'enduser',
+      })
+    ).toMatchObject({
+      CLIENT_USER_TOKEN_HEADER: 'x-mcp-auth-user',
+      CLIENT_SCOPE_HEADER: 'x-mcp-auth-scopes',
+      CLIENT_CALLER_KIND: 'enduser',
+    });
+  });
+
+  it.each([
+    ['CLIENT_USER_TOKEN_HEADER', 'x-altegio-user'],
+    ['CLIENT_USER_TOKEN_HEADER', 'x-mcp-auth-'],
+    ['CLIENT_USER_TOKEN_HEADER', 'x-mcp-auth-user token'],
+    ['CLIENT_USER_TOKEN_HEADER', 'x-mcp-auth-kind'],
+    ['CLIENT_USER_TOKEN_HEADER', 'x-mcp-auth-altegio-partner-token'],
+    ['CLIENT_SCOPE_HEADER', 'scope'],
+    ['CLIENT_SCOPE_HEADER', 'x-mcp-auth-kind'],
+    ['CLIENT_CALLER_KIND', 'partner'],
+    ['CLIENT_CALLER_KIND', 'Client Kind'],
+    ['CLIENT_CALLER_KIND', ''.padEnd(40, 'a')],
+  ])('rejects %s = %s with the fixed rule text', (key, value) => {
+    const error = configErrorFor({ ...VALID, [key]: value });
+    expect(error.issues.map((issue) => issue.key)).toEqual([key]);
+    expect(error.issues[0]?.message).toMatch(/x-mcp-auth-|partner/);
+  });
+
+  it.each([
+    'CLIENT_USER_TOKEN_HEADER',
+    'CLIENT_SCOPE_HEADER',
+    'CLIENT_CALLER_KIND',
+  ])('never echoes the value of %s', (key) => {
+    const canary = 'CANARY-7f3a91-do-not-print';
+    const error = configErrorFor({ ...VALID, [key]: canary });
+    expect(error.issues.map((issue) => issue.key)).toEqual([key]);
+    expect(formatConfigError(error)).not.toContain(canary);
+    expect(formatConfigError(error)).not.toContain(canary.toLowerCase());
+  });
+
+  it('rejects a scope header equal to the default user token header', () => {
+    expect(
+      issueKeys({
+        ...VALID,
+        CLIENT_SCOPE_HEADER: 'x-mcp-auth-altegio-user-token',
+      }).sort()
+    ).toEqual(['CLIENT_SCOPE_HEADER', 'CLIENT_USER_TOKEN_HEADER']);
+  });
+
+  it('rejects the same header name for the user token and the scope list', () => {
+    expect(
+      issueKeys({
+        ...VALID,
+        CLIENT_USER_TOKEN_HEADER: 'x-mcp-auth-same',
+        CLIENT_SCOPE_HEADER: 'x-mcp-auth-same',
+      }).sort()
+    ).toEqual(['CLIENT_SCOPE_HEADER', 'CLIENT_USER_TOKEN_HEADER']);
+  });
+});
+
 describe('ConfigError reporting', () => {
   it('reports several invalid variables once each, in CONFIG_KEYS order', () => {
     const error = configErrorFor({
@@ -277,6 +345,9 @@ describe('ConfigError reporting', () => {
       MCP_PROXY_BACKEND_KEY: 'short',
       MCP_PROXY_BACKEND_KEY_FILE: 'relative/path',
       CALLER_AUTH: 'sometimes',
+      CLIENT_USER_TOKEN_HEADER: 'x-altegio-user',
+      CLIENT_SCOPE_HEADER: 'x-mcp-auth-',
+      CLIENT_CALLER_KIND: 'partner',
       COMMIT_SHA: 'NOT-HEX',
       TRUSTED_PROXY_HOPS: '-1',
       SHARED_EGRESS_CIDRS: 'not-a-cidr',

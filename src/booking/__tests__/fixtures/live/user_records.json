@@ -1,0 +1,1446 @@
+{
+  "recorded_at": "2026-10-08T06:22:58.637Z",
+  "route": "user_records",
+  "status": 200,
+  "data": [
+    {
+      "id": 1,
+      "token": null,
+      "record_token": "[removed]",
+      "clients_count": 1,
+      "date": "2023-12-08 10:00:00",
+      "datetime": "2023-12-08T10:00:00+0100",
+      "create_date": "2023-12-07T14:35:37+0000",
+      "comment": "[removed]",
+      "deleted": true,
+      "attendance": 0,
+      "length": 1800,
+      "notify_by_sms": 0,
+      "notify_by_email": 0,
+      "master_requested": 0,
+      "online": true,
+      "api_id": "",
+      "last_change_date": "2023-12-07T15:55:01+0100",
+      "prepaid": true,
+      "prepaid_confirmed": false,
+      "activity_id": 0,
+      "review_enabled": null,
+      "paid_amount": 0,
+      "allow_delete_record": false,
+      "allow_change_record": false,
+      "is_confirmation_needed": false,
+      "is_acceptance_payment": false,
+      "payment_failure": true,
+      "is_show_prepay_button": false,
+      "services": [
+        {
+          "id": 10430054,
+          "title": "Онлайн-консультация (до 30 минут, 150€)",
+          "cost": 150,
+          "price_min": 150,
+          "price_max": 150,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 1800,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 150,
+              "currency": "EUR"
+            },
+            "prepaid_min": {
+              "amount": 150,
+              "percent": 100,
+              "currency": "EUR"
+            }
+          }
+        }
+      ],
+      "company": {
+        "id": 657643,
+        "title": "[removed]",
+        "public_title": "[removed]",
+        "country_id": 43,
+        "country": "Portugal",
+        "city_id": 35405,
+        "city": "Lisbon",
+        "phone": "+10000000000",
+        "phones": ["+10000000000"],
+        "timezone": 2,
+        "address": "[removed]",
+        "coordinate_lat": 0,
+        "coordinate_lon": 0,
+        "allow_delete_record": false,
+        "allow_change_record": false,
+        "allow_change_prepaid_record": false,
+        "allow_delete_prepaid_record": false,
+        "site": "https://example.invalid/",
+        "currency_short_title": "€",
+        "allow_change_record_delay_step": 0,
+        "allow_delete_record_delay_step": 0,
+        "logo": "https://example.invalid/image.png",
+        "social": {
+          "facebook": "",
+          "instagram": "https://example.invalid/",
+          "telegram": "",
+          "whatsapp": "",
+          "viber": ""
+        },
+        "map": null
+      },
+      "staff": {
+        "id": 1877728,
+        "name": "Team member 1877728",
+        "specialization": "CEO, Okno Agency",
+        "show_rating": 1,
+        "rating": 0,
+        "votes_count": 0,
+        "avatar": "https://example.invalid/image.png",
+        "avatar_big": "https://example.invalid/image.png",
+        "comments_count": 0,
+        "is_deleted": false,
+        "position": []
+      },
+      "resource_instances": [],
+      "acceptance_free": null
+    },
+    {
+      "id": 2,
+      "token": null,
+      "record_token": "[removed]",
+      "clients_count": 1,
+      "date": "2024-02-26 18:00:00",
+      "datetime": "2024-02-26T18:00:00+0700",
+      "create_date": "2024-02-13T10:51:47+0700",
+      "comment": "[removed]",
+      "deleted": true,
+      "attendance": 0,
+      "length": 3600,
+      "notify_by_sms": 0,
+      "notify_by_email": 0,
+      "master_requested": 0,
+      "online": true,
+      "api_id": "[removed]",
+      "last_change_date": "2024-02-13T10:53:14+0700",
+      "prepaid": false,
+      "prepaid_confirmed": false,
+      "activity_id": 7713880,
+      "review_enabled": null,
+      "paid_amount": 0,
+      "allow_delete_record": true,
+      "allow_change_record": true,
+      "is_confirmation_needed": false,
+      "is_acceptance_payment": false,
+      "payment_failure": false,
+      "is_show_prepay_button": false,
+      "services": [
+        {
+          "id": 10593035,
+          "title": "Roller Sport (7-9)",
+          "cost": 1000,
+          "price_min": 1000,
+          "price_max": 1000,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 3600,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 1000,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 1000,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        }
+      ],
+      "company": {
+        "id": 733266,
+        "title": "[removed]",
+        "public_title": "[removed]",
+        "country_id": 59,
+        "country": "Thailand",
+        "city_id": 1497,
+        "city": "Phuket",
+        "phone": "+10000000000",
+        "phones": ["+10000000000"],
+        "timezone": 8,
+        "address": "[removed]",
+        "coordinate_lat": 0,
+        "coordinate_lon": 0,
+        "allow_delete_record": true,
+        "allow_change_record": true,
+        "allow_change_prepaid_record": false,
+        "allow_delete_prepaid_record": true,
+        "site": "https://example.invalid/",
+        "currency_short_title": "฿",
+        "allow_change_record_delay_step": 21600,
+        "allow_delete_record_delay_step": 21600,
+        "logo": "https://example.invalid/image.png",
+        "social": {
+          "facebook": "",
+          "instagram": "https://example.invalid/",
+          "telegram": "https://example.invalid/",
+          "whatsapp": "https://example.invalid/",
+          "viber": ""
+        },
+        "map": null
+      },
+      "staff": {
+        "id": 2188426,
+        "name": "Team member 2188426",
+        "specialization": "Тренер по роликам",
+        "show_rating": 1,
+        "rating": 0,
+        "votes_count": 0,
+        "avatar": "https://example.invalid/image.png",
+        "avatar_big": "https://example.invalid/image.png",
+        "comments_count": 0,
+        "is_deleted": false,
+        "position": []
+      },
+      "resource_instances": [],
+      "acceptance_free": null
+    },
+    {
+      "id": 3,
+      "token": "[removed]",
+      "record_token": "[removed]",
+      "clients_count": 1,
+      "date": "2024-03-19 09:30:00",
+      "datetime": "2024-03-19T09:30:00+0200",
+      "create_date": "2024-03-19T09:30:40+0100",
+      "comment": "",
+      "deleted": false,
+      "attendance": 1,
+      "length": 7200,
+      "notify_by_sms": 1,
+      "notify_by_email": 0,
+      "master_requested": 0,
+      "online": true,
+      "api_id": "",
+      "last_change_date": "2024-03-19T16:38:33+0200",
+      "prepaid": false,
+      "prepaid_confirmed": false,
+      "activity_id": 0,
+      "review_enabled": true,
+      "paid_amount": 0,
+      "allow_delete_record": true,
+      "allow_change_record": true,
+      "is_confirmation_needed": false,
+      "is_acceptance_payment": false,
+      "payment_failure": false,
+      "is_show_prepay_button": false,
+      "services": [
+        {
+          "id": 11438431,
+          "title": "Nail",
+          "cost": 500,
+          "price_min": 500,
+          "price_max": 500,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 0,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 500,
+              "currency": "PLN"
+            },
+            "prepaid_min": {
+              "amount": 500,
+              "percent": 100,
+              "currency": "PLN"
+            }
+          }
+        },
+        {
+          "id": 11438457,
+          "title": "hair",
+          "cost": 1000,
+          "price_min": 1000,
+          "price_max": 1000,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 0,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 1000,
+              "currency": "PLN"
+            },
+            "prepaid_min": {
+              "amount": 1000,
+              "percent": 100,
+              "currency": "PLN"
+            }
+          }
+        }
+      ],
+      "company": {
+        "id": 980477,
+        "title": "[removed]",
+        "public_title": "[removed]",
+        "country_id": 12,
+        "country": "Poland",
+        "city_id": 541,
+        "city": "Warszawa",
+        "phone": "",
+        "phones": [],
+        "timezone": 3,
+        "address": "[removed]",
+        "coordinate_lat": 0,
+        "coordinate_lon": 0,
+        "allow_delete_record": true,
+        "allow_change_record": true,
+        "allow_change_prepaid_record": false,
+        "allow_delete_prepaid_record": false,
+        "site": "",
+        "currency_short_title": "zł",
+        "allow_change_record_delay_step": 0,
+        "allow_delete_record_delay_step": 0,
+        "logo": "https://example.invalid/image.png",
+        "social": {
+          "facebook": "",
+          "instagram": "",
+          "telegram": "",
+          "whatsapp": "",
+          "viber": ""
+        },
+        "map": null
+      },
+      "staff": {
+        "id": 2441108,
+        "name": "Team member 2441108",
+        "specialization": "косметолог",
+        "show_rating": 1,
+        "rating": 0,
+        "votes_count": 0,
+        "avatar": "https://example.invalid/image.png",
+        "avatar_big": "https://example.invalid/image.png",
+        "comments_count": 0,
+        "is_deleted": false,
+        "position": []
+      },
+      "resource_instances": [],
+      "acceptance_free": null
+    },
+    {
+      "id": 4,
+      "token": null,
+      "record_token": "[removed]",
+      "clients_count": 1,
+      "date": "2025-12-07 17:45:00",
+      "datetime": "2025-12-07T17:45:00+0700",
+      "create_date": "2025-12-07T12:30:26+0700",
+      "comment": "",
+      "deleted": false,
+      "attendance": -1,
+      "length": 3600,
+      "notify_by_sms": 2,
+      "notify_by_email": 0,
+      "master_requested": 0,
+      "online": true,
+      "api_id": "[removed]",
+      "last_change_date": "2025-12-07T15:32:44+0700",
+      "prepaid": false,
+      "prepaid_confirmed": false,
+      "activity_id": 0,
+      "review_enabled": null,
+      "paid_amount": 0,
+      "allow_delete_record": true,
+      "allow_change_record": true,
+      "is_confirmation_needed": false,
+      "is_acceptance_payment": false,
+      "payment_failure": false,
+      "is_show_prepay_button": false,
+      "services": [
+        {
+          "id": 12391130,
+          "title": "Cut for boy",
+          "cost": 900,
+          "price_min": 900,
+          "price_max": 900,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 0,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 900,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 900,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        },
+        {
+          "id": 12378557,
+          "title": "7% VAT",
+          "cost": 63,
+          "price_min": null,
+          "price_max": null,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 0,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 0,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 0,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        }
+      ],
+      "company": {
+        "id": 731063,
+        "title": "[removed]",
+        "public_title": "[removed]",
+        "country_id": 59,
+        "country": "Thailand",
+        "city_id": 1497,
+        "city": "Phuket",
+        "phone": "+10000000000",
+        "phones": ["+10000000000"],
+        "timezone": 8,
+        "address": "[removed]",
+        "coordinate_lat": 0,
+        "coordinate_lon": 0,
+        "allow_delete_record": true,
+        "allow_change_record": true,
+        "allow_change_prepaid_record": false,
+        "allow_delete_prepaid_record": false,
+        "site": "https://example.invalid/",
+        "currency_short_title": "฿",
+        "allow_change_record_delay_step": 0,
+        "allow_delete_record_delay_step": 0,
+        "logo": "https://example.invalid/image.png",
+        "social": {
+          "facebook": "",
+          "instagram": "https://example.invalid/",
+          "telegram": "https://example.invalid/",
+          "whatsapp": "https://example.invalid/",
+          "viber": ""
+        },
+        "map": null
+      },
+      "staff": {
+        "id": 2357785,
+        "name": "Team member 2357785",
+        "specialization": "Senior Administrator",
+        "show_rating": 1,
+        "rating": 0,
+        "votes_count": 0,
+        "avatar": "https://example.invalid/image.png",
+        "avatar_big": "https://example.invalid/image.png",
+        "comments_count": 0,
+        "is_deleted": false,
+        "position": {
+          "id": 232339,
+          "title": "Администатор",
+          "services_binding_type": 0
+        }
+      },
+      "resource_instances": [],
+      "acceptance_free": null
+    },
+    {
+      "id": 5,
+      "token": "[removed]",
+      "record_token": "[removed]",
+      "clients_count": 1,
+      "date": "2025-12-13 18:30:00",
+      "datetime": "2025-12-13T18:30:00+0700",
+      "create_date": "2025-12-13T12:25:43+0700",
+      "comment": "",
+      "deleted": false,
+      "attendance": 1,
+      "length": 3600,
+      "notify_by_sms": 2,
+      "notify_by_email": 0,
+      "master_requested": 0,
+      "online": true,
+      "api_id": "[removed]",
+      "last_change_date": "2025-12-13T19:10:17+0700",
+      "prepaid": false,
+      "prepaid_confirmed": false,
+      "activity_id": 0,
+      "review_enabled": true,
+      "paid_amount": 0,
+      "allow_delete_record": true,
+      "allow_change_record": true,
+      "is_confirmation_needed": false,
+      "is_acceptance_payment": false,
+      "payment_failure": false,
+      "is_show_prepay_button": false,
+      "services": [
+        {
+          "id": 12391130,
+          "title": "Cut for boy",
+          "cost": 900,
+          "price_min": 900,
+          "price_max": 900,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 5400,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 900,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 900,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        },
+        {
+          "id": 12378557,
+          "title": "7% VAT",
+          "cost": 63,
+          "price_min": null,
+          "price_max": null,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 0,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 0,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 0,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        }
+      ],
+      "company": {
+        "id": 731063,
+        "title": "[removed]",
+        "public_title": "[removed]",
+        "country_id": 59,
+        "country": "Thailand",
+        "city_id": 1497,
+        "city": "Phuket",
+        "phone": "+10000000000",
+        "phones": ["+10000000000"],
+        "timezone": 8,
+        "address": "[removed]",
+        "coordinate_lat": 0,
+        "coordinate_lon": 0,
+        "allow_delete_record": true,
+        "allow_change_record": true,
+        "allow_change_prepaid_record": false,
+        "allow_delete_prepaid_record": false,
+        "site": "https://example.invalid/",
+        "currency_short_title": "฿",
+        "allow_change_record_delay_step": 0,
+        "allow_delete_record_delay_step": 0,
+        "logo": "https://example.invalid/image.png",
+        "social": {
+          "facebook": "",
+          "instagram": "https://example.invalid/",
+          "telegram": "https://example.invalid/",
+          "whatsapp": "https://example.invalid/",
+          "viber": ""
+        },
+        "map": null
+      },
+      "staff": {
+        "id": 2178363,
+        "name": "Team member 2178363",
+        "specialization": "top haircut master, airtouch",
+        "show_rating": 1,
+        "rating": 5,
+        "votes_count": 0,
+        "avatar": "https://example.invalid/image.png",
+        "avatar_big": "https://example.invalid/image.png",
+        "comments_count": 11,
+        "is_deleted": false,
+        "position": {
+          "id": 232276,
+          "title": "Стилист",
+          "services_binding_type": 0
+        }
+      },
+      "resource_instances": [],
+      "acceptance_free": null
+    },
+    {
+      "id": 6,
+      "token": "[removed]",
+      "record_token": "[removed]",
+      "clients_count": 1,
+      "date": "2026-02-07 14:30:00",
+      "datetime": "2026-02-07T14:30:00+0700",
+      "create_date": "2026-02-03T17:45:33+0700",
+      "comment": "",
+      "deleted": false,
+      "attendance": 1,
+      "length": 5400,
+      "notify_by_sms": 2,
+      "notify_by_email": 0,
+      "master_requested": 0,
+      "online": true,
+      "api_id": "[removed]",
+      "last_change_date": "2026-02-07T15:11:40+0700",
+      "prepaid": false,
+      "prepaid_confirmed": false,
+      "activity_id": 0,
+      "review_enabled": true,
+      "paid_amount": 0,
+      "allow_delete_record": true,
+      "allow_change_record": true,
+      "is_confirmation_needed": false,
+      "is_acceptance_payment": false,
+      "payment_failure": false,
+      "is_show_prepay_button": false,
+      "services": [
+        {
+          "id": 12391130,
+          "title": "Cut for boy",
+          "cost": 900,
+          "price_min": 900,
+          "price_max": 900,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 5400,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 900,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 900,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        },
+        {
+          "id": 12378557,
+          "title": "7% VAT",
+          "cost": 63,
+          "price_min": null,
+          "price_max": null,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 0,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 0,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 0,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        }
+      ],
+      "company": {
+        "id": 731063,
+        "title": "[removed]",
+        "public_title": "[removed]",
+        "country_id": 59,
+        "country": "Thailand",
+        "city_id": 1497,
+        "city": "Phuket",
+        "phone": "+10000000000",
+        "phones": ["+10000000000"],
+        "timezone": 8,
+        "address": "[removed]",
+        "coordinate_lat": 0,
+        "coordinate_lon": 0,
+        "allow_delete_record": true,
+        "allow_change_record": true,
+        "allow_change_prepaid_record": false,
+        "allow_delete_prepaid_record": false,
+        "site": "https://example.invalid/",
+        "currency_short_title": "฿",
+        "allow_change_record_delay_step": 0,
+        "allow_delete_record_delay_step": 0,
+        "logo": "https://example.invalid/image.png",
+        "social": {
+          "facebook": "",
+          "instagram": "https://example.invalid/",
+          "telegram": "https://example.invalid/",
+          "whatsapp": "https://example.invalid/",
+          "viber": ""
+        },
+        "map": null
+      },
+      "staff": {
+        "id": 2178363,
+        "name": "Team member 2178363",
+        "specialization": "top haircut master, airtouch",
+        "show_rating": 1,
+        "rating": 5,
+        "votes_count": 0,
+        "avatar": "https://example.invalid/image.png",
+        "avatar_big": "https://example.invalid/image.png",
+        "comments_count": 11,
+        "is_deleted": false,
+        "position": {
+          "id": 232276,
+          "title": "Стилист",
+          "services_binding_type": 0
+        }
+      },
+      "resource_instances": [],
+      "acceptance_free": null
+    },
+    {
+      "id": 7,
+      "token": "[removed]",
+      "record_token": "[removed]",
+      "clients_count": 1,
+      "date": "2026-04-12 12:00:00",
+      "datetime": "2026-04-12T12:00:00+0700",
+      "create_date": "2026-04-06T13:24:01+0700",
+      "comment": "",
+      "deleted": false,
+      "attendance": 1,
+      "length": 5400,
+      "notify_by_sms": 2,
+      "notify_by_email": 0,
+      "master_requested": 0,
+      "online": true,
+      "api_id": "[removed]",
+      "last_change_date": "2026-04-12T12:39:14+0700",
+      "prepaid": false,
+      "prepaid_confirmed": false,
+      "activity_id": 0,
+      "review_enabled": true,
+      "paid_amount": 0,
+      "allow_delete_record": true,
+      "allow_change_record": true,
+      "is_confirmation_needed": false,
+      "is_acceptance_payment": false,
+      "payment_failure": false,
+      "is_show_prepay_button": false,
+      "services": [
+        {
+          "id": 12391130,
+          "title": "Cut for boy",
+          "cost": 900,
+          "price_min": 900,
+          "price_max": 900,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 5400,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 900,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 900,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        },
+        {
+          "id": 12378557,
+          "title": "7% VAT",
+          "cost": 56,
+          "price_min": null,
+          "price_max": null,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 0,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 0,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 0,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        }
+      ],
+      "company": {
+        "id": 731063,
+        "title": "[removed]",
+        "public_title": "[removed]",
+        "country_id": 59,
+        "country": "Thailand",
+        "city_id": 1497,
+        "city": "Phuket",
+        "phone": "+10000000000",
+        "phones": ["+10000000000"],
+        "timezone": 8,
+        "address": "[removed]",
+        "coordinate_lat": 0,
+        "coordinate_lon": 0,
+        "allow_delete_record": true,
+        "allow_change_record": true,
+        "allow_change_prepaid_record": false,
+        "allow_delete_prepaid_record": false,
+        "site": "https://example.invalid/",
+        "currency_short_title": "฿",
+        "allow_change_record_delay_step": 0,
+        "allow_delete_record_delay_step": 0,
+        "logo": "https://example.invalid/image.png",
+        "social": {
+          "facebook": "",
+          "instagram": "https://example.invalid/",
+          "telegram": "https://example.invalid/",
+          "whatsapp": "https://example.invalid/",
+          "viber": ""
+        },
+        "map": null
+      },
+      "staff": {
+        "id": 2178363,
+        "name": "Team member 2178363",
+        "specialization": "top haircut master, airtouch",
+        "show_rating": 1,
+        "rating": 5,
+        "votes_count": 0,
+        "avatar": "https://example.invalid/image.png",
+        "avatar_big": "https://example.invalid/image.png",
+        "comments_count": 11,
+        "is_deleted": false,
+        "position": {
+          "id": 232276,
+          "title": "Стилист",
+          "services_binding_type": 0
+        }
+      },
+      "resource_instances": [],
+      "acceptance_free": null
+    },
+    {
+      "id": 8,
+      "token": "[removed]",
+      "record_token": "[removed]",
+      "clients_count": 1,
+      "date": "2026-04-12 13:30:00",
+      "datetime": "2026-04-12T13:30:00+0700",
+      "create_date": "2026-04-09T18:45:12+0700",
+      "comment": "",
+      "deleted": false,
+      "attendance": 1,
+      "length": 900,
+      "notify_by_sms": 2,
+      "notify_by_email": 0,
+      "master_requested": 0,
+      "online": true,
+      "api_id": "[removed]",
+      "last_change_date": "2026-04-12T12:39:14+0700",
+      "prepaid": false,
+      "prepaid_confirmed": false,
+      "activity_id": 0,
+      "review_enabled": true,
+      "paid_amount": 0,
+      "allow_delete_record": true,
+      "allow_change_record": true,
+      "is_confirmation_needed": false,
+      "is_acceptance_payment": false,
+      "payment_failure": false,
+      "is_show_prepay_button": false,
+      "services": [],
+      "company": {
+        "id": 731063,
+        "title": "[removed]",
+        "public_title": "[removed]",
+        "country_id": 59,
+        "country": "Thailand",
+        "city_id": 1497,
+        "city": "Phuket",
+        "phone": "+10000000000",
+        "phones": ["+10000000000"],
+        "timezone": 8,
+        "address": "[removed]",
+        "coordinate_lat": 0,
+        "coordinate_lon": 0,
+        "allow_delete_record": true,
+        "allow_change_record": true,
+        "allow_change_prepaid_record": false,
+        "allow_delete_prepaid_record": false,
+        "site": "https://example.invalid/",
+        "currency_short_title": "฿",
+        "allow_change_record_delay_step": 0,
+        "allow_delete_record_delay_step": 0,
+        "logo": "https://example.invalid/image.png",
+        "social": {
+          "facebook": "",
+          "instagram": "https://example.invalid/",
+          "telegram": "https://example.invalid/",
+          "whatsapp": "https://example.invalid/",
+          "viber": ""
+        },
+        "map": null
+      },
+      "staff": {
+        "id": 2178363,
+        "name": "Team member 2178363",
+        "specialization": "top haircut master, airtouch",
+        "show_rating": 1,
+        "rating": 5,
+        "votes_count": 0,
+        "avatar": "https://example.invalid/image.png",
+        "avatar_big": "https://example.invalid/image.png",
+        "comments_count": 11,
+        "is_deleted": false,
+        "position": {
+          "id": 232276,
+          "title": "Стилист",
+          "services_binding_type": 0
+        }
+      },
+      "resource_instances": [],
+      "acceptance_free": null
+    },
+    {
+      "id": 9,
+      "token": "[removed]",
+      "record_token": "[removed]",
+      "clients_count": 1,
+      "date": "2026-06-06 14:00:00",
+      "datetime": "2026-06-06T14:00:00+0700",
+      "create_date": "2026-06-05T07:13:04+0700",
+      "comment": "",
+      "deleted": false,
+      "attendance": 1,
+      "length": 5400,
+      "notify_by_sms": 2,
+      "notify_by_email": 0,
+      "master_requested": 0,
+      "online": true,
+      "api_id": "[removed]",
+      "last_change_date": "2026-06-06T15:02:35+0700",
+      "prepaid": false,
+      "prepaid_confirmed": false,
+      "activity_id": 0,
+      "review_enabled": true,
+      "paid_amount": 963,
+      "allow_delete_record": true,
+      "allow_change_record": true,
+      "is_confirmation_needed": false,
+      "is_acceptance_payment": false,
+      "payment_failure": false,
+      "is_show_prepay_button": false,
+      "services": [
+        {
+          "id": 12391130,
+          "title": "Cut for boy",
+          "cost": 900,
+          "price_min": 900,
+          "price_max": 900,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 5400,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 900,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 900,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        },
+        {
+          "id": 12378557,
+          "title": "7% VAT",
+          "cost": 63,
+          "price_min": null,
+          "price_max": null,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 0,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 0,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 0,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        }
+      ],
+      "company": {
+        "id": 731063,
+        "title": "[removed]",
+        "public_title": "[removed]",
+        "country_id": 59,
+        "country": "Thailand",
+        "city_id": 1497,
+        "city": "Phuket",
+        "phone": "+10000000000",
+        "phones": ["+10000000000"],
+        "timezone": 8,
+        "address": "[removed]",
+        "coordinate_lat": 0,
+        "coordinate_lon": 0,
+        "allow_delete_record": true,
+        "allow_change_record": true,
+        "allow_change_prepaid_record": false,
+        "allow_delete_prepaid_record": false,
+        "site": "https://example.invalid/",
+        "currency_short_title": "฿",
+        "allow_change_record_delay_step": 0,
+        "allow_delete_record_delay_step": 0,
+        "logo": "https://example.invalid/image.png",
+        "social": {
+          "facebook": "",
+          "instagram": "https://example.invalid/",
+          "telegram": "https://example.invalid/",
+          "whatsapp": "https://example.invalid/",
+          "viber": ""
+        },
+        "map": null
+      },
+      "staff": {
+        "id": 2178363,
+        "name": "Team member 2178363",
+        "specialization": "top haircut master, airtouch",
+        "show_rating": 1,
+        "rating": 5,
+        "votes_count": 0,
+        "avatar": "https://example.invalid/image.png",
+        "avatar_big": "https://example.invalid/image.png",
+        "comments_count": 11,
+        "is_deleted": false,
+        "position": {
+          "id": 232276,
+          "title": "Стилист",
+          "services_binding_type": 0
+        }
+      },
+      "resource_instances": [],
+      "acceptance_free": null
+    },
+    {
+      "id": 10,
+      "token": null,
+      "record_token": "[removed]",
+      "clients_count": 1,
+      "date": "2026-06-18 15:30:00",
+      "datetime": "2026-06-18T15:30:00+0700",
+      "create_date": "2026-06-15T20:45:17+0700",
+      "comment": "",
+      "deleted": true,
+      "attendance": 0,
+      "length": 5400,
+      "notify_by_sms": 0,
+      "notify_by_email": 0,
+      "master_requested": 0,
+      "online": true,
+      "api_id": "",
+      "last_change_date": "2026-06-16T19:29:28+0700",
+      "prepaid": false,
+      "prepaid_confirmed": false,
+      "activity_id": 0,
+      "review_enabled": null,
+      "paid_amount": 0,
+      "allow_delete_record": true,
+      "allow_change_record": true,
+      "is_confirmation_needed": false,
+      "is_acceptance_payment": false,
+      "payment_failure": false,
+      "is_show_prepay_button": false,
+      "services": [
+        {
+          "id": 12391130,
+          "title": "Cut for boy",
+          "cost": 900,
+          "price_min": 900,
+          "price_max": 900,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 5400,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 900,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 900,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        }
+      ],
+      "company": {
+        "id": 731063,
+        "title": "[removed]",
+        "public_title": "[removed]",
+        "country_id": 59,
+        "country": "Thailand",
+        "city_id": 1497,
+        "city": "Phuket",
+        "phone": "+10000000000",
+        "phones": ["+10000000000"],
+        "timezone": 8,
+        "address": "[removed]",
+        "coordinate_lat": 0,
+        "coordinate_lon": 0,
+        "allow_delete_record": true,
+        "allow_change_record": true,
+        "allow_change_prepaid_record": false,
+        "allow_delete_prepaid_record": false,
+        "site": "https://example.invalid/",
+        "currency_short_title": "฿",
+        "allow_change_record_delay_step": 0,
+        "allow_delete_record_delay_step": 0,
+        "logo": "https://example.invalid/image.png",
+        "social": {
+          "facebook": "",
+          "instagram": "https://example.invalid/",
+          "telegram": "https://example.invalid/",
+          "whatsapp": "https://example.invalid/",
+          "viber": ""
+        },
+        "map": null
+      },
+      "staff": {
+        "id": 2178363,
+        "name": "Team member 2178363",
+        "specialization": "top haircut master, airtouch",
+        "show_rating": 1,
+        "rating": 5,
+        "votes_count": 0,
+        "avatar": "https://example.invalid/image.png",
+        "avatar_big": "https://example.invalid/image.png",
+        "comments_count": 11,
+        "is_deleted": false,
+        "position": {
+          "id": 232276,
+          "title": "Стилист",
+          "services_binding_type": 0
+        }
+      },
+      "resource_instances": [],
+      "acceptance_free": null
+    },
+    {
+      "id": 11,
+      "token": "[removed]",
+      "record_token": "[removed]",
+      "clients_count": 1,
+      "date": "2026-06-18 16:30:00",
+      "datetime": "2026-06-18T16:30:00+0700",
+      "create_date": "2026-06-16T13:29:33+0700",
+      "comment": "",
+      "deleted": false,
+      "attendance": 1,
+      "length": 5400,
+      "notify_by_sms": 0,
+      "notify_by_email": 0,
+      "master_requested": 0,
+      "online": true,
+      "api_id": "[removed]",
+      "last_change_date": "2026-06-18T17:13:06+0700",
+      "prepaid": false,
+      "prepaid_confirmed": false,
+      "activity_id": 0,
+      "review_enabled": true,
+      "paid_amount": 963,
+      "allow_delete_record": true,
+      "allow_change_record": true,
+      "is_confirmation_needed": false,
+      "is_acceptance_payment": false,
+      "payment_failure": false,
+      "is_show_prepay_button": false,
+      "services": [
+        {
+          "id": 12391130,
+          "title": "Cut for boy",
+          "cost": 900,
+          "price_min": 900,
+          "price_max": 900,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 5400,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 900,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 900,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        },
+        {
+          "id": 12378557,
+          "title": "7% VAT",
+          "cost": 63,
+          "price_min": null,
+          "price_max": null,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 0,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 0,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 0,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        }
+      ],
+      "company": {
+        "id": 731063,
+        "title": "[removed]",
+        "public_title": "[removed]",
+        "country_id": 59,
+        "country": "Thailand",
+        "city_id": 1497,
+        "city": "Phuket",
+        "phone": "+10000000000",
+        "phones": ["+10000000000"],
+        "timezone": 8,
+        "address": "[removed]",
+        "coordinate_lat": 0,
+        "coordinate_lon": 0,
+        "allow_delete_record": true,
+        "allow_change_record": true,
+        "allow_change_prepaid_record": false,
+        "allow_delete_prepaid_record": false,
+        "site": "https://example.invalid/",
+        "currency_short_title": "฿",
+        "allow_change_record_delay_step": 0,
+        "allow_delete_record_delay_step": 0,
+        "logo": "https://example.invalid/image.png",
+        "social": {
+          "facebook": "",
+          "instagram": "https://example.invalid/",
+          "telegram": "https://example.invalid/",
+          "whatsapp": "https://example.invalid/",
+          "viber": ""
+        },
+        "map": null
+      },
+      "staff": {
+        "id": 2178363,
+        "name": "Team member 2178363",
+        "specialization": "top haircut master, airtouch",
+        "show_rating": 1,
+        "rating": 5,
+        "votes_count": 0,
+        "avatar": "https://example.invalid/image.png",
+        "avatar_big": "https://example.invalid/image.png",
+        "comments_count": 11,
+        "is_deleted": false,
+        "position": {
+          "id": 232276,
+          "title": "Стилист",
+          "services_binding_type": 0
+        }
+      },
+      "resource_instances": [],
+      "acceptance_free": null
+    },
+    {
+      "id": 12,
+      "token": "[removed]",
+      "record_token": "[removed]",
+      "clients_count": 1,
+      "date": "2026-08-22 17:00:00",
+      "datetime": "2026-08-22T17:00:00+0700",
+      "create_date": "2026-08-15T11:01:17+0700",
+      "comment": "",
+      "deleted": false,
+      "attendance": 1,
+      "length": 5400,
+      "notify_by_sms": 2,
+      "notify_by_email": 0,
+      "master_requested": 0,
+      "online": true,
+      "api_id": "[removed]",
+      "last_change_date": "2026-08-22T17:50:52+0700",
+      "prepaid": false,
+      "prepaid_confirmed": false,
+      "activity_id": 0,
+      "review_enabled": true,
+      "paid_amount": 963,
+      "allow_delete_record": true,
+      "allow_change_record": true,
+      "is_confirmation_needed": false,
+      "is_acceptance_payment": false,
+      "payment_failure": false,
+      "is_show_prepay_button": false,
+      "services": [
+        {
+          "id": 12391130,
+          "title": "Cut for boy",
+          "cost": 900,
+          "price_min": 900,
+          "price_max": 900,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 5400,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 900,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 900,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        },
+        {
+          "id": 12378557,
+          "title": "7% VAT",
+          "cost": 63,
+          "price_min": null,
+          "price_max": null,
+          "discount": 0,
+          "amount": 1,
+          "seance_length": 0,
+          "api_id": "",
+          "abonement_restriction": 0,
+          "prepaid_settings": {
+            "status": "forbidden",
+            "prepaid_full": {
+              "amount": 0,
+              "currency": "THB"
+            },
+            "prepaid_min": {
+              "amount": 0,
+              "percent": 100,
+              "currency": "THB"
+            }
+          }
+        }
+      ],
+      "company": {
+        "id": 731063,
+        "title": "[removed]",
+        "public_title": "[removed]",
+        "country_id": 59,
+        "country": "Thailand",
+        "city_id": 1497,
+        "city": "Phuket",
+        "phone": "+10000000000",
+        "phones": ["+10000000000"],
+        "timezone": 8,
+        "address": "[removed]",
+        "coordinate_lat": 0,
+        "coordinate_lon": 0,
+        "allow_delete_record": true,
+        "allow_change_record": true,
+        "allow_change_prepaid_record": false,
+        "allow_delete_prepaid_record": false,
+        "site": "https://example.invalid/",
+        "currency_short_title": "฿",
+        "allow_change_record_delay_step": 0,
+        "allow_delete_record_delay_step": 0,
+        "logo": "https://example.invalid/image.png",
+        "social": {
+          "facebook": "",
+          "instagram": "https://example.invalid/",
+          "telegram": "https://example.invalid/",
+          "whatsapp": "https://example.invalid/",
+          "viber": ""
+        },
+        "map": null
+      },
+      "staff": {
+        "id": 2178363,
+        "name": "Team member 2178363",
+        "specialization": "top haircut master, airtouch",
+        "show_rating": 1,
+        "rating": 5,
+        "votes_count": 0,
+        "avatar": "https://example.invalid/image.png",
+        "avatar_big": "https://example.invalid/image.png",
+        "comments_count": 11,
+        "is_deleted": false,
+        "position": {
+          "id": 232276,
+          "title": "Стилист",
+          "services_binding_type": 0
+        }
+      },
+      "resource_instances": [],
+      "acceptance_free": null
+    }
+  ]
+}

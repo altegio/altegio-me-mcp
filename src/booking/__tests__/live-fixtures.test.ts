@@ -8,6 +8,8 @@ import {
   servicesDataSchema,
   teamMembersDataSchema,
   timeSlotsDataSchema,
+  userPlacesDataSchema,
+  userRecordsDataSchema,
 } from '../schemas.js';
 import {
   createRecordingFetch,
@@ -20,6 +22,7 @@ import {
   SANITIZED_PHONE,
   SANITIZED_TEXT,
   SANITIZED_URL,
+  USER_ROUTES,
   type RecordedRoute,
   type Recording,
 } from './helpers/live-recorder.js';
@@ -48,13 +51,36 @@ const recordingSchema = z.strictObject({
   data: z.unknown(),
 });
 
-const DATA_SCHEMAS: Record<Exclude<RecordedRoute, 'book_check'>, z.ZodType> = {
+/**
+ * The route schemas the recordings are parsed with. A route that is not
+ * listed is reported as having no schema, so a new recorded route cannot pass
+ * the guard unparsed. book_check has no data; its status is checked instead.
+ */
+type DataSchemas = Partial<Record<RecordedRoute, z.ZodType>>;
+
+const DATA_SCHEMAS: DataSchemas = {
   company: companyDataSchema,
   book_services: servicesDataSchema,
   book_staff: teamMembersDataSchema,
   book_dates: datesDataSchema,
   book_times: timeSlotsDataSchema,
+  user_yplaces: userPlacesDataSchema,
+  user_records: userRecordsDataSchema,
 };
+
+const TEAM_MEMBER_NAME = /^Team member \d+$/;
+
+function isUserRoute(route: RecordedRoute): boolean {
+  return (USER_ROUTES as readonly string[]).includes(route);
+}
+
+function isHashKey(key: string): boolean {
+  return (
+    (SANITIZED_KEYS.hash as readonly string[]).includes(key) ||
+    key.endsWith(SANITIZED_KEYS.hashSuffix) ||
+    key.endsWith(SANITIZED_KEYS.tokenSuffix)
+  );
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -104,24 +130,29 @@ function isEmptyOr(value: unknown, placeholder: unknown): boolean {
  * Paths holding a real value under a key the sanitiser replaces (WR-06): the
  * text keys, the company-only title keys, coordinates, `*_account_id` keys and
  * the `name` of every `user` and `position` object, and a team member's own
- * name. Walks the same key lists the sanitiser uses.
+ * name. On the signed-in routes also hash keys, person ids, every name key of
+ * a client object and the name of a staff or master object. Walks the same key
+ * lists the sanitiser uses.
  */
 function unsanitizedValues(
   route: RecordedRoute,
   value: unknown,
-  path = 'data'
+  path = 'data',
+  inCompany = false
 ): string[] {
   if (Array.isArray(value)) {
     return (value as unknown[]).flatMap((item, index) =>
-      unsanitizedValues(route, item, `${path}[${index}]`)
+      unsanitizedValues(route, item, `${path}[${index}]`, inCompany)
     );
   }
   if (!isRecord(value)) return [];
-  const textKeys: readonly string[] =
-    route === 'company'
-      ? [...SANITIZED_KEYS.text, ...SANITIZED_KEYS.companyText]
-      : SANITIZED_KEYS.text;
+  const user = isUserRoute(route);
+  const titles = route === 'company' || route === 'user_yplaces' || inCompany;
+  const textKeys: readonly string[] = titles
+    ? [...SANITIZED_KEYS.text, ...SANITIZED_KEYS.companyText]
+    : SANITIZED_KEYS.text;
   const containers: readonly string[] = SANITIZED_KEYS.personContainers;
+  const nameKeys: readonly string[] = user ? SANITIZED_KEYS.nameKeys : ['name'];
   return Object.entries(value).flatMap(([key, item]) => {
     const here = `${path}.${key}`;
     if (textKeys.includes(key)) return realTextLeaves(item) ? [here] : [];
@@ -131,17 +162,72 @@ function unsanitizedValues(
     if (key.endsWith(SANITIZED_KEYS.idSuffix)) {
       return isEmptyOr(item, SANITIZED_ID) ? [] : [here];
     }
-    const nested = unsanitizedValues(route, item, here);
-    if (containers.includes(key)) {
-      const objects = Array.isArray(item) ? (item as unknown[]) : [item];
-      const names = objects.flatMap((object, index) =>
-        isRecord(object) && realTextLeaves(object.name)
-          ? [`${here}${Array.isArray(item) ? `[${index}]` : ''}.name`]
-          : []
-      );
-      return [...nested, ...names];
+    if (user && isHashKey(key)) {
+      return item === '' || isEmptyOr(item, SANITIZED_TEXT) ? [] : [here];
     }
-    return nested;
+    if (user && (SANITIZED_KEYS.personIds as readonly string[]).includes(key)) {
+      return isEmptyOr(item, SANITIZED_ID) ? [] : [here];
+    }
+    const nested = unsanitizedValues(
+      route,
+      item,
+      here,
+      inCompany || (route === 'user_records' && key === 'company')
+    );
+    const objects = Array.isArray(item) ? (item as unknown[]) : [item];
+    const at = (index: number): string =>
+      `${here}${Array.isArray(item) ? `[${index}]` : ''}`;
+    const found: string[] = [];
+    if (containers.includes(key)) {
+      objects.forEach((object, index) => {
+        if (!isRecord(object)) return;
+        for (const nameKey of nameKeys) {
+          if (realTextLeaves(object[nameKey])) {
+            found.push(`${at(index)}.${nameKey}`);
+          }
+        }
+        if (
+          user &&
+          (SANITIZED_KEYS.personIdContainers as readonly string[]).includes(
+            key
+          ) &&
+          !isEmptyOr(object.id, SANITIZED_ID)
+        ) {
+          found.push(`${at(index)}.id`);
+        }
+      });
+    }
+    if (
+      user &&
+      (SANITIZED_KEYS.teamMemberContainers as readonly string[]).includes(key)
+    ) {
+      objects.forEach((object, index) => {
+        if (
+          isRecord(object) &&
+          !isEmptyOr(object.name, undefined) &&
+          !TEAM_MEMBER_NAME.test(String(object.name))
+        ) {
+          found.push(`${at(index)}.name`);
+        }
+      });
+    }
+    return [...nested, ...found];
+  });
+}
+
+/** Paths of a user_records recording's record ids that are not within 1..n. */
+function unrenumberedRecordIds(data: unknown): string[] {
+  if (!Array.isArray(data)) return [];
+  const count = (data as unknown[]).length;
+  return (data as unknown[]).flatMap((record, index) => {
+    if (!isRecord(record) || !('id' in record)) return [];
+    const id = record.id;
+    return typeof id === 'number' &&
+      Number.isInteger(id) &&
+      id >= 1 &&
+      id <= count
+      ? []
+      : [`data[${index}].id is outside 1..${count}`];
   });
 }
 
@@ -151,7 +237,7 @@ function unnamedTeamMembers(data: unknown): string[] {
   return (data as unknown[]).flatMap((member, index) =>
     isRecord(member) &&
     'name' in member &&
-    !/^Team member \d+$/.test(String(member.name))
+    !TEAM_MEMBER_NAME.test(String(member.name))
       ? [`data[${index}].name`]
       : []
   );
@@ -164,39 +250,53 @@ function liveFiles(): string[] {
     .sort();
 }
 
-describe('live recordings under fixtures/live (BAPI-03)', () => {
-  it('parse with their route schemas and carry no e-mail address, phone number, name, address or coordinates', () => {
-    const files = liveFiles();
-    const problems: string[] = [];
-    for (const name of files) {
-      const text = readFileSync(join(LIVE_DIR, name), 'utf8');
-      if (EMAIL_PATTERN.test(text)) problems.push(`${name}: e-mail address`);
-      const parsed = recordingSchema.safeParse(JSON.parse(text));
-      if (!parsed.success) {
-        problems.push(`${name}: not a recording`);
-        continue;
-      }
-      const { route, status, data } = parsed.data;
-      if (name !== `${route}.json`) {
-        problems.push(`${name}: holds route ${route}`);
-      }
-      if (route === 'book_check') {
-        if (status !== 201) problems.push(`${name}: status ${status}`);
-      } else if (!DATA_SCHEMAS[route].safeParse(data).success) {
-        problems.push(`${name}: data does not parse with the ${route} schema`);
-      }
-      for (const path of unsanitizedPhones(data)) {
-        problems.push(`${name}: ${path} is not sanitised`);
-      }
-      for (const path of unsanitizedValues(route, data)) {
-        problems.push(`${name}: ${path} is not a placeholder`);
-      }
-      if (route === 'book_staff') {
-        for (const path of unnamedTeamMembers(data)) {
-          problems.push(`${name}: ${path} is not a placeholder`);
-        }
-      }
+/** Every reason one recording file must not be committed. */
+function recordingProblems(
+  name: string,
+  text: string,
+  schemas: DataSchemas = DATA_SCHEMAS
+): string[] {
+  const problems: string[] = [];
+  if (EMAIL_PATTERN.test(text)) problems.push(`${name}: e-mail address`);
+  const parsed = recordingSchema.safeParse(JSON.parse(text));
+  if (!parsed.success) return [...problems, `${name}: not a recording`];
+  const { route, status, data } = parsed.data;
+  if (name !== `${route}.json`) problems.push(`${name}: holds route ${route}`);
+  if (route === 'book_check') {
+    if (status !== 201) problems.push(`${name}: status ${status}`);
+  } else {
+    const schema = schemas[route];
+    if (schema === undefined) {
+      problems.push(`${name}: no schema registered for ${route}`);
+    } else if (!schema.safeParse(data).success) {
+      problems.push(`${name}: data does not parse with the ${route} schema`);
     }
+  }
+  for (const path of unsanitizedPhones(data)) {
+    problems.push(`${name}: ${path} is not sanitised`);
+  }
+  for (const path of unsanitizedValues(route, data)) {
+    problems.push(`${name}: ${path} is not a placeholder`);
+  }
+  if (route === 'book_staff') {
+    for (const path of unnamedTeamMembers(data)) {
+      problems.push(`${name}: ${path} is not a placeholder`);
+    }
+  }
+  if (route === 'user_records') {
+    for (const path of unrenumberedRecordIds(data)) {
+      problems.push(`${name}: ${path}`);
+    }
+  }
+  return problems;
+}
+
+describe('live recordings under fixtures/live (BAPI-03)', () => {
+  it('parse with their route schemas and carry no e-mail address, phone number, name, address, hash or coordinates', () => {
+    const files = liveFiles();
+    const problems = files.flatMap((name) =>
+      recordingProblems(name, readFileSync(join(LIVE_DIR, name), 'utf8'))
+    );
     expect(problems).toEqual([]);
     expect(files.length).toBeLessThanOrEqual(RECORDED_ROUTES.length);
   });
@@ -701,5 +801,467 @@ describe('createRecordingFetch', () => {
     await wrapped(`${BASE}/book_record/722227`);
 
     expect(recorded).toEqual([]);
+  });
+});
+
+// Signed-in routes (plan 04-01, D-02). Every value below is synthetic.
+
+const USER_TOKEN = 'live-user-token-9876543210';
+
+function userRecord(id: number, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    hash: 'a1b2c3d4e5f6',
+    company: {
+      id: 726120,
+      title: 'Real Barber',
+      public_title: 'Real Barber',
+      phone: '+66811111111',
+      address: '1 Real Road',
+    },
+    staff: { id: 11, name: 'Real Person' },
+    services: [{ id: 5, title: 'Haircut', cost: 500 }],
+    client: {
+      name: 'Test Client',
+      phone: '+66812345678',
+      email: 'client@example.com',
+    },
+    client_id: 9001,
+    comment: 'call me',
+    datetime: '2026-10-10T15:00:00+07:00',
+    ...overrides,
+  };
+}
+
+const userRecordsData = [userRecord(41), userRecord(57)];
+
+const userPlacesData = [
+  {
+    id: 726120,
+    title: 'Real Barber',
+    public_title: 'Real Barber Phuket',
+    address: '1 Real Road',
+    city: 'Phuket',
+    phone: '+66811111111',
+    logo: 'https://assets.alteg.io/real/logo.png',
+    coordinate_lat: 7.88,
+    coordinate_lon: 98.39,
+    active: 1,
+  },
+];
+
+describe('sanitizeRecording of the signed-in routes', () => {
+  it('renumbers record ids to 1..n and replaces hashes, names, contacts and person ids of a record list', () => {
+    const result = sanitizeRecording('user_records', userRecordsData, [
+      TOKEN,
+    ]) as Record<string, unknown>[];
+    expect(result).toHaveLength(2);
+    expect(result.map((record) => record.id)).toEqual([1, 2]);
+    expect(result[0]).toEqual({
+      id: 1,
+      hash: SANITIZED_TEXT,
+      company: {
+        id: 726120,
+        title: SANITIZED_TEXT,
+        public_title: SANITIZED_TEXT,
+        phone: SANITIZED_PHONE,
+        address: SANITIZED_TEXT,
+      },
+      staff: { id: 11, name: 'Team member 11' },
+      services: [{ id: 5, title: 'Haircut', cost: 500 }],
+      client: {
+        name: SANITIZED_TEXT,
+        phone: SANITIZED_PHONE,
+        email: SANITIZED_TEXT,
+      },
+      client_id: SANITIZED_ID,
+      comment: SANITIZED_TEXT,
+      datetime: '2026-10-10T15:00:00+07:00',
+    });
+  });
+
+  it('replaces every hash key, user id and client name key, and the id of a client object', () => {
+    const [record] = sanitizeRecording(
+      'user_records',
+      [
+        {
+          id: 9,
+          hash: 'abc',
+          record_hash: 'def',
+          user_id: 4,
+          customer_account_id: 5,
+          client: {
+            id: 6,
+            fullname: 'A B',
+            surname: 'B',
+            patronymic: 'C',
+            first_name: 'A',
+            last_name: 'B',
+          },
+        },
+      ],
+      [TOKEN]
+    ) as Record<string, unknown>[];
+    expect(record).toEqual({
+      id: 1,
+      hash: SANITIZED_TEXT,
+      record_hash: SANITIZED_TEXT,
+      user_id: SANITIZED_ID,
+      customer_account_id: SANITIZED_ID,
+      client: {
+        id: SANITIZED_ID,
+        fullname: SANITIZED_TEXT,
+        surname: SANITIZED_TEXT,
+        patronymic: SANITIZED_TEXT,
+        first_name: SANITIZED_TEXT,
+        last_name: SANITIZED_TEXT,
+      },
+    });
+  });
+
+  it('replaces the record token, the token and the api id of a record, and keeps an empty one empty (recorded shape)', () => {
+    const [record, second] = sanitizeRecording(
+      'user_records',
+      [
+        {
+          id: 8,
+          api_id: '7da483d6-404b-4cd5-8d27-8bc7f1634ca4',
+          record_token: 'JeVwT',
+          token: 'QfGEL',
+          services: [{ id: 5, api_id: '' }],
+        },
+        { id: 9, api_id: '', token: null },
+      ],
+      [TOKEN]
+    ) as Record<string, unknown>[];
+    expect(record).toEqual({
+      id: 1,
+      api_id: SANITIZED_TEXT,
+      record_token: SANITIZED_TEXT,
+      token: SANITIZED_TEXT,
+      services: [{ id: 5, api_id: '' }],
+    });
+    expect(second).toEqual({ id: 2, api_id: '', token: null });
+  });
+
+  it('names the team member of a master container from its own id and tolerates a PHP empty array', () => {
+    const [record] = sanitizeRecording(
+      'user_records',
+      [
+        {
+          id: 3,
+          master: { id: 12, name: 'Real Person' },
+          staff: [],
+          client: [],
+        },
+      ],
+      [TOKEN]
+    ) as Record<string, unknown>[];
+    expect(record).toMatchObject({
+      master: { id: 12, name: 'Team member 12' },
+      staff: [],
+      client: [],
+    });
+  });
+
+  it('keeps an empty hash, comment and phone empty', () => {
+    const [record] = sanitizeRecording(
+      'user_records',
+      [{ id: 3, hash: '', comment: '', client: { name: '', phone: '' } }],
+      [TOKEN]
+    ) as Record<string, unknown>[];
+    expect(record).toMatchObject({
+      hash: '',
+      comment: '',
+      client: { name: '', phone: '' },
+    });
+  });
+
+  it('replaces the business, address, phone, logo and coordinates of a place and keeps id, city and active', () => {
+    const [place] = sanitizeRecording('user_yplaces', userPlacesData, [
+      TOKEN,
+    ]) as Record<string, unknown>[];
+    expect(place).toEqual({
+      id: 726120,
+      title: SANITIZED_TEXT,
+      public_title: SANITIZED_TEXT,
+      address: SANITIZED_TEXT,
+      city: 'Phuket',
+      phone: SANITIZED_PHONE,
+      logo: SANITIZED_IMAGE,
+      coordinate_lat: SANITIZED_COORDINATE,
+      coordinate_lon: SANITIZED_COORDINATE,
+      active: 1,
+    });
+  });
+
+  it('scrubs the partner token and the user token from every string leaf', () => {
+    const result = sanitizeRecording(
+      'user_records',
+      [userRecord(1, { note: `a ${TOKEN} b ${USER_TOKEN}`, [USER_TOKEN]: 1 })],
+      [TOKEN, USER_TOKEN]
+    );
+    const text = JSON.stringify(result);
+    expect(text).not.toContain(TOKEN);
+    expect(text).not.toContain(USER_TOKEN);
+    expect(text).toContain('a [redacted] b [redacted]');
+  });
+
+  it('does not change the payload it was given', () => {
+    const before = JSON.stringify(userRecordsData);
+    sanitizeRecording('user_records', userRecordsData, [TOKEN]);
+    expect(JSON.stringify(userRecordsData)).toBe(before);
+  });
+
+  it('leaves the record ids of the six existing routes alone', () => {
+    expect(
+      sanitizeRecording('book_services', { services: [{ id: 99 }] }, [TOKEN])
+    ).toEqual({ services: [{ id: 99 }] });
+  });
+});
+
+describe('the recordings check of the signed-in routes', () => {
+  const anyData = { user_records: z.array(z.looseObject({})) };
+  const file = (route: RecordedRoute, data: unknown): string =>
+    JSON.stringify({
+      recorded_at: '2026-10-08T00:00:00.000Z',
+      route,
+      status: 200,
+      data,
+    });
+
+  it('reports the hash, names, phones, e-mail, person ids and real record ids of an unsanitised record list', () => {
+    const problems = recordingProblems(
+      'user_records.json',
+      file('user_records', userRecordsData),
+      anyData
+    );
+    expect(problems).toEqual(
+      expect.arrayContaining([
+        'user_records.json: e-mail address',
+        'user_records.json: data[0].hash is not a placeholder',
+        'user_records.json: data[0].client.name is not a placeholder',
+        'user_records.json: data[0].client.phone is not sanitised',
+        'user_records.json: data[0].company.phone is not sanitised',
+        'user_records.json: data[0].company.title is not a placeholder',
+        'user_records.json: data[0].client_id is not a placeholder',
+        'user_records.json: data[0].staff.name is not a placeholder',
+        'user_records.json: data[0].id is outside 1..2',
+        'user_records.json: data[1].id is outside 1..2',
+      ])
+    );
+  });
+
+  it('reports a client id, a client name key other than name and a master name', () => {
+    const problems = recordingProblems(
+      'user_records.json',
+      file('user_records', [
+        {
+          id: 1,
+          client: { id: 6, fullname: 'A B' },
+          master: { id: 2, name: 'Real Person' },
+          record_hash: 'x',
+          user_id: 4,
+        },
+      ]),
+      anyData
+    );
+    expect(problems.sort()).toEqual(
+      [
+        'user_records.json: data[0].client.fullname is not a placeholder',
+        'user_records.json: data[0].client.id is not a placeholder',
+        'user_records.json: data[0].master.name is not a placeholder',
+        'user_records.json: data[0].record_hash is not a placeholder',
+        'user_records.json: data[0].user_id is not a placeholder',
+      ].sort()
+    );
+  });
+
+  it('passes what the sanitiser produced from the same record list and place list', () => {
+    expect(
+      recordingProblems(
+        'user_records.json',
+        file(
+          'user_records',
+          sanitizeRecording('user_records', userRecordsData, [TOKEN])
+        ),
+        anyData
+      )
+    ).toEqual([]);
+    expect(
+      recordingProblems(
+        'user_yplaces.json',
+        file(
+          'user_yplaces',
+          sanitizeRecording('user_yplaces', userPlacesData, [TOKEN])
+        ),
+        { user_yplaces: z.array(z.looseObject({})) }
+      )
+    ).toEqual([]);
+  });
+
+  it('reports a record token, a token and an api id that are not placeholders', () => {
+    expect(
+      recordingProblems(
+        'user_records.json',
+        file('user_records', [
+          { id: 1, record_token: 'JeVwT', token: 'QfGEL', api_id: 'a-b' },
+        ]),
+        anyData
+      ).sort()
+    ).toEqual(
+      [
+        'user_records.json: data[0].api_id is not a placeholder',
+        'user_records.json: data[0].record_token is not a placeholder',
+        'user_records.json: data[0].token is not a placeholder',
+      ].sort()
+    );
+  });
+
+  it('reports a place that still holds a real title, address and coordinates', () => {
+    expect(unsanitizedValues('user_yplaces', userPlacesData).sort()).toEqual(
+      [
+        'data[0].address',
+        'data[0].coordinate_lat',
+        'data[0].coordinate_lon',
+        'data[0].public_title',
+        'data[0].title',
+      ].sort()
+    );
+  });
+
+  it('keeps a service title of a record list as a legal value', () => {
+    expect(
+      unsanitizedValues(
+        'user_records',
+        sanitizeRecording('user_records', userRecordsData, [TOKEN])
+      )
+    ).toEqual([]);
+  });
+
+  it('reports a recording whose route has no registered schema', () => {
+    expect(
+      recordingProblems(
+        'user_records.json',
+        file('user_records', [{ id: 1 }]),
+        {}
+      )
+    ).toEqual(['user_records.json: no schema registered for user_records']);
+  });
+});
+
+describe('createRecordingFetch on the signed-in routes', () => {
+  const answer = JSON.stringify({ success: true, data: [], meta: [] });
+
+  it.each([
+    ['user_yplaces', `${BASE}/user/companies/yplaces`],
+    ['user_records', `${BASE}/user/records`],
+    ['user_records', `${BASE}/user/records?page=1`],
+    ['company', `${BASE}/company/722227`],
+  ] as const)('records %s from %s', async (route, href) => {
+    const recorded: Recording[] = [];
+    const wrapped = createRecordingFetch(
+      innerFetch(200, answer, []),
+      (recording) => recorded.push(recording),
+      [TOKEN, USER_TOKEN]
+    );
+
+    await wrapped(new URL(href));
+
+    expect(recorded.map((recording) => recording.route)).toEqual([route]);
+  });
+
+  it.each([
+    `${BASE}/user/records/77/abc123`,
+    `${BASE}/user/records/`,
+    `${BASE}/user/roles`,
+    `${BASE}/user/companies/yplaces/5`,
+    `${BASE}/user/auth`,
+  ])('records nothing for %s', async (href) => {
+    const recorded: Recording[] = [];
+    const wrapped = createRecordingFetch(
+      innerFetch(200, answer, []),
+      (recording) => recorded.push(recording),
+      [TOKEN, USER_TOKEN]
+    );
+
+    await wrapped(new URL(href));
+
+    expect(recorded).toEqual([]);
+  });
+
+  it('hands the sink a sanitised, renumbered record list without either token', async () => {
+    const recorded: Recording[] = [];
+    const data = [userRecord(41, { note: `x ${USER_TOKEN}` })];
+    const wrapped = createRecordingFetch(
+      innerFetch(200, JSON.stringify({ success: true, data, meta: [] }), []),
+      (recording) => recorded.push(recording),
+      [TOKEN, USER_TOKEN]
+    );
+
+    await wrapped(`${BASE}/user/records`);
+
+    const text = JSON.stringify(recorded);
+    expect(text).not.toContain(USER_TOKEN);
+    expect(text).not.toContain('Real Person');
+    expect(text).not.toContain('a1b2c3d4e5f6');
+    expect(recorded[0]?.data).toMatchObject([{ id: 1 }]);
+  });
+});
+
+describe('contract fixtures of the signed-in routes', () => {
+  const read = (route: string): Record<string, { body: { data: unknown } }> =>
+    JSON.parse(
+      readFileSync(
+        join(process.cwd(), 'src', 'booking', '__tests__', 'fixtures', route),
+        'utf8'
+      )
+    ) as Record<string, { body: { data: unknown } }>;
+
+  it('parse with the route schemas in every scenario', () => {
+    const places = read('user_yplaces.json');
+    const records = read('user_records.json');
+    expect(Object.keys(places)).toEqual(['default', 'empty']);
+    expect(Object.keys(records)).toEqual(['default', 'empty']);
+    for (const scenario of Object.values(places)) {
+      expect(userPlacesDataSchema.safeParse(scenario.body.data).success).toBe(
+        true
+      );
+    }
+    for (const scenario of Object.values(records)) {
+      expect(userRecordsDataSchema.safeParse(scenario.body.data).success).toBe(
+        true
+      );
+    }
+  });
+
+  it('use the location, service and team member ids of the default book_* fixtures and carry the bait values', () => {
+    const places = userPlacesDataSchema.parse(
+      read('user_yplaces.json').default?.body.data
+    );
+    expect(places.map((place) => place.id)).toEqual([722227, 726120]);
+    const records = userRecordsDataSchema.parse(
+      read('user_records.json').default?.body.data
+    );
+    expect(records.map((record) => record.id)).toEqual([1, 2, 3, 4, 5]);
+    const text = readFileSync(
+      join(
+        process.cwd(),
+        'src',
+        'booking',
+        '__tests__',
+        'fixtures',
+        'user_records.json'
+      ),
+      'utf8'
+    );
+    for (const bait of [
+      '+15550000001',
+      'Fixture Client',
+      'fixture.client@example.invalid',
+      'fixture-hash-0001',
+    ]) {
+      expect(text).toContain(bait);
+    }
   });
 });

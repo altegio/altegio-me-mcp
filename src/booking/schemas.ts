@@ -189,3 +189,86 @@ const bookTimeSchema = z.looseObject({
 export const timeSlotsDataSchema = z.array(bookTimeSchema);
 
 export type TimeSlotsData = z.infer<typeof timeSlotsDataSchema>;
+
+/** An object, or [] when PHP serialises an empty map. */
+function objectOrEmptyList<T extends z.ZodRawShape>(shape: T) {
+  return z.union([z.looseObject(shape), z.array(z.unknown())]).nullish();
+}
+
+const userPlaceSchema = z.looseObject({
+  id: z.number().int(),
+  title: text,
+  public_title: text,
+  address: text,
+  /** Not in the recorded places (they carry city_id); read when a payload has it. */
+  city: text,
+  logo: text,
+  /** Not in the recorded places; the flag lives in active_status. */
+  active: flag.nullish(),
+  /** is_active: the business is active; is_enabled_gca: the booking app is enabled for it. */
+  active_status: objectOrEmptyList({
+    is_active: flag.nullish(),
+    is_enabled_gca: flag.nullish(),
+  }),
+  allow_change_record: flag.nullish(),
+  allow_delete_record: flag.nullish(),
+});
+
+/**
+ * `data` of GET /user/companies/yplaces (undocumented, recorded 2026-10-08):
+ * the places where the signed-in client has records. No pagination was seen
+ * and no last-visit key exists. Phones, site, short_descr and the other keys
+ * stay untyped and are never read.
+ */
+export const userPlacesDataSchema = z.array(userPlaceSchema);
+
+export type UserPlacesData = z.infer<typeof userPlacesDataSchema>;
+
+const userRecordServiceSchema = z.looseObject({
+  id: z.number().int(),
+  title: text,
+  /** The price of the service in the business's currency; discount is separate. */
+  cost: numeric.nullish(),
+  amount: numeric.nullish(),
+  discount: numeric.nullish(),
+});
+
+const userRecordSchema = z.looseObject({
+  id: z.number().int(),
+  company: objectOrEmptyList({
+    id: z.number().int().nullish(),
+    title: text,
+    public_title: text,
+    city: text,
+    address: text,
+    currency_short_title: text,
+  }),
+  services: z.array(userRecordServiceSchema).nullish(),
+  /** The team member; an object, or [] when the record has none. */
+  staff: objectOrEmptyList({
+    id: z.number().int().nullish(),
+    name: text,
+    specialization: text,
+  }),
+  /** ISO 8601 with a numeric offset without a colon, for example 2025-12-07T17:45:00+0700. */
+  datetime: text,
+  /** The same moment as local business time, Y-m-d H:i:s. */
+  date: text,
+  /** True for a cancelled record. */
+  deleted: flag.nullish(),
+  /** Seen: 1 on past kept records, -1 on one past record, 0 on cancelled ones; the meaning is inferred, not documented. */
+  attendance: numeric.nullish(),
+  /** Seconds. */
+  length: numeric.nullish(),
+  paid_amount: numeric.nullish(),
+  prepaid: flag.nullish(),
+});
+
+/**
+ * `data` of GET /user/records (undocumented, recorded 2026-10-08): the
+ * signed-in client's records, oldest first, with no query sent. The record
+ * hash, token and api id are never read.
+ */
+export const userRecordsDataSchema = z.array(userRecordSchema);
+
+export type UserRecordsData = z.infer<typeof userRecordsDataSchema>;

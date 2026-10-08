@@ -1,0 +1,85 @@
+{
+  "recorded_at": "2026-10-08T06:22:58.182Z",
+  "route": "user_yplaces",
+  "status": 200,
+  "data": [
+    {
+      "id": 657643,
+      "title": "[removed]",
+      "public_title": "[removed]",
+      "business_group_id": 8,
+      "business_type_id": 8,
+      "country_id": 43,
+      "city_id": 35405,
+      "timezone": 1,
+      "timezone_name": "Europe/Lisbon",
+      "address": "[removed]",
+      "coordinate_lat": 0,
+      "coordinate_lon": 0,
+      "logo": "https://example.invalid/image.png",
+      "zip": "[removed]",
+      "phone": "+10000000000",
+      "phones": ["+10000000000"],
+      "site": "https://example.invalid/",
+      "short_descr": "Агентство иммиграции",
+      "allow_delete_record": false,
+      "allow_change_record": false,
+      "active_status": {
+        "is_active": true,
+        "is_enabled_gca": true
+      }
+    },
+    {
+      "id": 731063,
+      "title": "[removed]",
+      "public_title": "[removed]",
+      "business_group_id": 1,
+      "business_type_id": 1,
+      "country_id": 59,
+      "city_id": 1497,
+      "timezone": 7,
+      "timezone_name": "Asia/Bangkok",
+      "address": "[removed]",
+      "coordinate_lat": 0,
+      "coordinate_lon": 0,
+      "logo": "https://example.invalid/image.png",
+      "zip": "[removed]",
+      "phone": "+10000000000",
+      "phones": ["+10000000000"],
+      "site": "https://example.invalid/",
+      "short_descr": "Салон красоты",
+      "allow_delete_record": true,
+      "allow_change_record": true,
+      "active_status": {
+        "is_active": true,
+        "is_enabled_gca": true
+      }
+    },
+    {
+      "id": 980477,
+      "title": "[removed]",
+      "public_title": "[removed]",
+      "business_group_id": 1,
+      "business_type_id": 18,
+      "country_id": 12,
+      "city_id": 541,
+      "timezone": 2,
+      "timezone_name": "Europe/Prague",
+      "address": "[removed]",
+      "coordinate_lat": 0,
+      "coordinate_lon": 0,
+      "logo": "https://example.invalid/image.png",
+      "zip": "",
+      "phone": "",
+      "phones": [],
+      "site": "",
+      "short_descr": "Barbershop",
+      "allow_delete_record": true,
+      "allow_change_record": true,
+      "active_status": {
+        "is_active": true,
+        "is_enabled_gca": true
+      }
+    }
+  ]
+}
