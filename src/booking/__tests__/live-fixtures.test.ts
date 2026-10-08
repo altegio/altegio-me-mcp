@@ -73,7 +73,8 @@ function isUserRoute(route: RecordedRoute): boolean {
 function isHashKey(key: string): boolean {
   return (
     (SANITIZED_KEYS.hash as readonly string[]).includes(key) ||
-    key.endsWith(SANITIZED_KEYS.hashSuffix)
+    key.endsWith(SANITIZED_KEYS.hashSuffix) ||
+    key.endsWith(SANITIZED_KEYS.tokenSuffix)
   );
 }
 
@@ -914,6 +915,31 @@ describe('sanitizeRecording of the signed-in routes', () => {
     });
   });
 
+  it('replaces the record token, the token and the api id of a record, and keeps an empty one empty (recorded shape)', () => {
+    const [record, second] = sanitizeRecording(
+      'user_records',
+      [
+        {
+          id: 8,
+          api_id: '7da483d6-404b-4cd5-8d27-8bc7f1634ca4',
+          record_token: 'JeVwT',
+          token: 'QfGEL',
+          services: [{ id: 5, api_id: '' }],
+        },
+        { id: 9, api_id: '', token: null },
+      ],
+      [TOKEN]
+    ) as Record<string, unknown>[];
+    expect(record).toEqual({
+      id: 1,
+      api_id: SANITIZED_TEXT,
+      record_token: SANITIZED_TEXT,
+      token: SANITIZED_TEXT,
+      services: [{ id: 5, api_id: '' }],
+    });
+    expect(second).toEqual({ id: 2, api_id: '', token: null });
+  });
+
   it('names the team member of a master container from its own id and tolerates a PHP empty array', () => {
     const [record] = sanitizeRecording(
       'user_records',
@@ -1068,6 +1094,24 @@ describe('the recordings check of the signed-in routes', () => {
         { user_yplaces: z.array(z.looseObject({})) }
       )
     ).toEqual([]);
+  });
+
+  it('reports a record token, a token and an api id that are not placeholders', () => {
+    expect(
+      recordingProblems(
+        'user_records.json',
+        file('user_records', [
+          { id: 1, record_token: 'JeVwT', token: 'QfGEL', api_id: 'a-b' },
+        ]),
+        anyData
+      ).sort()
+    ).toEqual(
+      [
+        'user_records.json: data[0].api_id is not a placeholder',
+        'user_records.json: data[0].record_token is not a placeholder',
+        'user_records.json: data[0].token is not a placeholder',
+      ].sort()
+    );
   });
 
   it('reports a place that still holds a real title, address and coordinates', () => {

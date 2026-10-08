@@ -77,6 +77,7 @@ export const SANITIZED_KEYS = {
   /** Signed-in routes: keys equal to these, or ending in `hashSuffix`, are record hashes. */
   hash: ['hash'],
   hashSuffix: '_hash',
+  tokenSuffix: '_token',
   /** Signed-in routes: replaced with SANITIZED_ID. */
   personIds: ['client_id', 'user_id'],
   /** Signed-in routes: objects whose `id` is a person id. */
