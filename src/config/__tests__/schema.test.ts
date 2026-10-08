@@ -329,6 +329,49 @@ describe('the client sign-in settings (ADR 0005, D-01)', () => {
   });
 });
 
+describe('CONFIRMATION_SECRET (ADR 0006, D-03)', () => {
+  const GOOD = 'confirmation-secret-0123456789abcdef0123';
+
+  it('is undefined when unset or empty', () => {
+    expect(loadConfig(VALID).CONFIRMATION_SECRET).toBeUndefined();
+    expect(
+      loadConfig({ ...VALID, CONFIRMATION_SECRET: '   ' }).CONFIRMATION_SECRET
+    ).toBeUndefined();
+  });
+
+  it('accepts 32 printable characters and up to 512', () => {
+    expect(
+      loadConfig({ ...VALID, CONFIRMATION_SECRET: 'a'.repeat(32) })
+        .CONFIRMATION_SECRET
+    ).toBe('a'.repeat(32));
+    expect(
+      loadConfig({ ...VALID, CONFIRMATION_SECRET: GOOD }).CONFIRMATION_SECRET
+    ).toBe(GOOD);
+    expect(
+      issueKeys({ ...VALID, CONFIRMATION_SECRET: 'a'.repeat(513) })
+    ).toEqual(['CONFIRMATION_SECRET']);
+  });
+
+  it.each([
+    ['shorter than 32 characters', 'a'.repeat(31)],
+    ['holding a space', `${'a'.repeat(20)} ${'b'.repeat(20)}`],
+    ['holding a control character', `${'a'.repeat(40)}\u0007`],
+    ['holding a non-ASCII character', `${'a'.repeat(40)}\u00e9`],
+  ])(
+    'rejects a value %s, naming the key and never the value',
+    (_label, value) => {
+      const error = configErrorFor({ ...VALID, CONFIRMATION_SECRET: value });
+      expect(error.issues.map((issue) => issue.key)).toEqual([
+        'CONFIRMATION_SECRET',
+      ]);
+      const text = formatConfigError(error);
+      expect(text).toContain('CONFIRMATION_SECRET');
+      expect(text).toContain('32');
+      expect(text).not.toContain(value);
+    }
+  );
+});
+
 describe('ConfigError reporting', () => {
   it('reports several invalid variables once each, in CONFIG_KEYS order', () => {
     const error = configErrorFor({
@@ -348,6 +391,7 @@ describe('ConfigError reporting', () => {
       CLIENT_USER_TOKEN_HEADER: 'x-altegio-user',
       CLIENT_SCOPE_HEADER: 'x-mcp-auth-',
       CLIENT_CALLER_KIND: 'partner',
+      CONFIRMATION_SECRET: 'short',
       COMMIT_SHA: 'NOT-HEX',
       TRUSTED_PROXY_HOPS: '-1',
       SHARED_EGRESS_CIDRS: 'not-a-cidr',

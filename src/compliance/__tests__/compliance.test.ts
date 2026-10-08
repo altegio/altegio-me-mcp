@@ -585,6 +585,56 @@ describe('R12 forbidden routes', () => {
     for (const route of routes) expect(violation?.message).toContain(route);
   });
 
+  it('reports the create route anywhere but in booking/client.ts', () => {
+    const dir = temp();
+    const route = ['book', 'record'].join('_');
+    mkdirSync(join(dir, 'tools'));
+    writeFileSync(
+      join(dir, 'tools', 'sneaky.ts'),
+      `export const route = '/${route}/1';\n`
+    );
+    writeFileSync(
+      join(dir, 'client.ts'),
+      `export const route = '/${route}';\n`
+    );
+    const violations = scanForbiddenRoutes(dir);
+    expect(violations.map((violation) => violation.tool)).toEqual([
+      join('client.ts'),
+      join('tools', 'sneaky.ts'),
+    ]);
+  });
+
+  it('allows the create route in booking/client.ts only', () => {
+    const dir = temp();
+    const route = ['book', 'record'].join('_');
+    mkdirSync(join(dir, 'booking'));
+    writeFileSync(
+      join(dir, 'booking', 'client.ts'),
+      `export const route = '/${route}/{location_id}';\n`
+    );
+    expect(scanForbiddenRoutes(dir)).toEqual([]);
+    writeFileSync(
+      join(dir, 'booking', 'other.ts'),
+      `export const route = '/${route}/{location_id}';\n`
+    );
+    const violations = scanForbiddenRoutes(dir);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.tool).toBe(join('booking', 'other.ts'));
+    expect(violations[0]?.message).toBe(
+      'names a client write route outside src/booking/client.ts'
+    );
+  });
+
+  it('still reports the sign-in routes inside booking/client.ts', () => {
+    const dir = temp();
+    mkdirSync(join(dir, 'booking'));
+    writeFileSync(
+      join(dir, 'booking', 'client.ts'),
+      `export const route = '${['', 'user', 'auth'].join('/')}';\n`
+    );
+    expect(rules(scanForbiddenRoutes(dir))).toEqual(['R12']);
+  });
+
   it('skips tests and the compliance directory', () => {
     const dir = temp();
     const route = ['book', 'code'].join('_');

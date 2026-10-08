@@ -373,7 +373,7 @@ describe('per-tool scopes in tools/call', () => {
     const body = (await res.json()) as RpcResponse;
     expect(body.result?.isError).toBe(true);
     expect(body.result?.content?.[0]?.text).toContain(
-      'acts for a signed-in client'
+      'books for the signed-in client, and this connection has no client sign-in'
     );
     expect(bookHandlerRuns).toBe(0);
     const lines = await waitForLogs(harness, 2);

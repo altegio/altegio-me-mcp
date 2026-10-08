@@ -36,7 +36,7 @@ export const confirmationTokenInput = z
     'Leave out on the first call, which returns a preview. After the client agreed to the preview, repeat the identical call with the confirmation_token it returned; the token is bound to these exact arguments and this sign-in, and expires in 10 minutes.'
   );
 
-export type ConfirmationVerdict = 'ok' | 'invalid' | 'expired';
+export type ConfirmationVerdict = 'ok' | 'invalid' | 'expired' | 'used';
 
 export interface Confirmations {
   /** A token for this call, valid for CONFIRMATION_TTL_MS from `nowMs`. */
@@ -54,6 +54,8 @@ export interface Confirmations {
     args: unknown,
     nowMs?: number
   ): ConfirmationVerdict;
+  /** How many redeemed tokens the instance still remembers; a seam for tests. */
+  usedCount(): number;
 }
 
 export interface ConfirmationOptions {
@@ -150,6 +152,7 @@ export function createConfirmations(
       }
       return expiresAt < nowMs ? 'expired' : 'ok';
     },
+    usedCount: () => 0,
   };
 }
 

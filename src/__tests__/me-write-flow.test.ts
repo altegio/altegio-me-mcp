@@ -7,18 +7,33 @@ import {
   type FakeRoute,
   type FixtureResponse,
 } from '../booking/__tests__/helpers/fake-fetch.js';
-import { DIRECT_USER_TOKEN_HEADER } from '../security/caller-auth.js';
+import {
+  DIRECT_USER_TOKEN_HEADER,
+  SIGNED_KIND_HEADER,
+  SIGNED_SCOPE_HEADER,
+  SIGNED_USER_TOKEN_HEADER,
+} from '../security/caller-auth.js';
+import { PROXY_AUTH_HEADER } from '../security/proxy-auth.js';
+import {
+  CONFIRMATION_TTL_MS,
+  createConfirmations,
+  type Confirmations,
+} from '../tools/confirmation.js';
 import { productionTools } from '../tools/registry.js';
+import { createFakeClock } from '../booking/__tests__/helpers/fake-clock.js';
 import {
   CANARY_SECRET,
   CLIENT_USER_TOKEN,
+  PARTNER_TOKEN,
   closeAllApps,
   postMcp,
   startApp,
+  stubPartnerValidator,
   toolCallBody,
   waitForLogs,
   type Harness,
 } from './helpers/http-harness.js';
+import { signProxyRequest } from './helpers/sign-request.js';
 
 // The signed-in client's write tool end to end over HTTP (ADR 0006, D-02,
 // D-03): POST /mcp -> caller check -> scope check -> me_book -> BookingClient
@@ -106,6 +121,7 @@ function recordsReply(
 }
 
 interface Scenario {
+  confirmations?: Confirmations;
   create?: string;
   profile?: string;
   records?: string;
@@ -169,6 +185,9 @@ async function start(
         token: CANARY_SECRET,
         fetch: upstream.fetch,
       }),
+      ...(scenario.confirmations === undefined
+        ? {}
+        : { confirmations: scenario.confirmations }),
     },
     ...overrides,
   });
@@ -436,5 +455,220 @@ describe('me_book output and logs', () => {
         'team_member_id',
       ].sort()
     );
+  });
+});
+
+// The caller tiers: only a client sign-in with the book scope reaches the write.
+
+const PROXY_KEY = 'me-write-flow-key-0123456789abcdef0123456789abcdef';
+const REQUIRED = {
+  callerAuth: {
+    mode: 'required' as const,
+    validator: stubPartnerValidator(),
+  },
+};
+const BEHIND_PROXY = {
+  proxyAuth: { keys: () => [PROXY_KEY] },
+  callerAuth: {
+    mode: 'required' as const,
+    validator: stubPartnerValidator(),
+  },
+};
+
+function signedClient(scope: string): Record<string, string> {
+  const headers = {
+    [SIGNED_KIND_HEADER]: 'client',
+    [SIGNED_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN,
+    [SIGNED_SCOPE_HEADER]: scope,
+  };
+  return {
+    ...headers,
+    [PROXY_AUTH_HEADER]: signProxyRequest({
+      key: PROXY_KEY,
+      method: 'POST',
+      path: '/mcp',
+      headers,
+    }),
+  };
+}
+
+describe('me_book for callers that are not a signed-in client with the book scope', () => {
+  it('refuses an anonymous caller in band, naming the sign-in and book_check, with no upstream call', async () => {
+    const { harness, upstream } = await start();
+    const { body } = await callBook(harness, SELECTION, {});
+    expect(body.result?.isError).toBe(true);
+    const text = body.result?.content?.[0]?.text ?? '';
+    expect(text).toContain('sign-in');
+    expect(text).toContain('book_check');
+    expect(upstream.calls).toEqual([]);
+    const lines = await waitForLogs(harness, 1);
+    expect(lines[0]).toMatchObject({
+      tool: 'me_book',
+      outcome: 'tool_error',
+      error_type: 'InsufficientScope',
+    });
+  });
+
+  it('refuses a partner caller the same way', async () => {
+    const { harness, upstream } = await start({}, REQUIRED);
+    const { body } = await callBook(harness, SELECTION, {
+      authorization: `Bearer ${PARTNER_TOKEN}`,
+    });
+    expect(body.result?.isError).toBe(true);
+    const text = body.result?.content?.[0]?.text ?? '';
+    expect(text).toContain('sign-in');
+    expect(text).toContain('book_check');
+    expect(upstream.calls).toEqual([]);
+    const lines = await waitForLogs(harness, 1);
+    expect(lines[0]).toMatchObject({ error_type: 'InsufficientScope' });
+  });
+
+  it('refuses a client whose signed scope list lacks booking, and still serves its reads', async () => {
+    const { harness, upstream } = await start({}, BEHIND_PROXY);
+    const { body } = await callBook(
+      harness,
+      SELECTION,
+      signedClient('mcp:me:read')
+    );
+    expect(body.result?.isError).toBe(true);
+    expect(body.result?.content?.[0]?.text).toContain(
+      "this connection's sign-in does not include booking"
+    );
+    expect(upstream.calls).toEqual([]);
+
+    const list = await postMcp(
+      harness.baseUrl,
+      toolCallBody('me_list_bookings', {}),
+      signedClient('mcp:me:read')
+    );
+    const listBody = (await list.json()) as RpcResult;
+    expect(listBody.result?.isError).not.toBe(true);
+  });
+
+  it('serves a signed client whose list names booking', async () => {
+    const { harness } = await start({}, BEHIND_PROXY);
+    const { body } = await callBook(
+      harness,
+      SELECTION,
+      signedClient('mcp:me:read mcp:me:book')
+    );
+    expect(body.result?.isError).not.toBe(true);
+    expect(body.result?.structuredContent?.status).toBe('preview');
+  });
+});
+
+describe('me_book confirmation tokens', () => {
+  async function previewAndReset(scenario: Scenario = {}): Promise<{
+    harness: Harness;
+    upstream: FakeFetch;
+    token: string;
+  }> {
+    const { harness, upstream } = await start(scenario);
+    const { token } = await preview(harness);
+    upstream.calls.length = 0;
+    return { harness, upstream, token };
+  }
+
+  function flipLast(token: string): string {
+    return `${token.slice(0, -1)}${token.endsWith('A') ? 'B' : 'A'}`;
+  }
+
+  async function expectRefused(
+    harness: Harness,
+    upstream: FakeFetch,
+    args: Record<string, unknown>,
+    headers: Record<string, string> = CLIENT_HEADERS
+  ): Promise<string> {
+    const { body } = await callBook(harness, args, headers);
+    expect(body.result?.isError).toBe(true);
+    const text = body.result?.content?.[0]?.text ?? '';
+    expect(text.startsWith('Nothing was booked')).toBe(true);
+    expect(text).toContain('Next:');
+    expect(upstream.calls).toEqual([]);
+    return text;
+  }
+
+  it('refuses a token with a flipped character', async () => {
+    const { harness, upstream, token } = await previewAndReset();
+    await expectRefused(harness, upstream, {
+      ...SELECTION,
+      confirmation_token: flipLast(token),
+    });
+  });
+
+  it('refuses a token made for another sign-in', async () => {
+    const { harness, upstream, token } = await previewAndReset();
+    await expectRefused(
+      harness,
+      upstream,
+      { ...SELECTION, confirmation_token: token },
+      { [DIRECT_USER_TOKEN_HEADER]: 'client-user-token-0002-abcdef' }
+    );
+  });
+
+  it('refuses a token for a changed selection', async () => {
+    const { harness, upstream, token } = await previewAndReset();
+    await expectRefused(harness, upstream, {
+      ...SELECTION,
+      datetime: '2099-01-12T12:00:00+03:00',
+      confirmation_token: token,
+    });
+  });
+
+  it('refuses a token past its expiry', async () => {
+    const clock = createFakeClock();
+    const confirmations = createConfirmations({ now: clock.now });
+    const { harness, upstream, token } = await previewAndReset({
+      confirmations,
+    });
+    await clock.sleep(CONFIRMATION_TTL_MS + 1);
+    const text = await expectRefused(harness, upstream, {
+      ...SELECTION,
+      confirmation_token: token,
+    });
+    expect(text).toContain('expired');
+  });
+
+  it('refuses a token that was used once already, and makes only one booking', async () => {
+    const { harness, upstream, token } = await previewAndReset();
+    const first = await callBook(harness, {
+      ...SELECTION,
+      confirmation_token: token,
+    });
+    expect(first.body.result?.structuredContent?.status).toBe('booked');
+    const creates = (): number =>
+      upstream.calls.filter(
+        (call) =>
+          call.method === 'POST' && call.url.pathname.includes('book_record')
+      ).length;
+    expect(creates()).toBe(1);
+    upstream.calls.length = 0;
+    await expectRefused(harness, upstream, {
+      ...SELECTION,
+      confirmation_token: token,
+    });
+    expect(creates()).toBe(0);
+  });
+
+  it('never puts the confirmation secret into a response or a log line', async () => {
+    const secret = 'confirmation-secret-0123456789abcdef0123';
+    const confirmations = createConfirmations({ secret });
+    const { harness } = await start(
+      { confirmations },
+      { secrets: [CANARY_SECRET, secret] }
+    );
+    const first = await callBook(harness, SELECTION);
+    const token = first.body.result?.structuredContent?.confirmation_token;
+    const second = await callBook(harness, {
+      ...SELECTION,
+      confirmation_token: token,
+    });
+    await waitForLogs(harness, 2);
+    const everything = [
+      first.text,
+      second.text,
+      JSON.stringify(harness.logs),
+    ].join('\n');
+    expect(everything).not.toContain(secret);
   });
 });

@@ -411,6 +411,9 @@ describe('tier separation: discover for everyone, read for a signed-in client', 
     );
     const readOnlyBody = (await readOnly.json()) as RpcResult;
     expect(readOnlyBody.result?.isError).toBe(true);
+    expect(readOnlyBody.result?.content?.[0]?.text).toContain(
+      "this connection's sign-in does not include booking"
+    );
     expect(bookHandlerRuns).toBe(1);
   });
 
@@ -439,7 +442,11 @@ describe('tier separation: discover for everyone, read for a signed-in client', 
       harness.baseUrl,
       toolCallBody('demo_book_thing', {})
     );
-    expect(((await anonymous.json()) as RpcResult).result?.isError).toBe(true);
+    const anonymousBody = (await anonymous.json()) as RpcResult;
+    expect(anonymousBody.result?.isError).toBe(true);
+    expect(anonymousBody.result?.content?.[0]?.text).toContain(
+      'books for the signed-in client, and this connection has no client sign-in'
+    );
     const behindProxy = await start('default', {
       ...REQUIRED,
       tools: [...productionTools, bookTool],
