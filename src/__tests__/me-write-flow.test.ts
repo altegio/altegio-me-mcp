@@ -141,6 +141,7 @@ interface Scenario {
   records?: string;
   recordsAfterCreate?: 'fail';
   move?: string;
+  cancel?: string;
 }
 
 async function start(
@@ -197,6 +198,11 @@ async function start(
         state.moved = true;
         return loadFixture('book_record_move', scenario.move ?? 'moved');
       },
+    },
+    {
+      method: 'DELETE',
+      path: '/user/records/5/0',
+      reply: loadFixture('user_record_cancel', scenario.cancel ?? 'cancelled'),
     },
   ];
   const upstream = fakeFetch(routes);
@@ -937,6 +943,197 @@ describe('me_reschedule_booking for callers that are not a signed-in client with
       harness,
       'me_reschedule_booking',
       MOVE,
+      signedClient('mcp:me:read')
+    );
+    expect(body.result?.isError).toBe(true);
+    expect(body.result?.content?.[0]?.text).toContain(
+      "this connection's sign-in does not include booking"
+    );
+    expect(upstream.calls).toEqual([]);
+  });
+});
+
+// me_cancel_booking over HTTP (ADR 0006, D-02, D-03).
+
+const CANCEL = { booking_id: 5 };
+
+async function cancelPreview(
+  harness: Harness
+): Promise<{ token: string; out: BookOutput }> {
+  const { body } = await callChange(harness, 'me_cancel_booking', CANCEL);
+  const out = body.result?.structuredContent;
+  if (
+    out?.confirmation_token === null ||
+    out?.confirmation_token === undefined
+  ) {
+    throw new Error('the preview carried no confirmation token');
+  }
+  return { token: out.confirmation_token, out };
+}
+
+describe('me_cancel_booking over HTTP', () => {
+  it('previews with the records and the card, and writes nothing', async () => {
+    const { harness, upstream } = await start();
+    const { body, text } = await callChange(
+      harness,
+      'me_cancel_booking',
+      CANCEL
+    );
+    expect(body.result?.isError).not.toBe(true);
+    expect(body.result?.structuredContent?.status).toBe('preview');
+    expect(text).toContain('Preview, nothing is cancelled yet');
+    expect(text).toContain('Online cancellation is allowed');
+    expect(routesOf(upstream)).toEqual([
+      'GET /user/records',
+      `GET /company/${LOCATION}`,
+    ]);
+    expect(upstream.calls[0]?.headers.get('authorization')).toBe(
+      USER_AUTHORIZATION
+    );
+    expect(upstream.calls[1]?.headers.get('authorization')).toBe(
+      PARTNER_AUTHORIZATION
+    );
+  });
+
+  it('cancels with one DELETE and the user token, and shows the booking as cancelled', async () => {
+    const { harness, upstream } = await start();
+    const { token } = await cancelPreview(harness);
+    upstream.calls.length = 0;
+    const { body, text } = await callChange(harness, 'me_cancel_booking', {
+      ...CANCEL,
+      confirmation_token: token,
+    });
+    expect(body.result?.isError).not.toBe(true);
+    const out = body.result?.structuredContent;
+    expect(out?.status).toBe('cancelled');
+    expect(out?.booking).toMatchObject({ booking_id: 5, status: 'cancelled' });
+    expect(text).toContain('Cancelled: booking 5');
+    expect(routesOf(upstream)).toEqual([
+      'GET /user/records',
+      'DELETE /user/records/5/0',
+    ]);
+    for (const call of upstream.calls) {
+      expect(call.headers.get('authorization')).toBe(USER_AUTHORIZATION);
+    }
+    expect(upstream.calls[1]?.body).toBeNull();
+  });
+
+  it('refuses a booking that is not the client own, after reading only the records', async () => {
+    const { harness, upstream } = await start();
+    const { body } = await callChange(harness, 'me_cancel_booking', {
+      booking_id: 777,
+    });
+    expect(body.result?.isError).toBe(true);
+    expect(
+      (body.result?.content?.[0]?.text ?? '').startsWith(
+        'Nothing was cancelled'
+      )
+    ).toBe(true);
+    expect(routesOf(upstream)).toEqual(['GET /user/records']);
+  });
+
+  it('refuses a token from the reschedule tool, with no upstream call', async () => {
+    const { harness, upstream } = await start();
+    const moved = await movePreview(harness);
+    upstream.calls.length = 0;
+    const { body } = await callChange(harness, 'me_cancel_booking', {
+      ...CANCEL,
+      confirmation_token: moved.token,
+    });
+    expect(body.result?.isError).toBe(true);
+    expect(upstream.calls).toEqual([]);
+  });
+
+  it('names the business contacts when the DELETE answers 403, and the booking was not cancelled', async () => {
+    const { harness, upstream } = await start({ cancel: 'forbidden_403' });
+    const { token } = await cancelPreview(harness);
+    upstream.calls.length = 0;
+    const { body } = await callChange(harness, 'me_cancel_booking', {
+      ...CANCEL,
+      confirmation_token: token,
+    });
+    expect(body.result?.isError).toBe(true);
+    const text = body.result?.content?.[0]?.text ?? '';
+    expect(text).toContain('Nothing was cancelled');
+    expect(text).toContain('business_get');
+  });
+
+  it('leaks neither the sign-in, a record token nor the cancel path into any response or log line', async () => {
+    const { harness } = await start();
+    const first = await callChange(harness, 'me_cancel_booking', CANCEL);
+    const token = first.body.result?.structuredContent?.confirmation_token;
+    const second = await callChange(harness, 'me_cancel_booking', {
+      ...CANCEL,
+      confirmation_token: token,
+    });
+    await waitForLogs(harness, 2);
+    const everything = [
+      first.text,
+      second.text,
+      JSON.stringify(harness.logs),
+    ].join('\n');
+    for (const bait of BAIT) expect(everything).not.toContain(bait);
+    expect(everything).not.toContain('/user/records/5');
+  });
+
+  it('takes only a booking id and a token, and is listed destructive', async () => {
+    const { harness } = await start();
+    const tool = productionTools.find(
+      (entry) => entry.name === 'me_cancel_booking'
+    );
+    const properties = Object.keys(
+      (tool?.spec.inputSchema as { properties: Record<string, unknown> })
+        .properties
+    );
+    expect(properties.sort()).toEqual(['booking_id', 'confirmation_token']);
+    const res = await postMcp(harness.baseUrl, toolsListBody(), CLIENT_HEADERS);
+    const body = (await res.json()) as {
+      result?: {
+        tools?: { name: string; annotations?: Record<string, unknown> }[];
+      };
+    };
+    expect(
+      body.result?.tools?.find((entry) => entry.name === 'me_cancel_booking')
+        ?.annotations
+    ).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: true,
+      idempotentHint: false,
+    });
+  });
+});
+
+describe('me_cancel_booking for callers that are not a signed-in client with the book scope', () => {
+  it('refuses an anonymous caller in band, naming the sign-in, with no upstream call', async () => {
+    const { harness, upstream } = await start();
+    const { body } = await callChange(harness, 'me_cancel_booking', CANCEL, {});
+    expect(body.result?.isError).toBe(true);
+    expect(body.result?.content?.[0]?.text).toContain('sign-in');
+    expect(upstream.calls).toEqual([]);
+    const lines = await waitForLogs(harness, 1);
+    expect(lines[0]).toMatchObject({
+      tool: 'me_cancel_booking',
+      error_type: 'InsufficientScope',
+    });
+  });
+
+  it('refuses a partner caller the same way', async () => {
+    const { harness, upstream } = await start({}, REQUIRED);
+    const { body } = await callChange(harness, 'me_cancel_booking', CANCEL, {
+      authorization: `Bearer ${PARTNER_TOKEN}`,
+    });
+    expect(body.result?.isError).toBe(true);
+    expect(body.result?.content?.[0]?.text).toContain('sign-in');
+    expect(upstream.calls).toEqual([]);
+  });
+
+  it('refuses a client whose signed scope list lacks booking', async () => {
+    const { harness, upstream } = await start({}, BEHIND_PROXY);
+    const { body } = await callChange(
+      harness,
+      'me_cancel_booking',
+      CANCEL,
       signedClient('mcp:me:read')
     );
     expect(body.result?.isError).toBe(true);

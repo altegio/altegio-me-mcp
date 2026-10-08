@@ -486,7 +486,7 @@ describe('known-business flow from a location id to a pre-selected link (ROADMAP
     for (const line of logs.slice(0, -1)) expect(line.outcome).toBe('ok');
   });
 
-  it('lists the ten tools over POST /mcp, with book_check annotated read-only and the client write tools as the only writes', async () => {
+  it('lists the eleven tools over POST /mcp, with book_check annotated read-only and the client write tools as the only writes', async () => {
     const flow = await startFlow(loadFixture('book_check', 'created_empty'));
     const { tools } = await flow.client.listTools();
     // The MCP layer lists tools by name; the registry order is checked by the compliance suite.
@@ -502,6 +502,7 @@ describe('known-business flow from a location id to a pre-selected link (ROADMAP
         'me_list_bookings',
         'me_book',
         'me_reschedule_booking',
+        'me_cancel_booking',
       ].sort()
     );
     const check = tools.find((tool) => tool.name === 'book_check');
@@ -511,9 +512,11 @@ describe('known-business flow from a location id to a pre-selected link (ROADMAP
       tools
         .filter((tool) => tool.annotations?.readOnlyHint !== true)
         .map((tool) => tool.name)
-    ).toEqual(['me_book', 'me_reschedule_booking']);
-    const move = tools.find((tool) => tool.name === 'me_reschedule_booking');
-    expect(move?.annotations?.destructiveHint).toBe(true);
+    ).toEqual(['me_book', 'me_reschedule_booking', 'me_cancel_booking']);
+    for (const name of ['me_reschedule_booking', 'me_cancel_booking']) {
+      const change = tools.find((tool) => tool.name === name);
+      expect(change?.annotations?.destructiveHint).toBe(true);
+    }
   });
 });
 

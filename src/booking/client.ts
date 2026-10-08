@@ -96,7 +96,14 @@ export const CLIENT_WRITE_ROUTES = Object.freeze({
     method: 'PUT',
     route: '/book_record/{location_id}/{record_id}',
   } as const),
+  cancel: Object.freeze({
+    method: 'DELETE',
+    route: '/user/records/{record_id}/{record_hash}',
+  } as const),
 });
+
+/** The hash segment of the cancel path (not implemented yet). */
+export const CANCEL_HASH_SEGMENT = 'unset';
 
 export interface BookingForm {
   id: number;
@@ -1004,6 +1011,15 @@ export class BookingClient {
         cause: parsed.success ? undefined : parsed.error,
       });
     }
+  }
+
+  /** Cancels one of the client's own bookings (not implemented yet). */
+  async cancelBooking(
+    _bookingId: number,
+    _call: UpstreamCallOptions
+  ): Promise<void> {
+    await Promise.resolve();
+    throw new Error('not implemented');
   }
 
   /**

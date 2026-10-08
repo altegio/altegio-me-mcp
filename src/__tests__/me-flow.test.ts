@@ -743,6 +743,7 @@ describe('the own-place flow to a pre-filled widget link (ROADMAP criterion 2, M
     expect(names).toContain('me_list_bookings');
     expect(names).toContain('me_book');
     expect(names).toContain('me_reschedule_booking');
+    expect(names).toContain('me_cancel_booking');
     expect(names).not.toContain('book_record');
     expect(names.filter((name) => /^(book|cancel|change)_/.test(name))).toEqual(
       ['book_check']

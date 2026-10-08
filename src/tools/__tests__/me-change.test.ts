@@ -11,7 +11,8 @@ import {
 import { createConfirmations, type Confirmations } from '../confirmation.js';
 import { NO_TOOL_CONTEXT, type ToolContext } from '../context.js';
 import type { ToolInvocation } from '../factory.js';
-import { meRescheduleBooking } from '../me-change.js';
+import { meCancelBooking, meRescheduleBooking } from '../me-change.js';
+import { meListBookings } from '../me.js';
 import { SCOPE_BOOK, SCOPE_READ } from '../scopes.js';
 
 // me_reschedule_booking at handler level through the real BookingClient with a
@@ -82,6 +83,10 @@ interface Setup {
     args: Record<string, unknown>,
     ctx?: ToolContext
   ) => Promise<ToolInvocation>;
+  invokeCancel: (
+    args: Record<string, unknown>,
+    ctx?: ToolContext
+  ) => Promise<ToolInvocation>;
 }
 
 function setup(
@@ -90,6 +95,7 @@ function setup(
     company?: FakeReply;
     check?: FakeReply;
     move?: FakeReply;
+    cancel?: FakeReply;
     timeoutMs?: number;
   } = {}
 ): Setup {
@@ -114,6 +120,11 @@ function setup(
       path: `/book_record/${LOCATION}/5`,
       reply: options.move ?? loadFixture('book_record_move', 'moved'),
     },
+    {
+      method: 'DELETE',
+      path: '/user/records/5/0',
+      reply: options.cancel ?? loadFixture('user_record_cancel', 'cancelled'),
+    },
   ]);
   const booking = new BookingClient({
     base: API_BASE,
@@ -127,6 +138,7 @@ function setup(
     upstream,
     confirmations,
     invoke: (args, ctx = CTX) => meRescheduleBooking.invoke(args, deps, ctx),
+    invokeCancel: (args, ctx = CTX) => meCancelBooking.invoke(args, deps, ctx),
   };
 }
 
@@ -547,6 +559,345 @@ describe('me_reschedule_booking: tokens of another tool, time or booking', () =>
       { ...MOVE, confirmation_token: outOf(preview).confirmation_token },
       { ...NO_TOOL_CONTEXT, userToken: 'client-user-token-0002-abcdef' }
     );
+    expect(result.result.isError).toBe(true);
+    expect(textOf(result).startsWith('Nothing was moved')).toBe(true);
+    expect(made.upstream.calls).toEqual([]);
+  });
+});
+
+// me_cancel_booking (ME-07, ADR 0006, D-02, D-03)
+
+const CANCEL = { booking_id: 5 };
+
+interface CancelOut {
+  status: string;
+  booking_id: number;
+  booking: { booking_id: number; status: string; datetime: string } | null;
+  cancellation_rule: string | null;
+  confirmation_token: string | null;
+  expires_at: string | null;
+}
+
+function cancelOutOf(invocation: ToolInvocation): CancelOut {
+  return invocation.result.structuredContent as unknown as CancelOut;
+}
+
+async function cancelPreviewThenConfirm(
+  made: Setup
+): Promise<{ preview: ToolInvocation; confirm: ToolInvocation }> {
+  const preview = await made.invokeCancel(CANCEL);
+  expect(preview.result.isError).not.toBe(true);
+  const token = cancelOutOf(preview).confirmation_token;
+  made.upstream.calls.length = 0;
+  const confirm = await made.invokeCancel({
+    ...CANCEL,
+    confirmation_token: token,
+  });
+  return { preview, confirm };
+}
+
+describe('me_cancel_booking: the tool', () => {
+  it('is a write tool for the book tier, annotated destructive and open-world', () => {
+    expect(meCancelBooking.name).toBe('me_cancel_booking');
+    expect(meCancelBooking.spec.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: true,
+      idempotentHint: false,
+    });
+    expect(meCancelBooking.meta.scopes).toEqual(
+      expect.arrayContaining([SCOPE_READ, SCOPE_BOOK])
+    );
+  });
+
+  it('takes a booking id and a token, and no personal data', () => {
+    const properties = Object.keys(
+      (
+        meCancelBooking.spec.inputSchema as {
+          properties: Record<string, unknown>;
+        }
+      ).properties
+    );
+    expect(properties.sort()).toEqual(['booking_id', 'confirmation_token']);
+  });
+
+  it('is named by me_list_bookings as one of the tools that take its booking_id', () => {
+    const description = String(meListBookings.spec.description);
+    expect(description).toContain('booking_id');
+    expect(description).toContain('me_reschedule_booking');
+    expect(description).toContain('me_cancel_booking');
+  });
+});
+
+describe('me_cancel_booking, first call: the preview', () => {
+  it('shows the booking and the cancellation rule, and writes nothing', async () => {
+    const made = setup();
+    const preview = await made.invokeCancel(CANCEL);
+    expect(preview.result.isError).not.toBe(true);
+    const out = cancelOutOf(preview);
+    expect(out.status).toBe('preview');
+    expect(out.booking_id).toBe(5);
+    expect(out.booking).toMatchObject({ booking_id: 5, status: 'upcoming' });
+    expect(out.cancellation_rule).toBe(
+      'Online cancellation is allowed until 2 hours before the start.'
+    );
+    expect(out.confirmation_token).toMatch(/^\d+\.[A-Za-z0-9_-]{43}$/);
+    const text = textOf(preview);
+    expect(text).toContain('Preview, nothing is cancelled yet');
+    expect(text).toContain('Online cancellation is allowed until 2 hours');
+    expect(text).toContain('only after the user agrees');
+    expect(text).toContain(out.confirmation_token ?? 'missing');
+    expectNoBait(preview);
+    expect(routesOf(made.upstream)).toEqual([
+      'GET /user/records',
+      `GET /company/${LOCATION}`,
+    ]);
+    const [recordsCall, cardCall] = made.upstream.calls;
+    expect(recordsCall ? authorizationOf(recordsCall) : null).toBe(
+      USER_AUTHORIZATION
+    );
+    expect(cardCall ? authorizationOf(cardCall) : null).toBe(
+      PARTNER_AUTHORIZATION
+    );
+  });
+
+  it('gives a null rule when the card states none', async () => {
+    const made = setup({
+      company: card((data) => {
+        delete data.allow_delete_record;
+        delete data.allow_delete_record_delay_step;
+      }),
+    });
+    const preview = await made.invokeCancel(CANCEL);
+    expect(preview.result.isError).not.toBe(true);
+    expect(cancelOutOf(preview).cancellation_rule).toBeNull();
+  });
+});
+
+describe('me_cancel_booking: refusals before any write', () => {
+  it('refuses a booking id that is not among the records, naming me_list_bookings, after the records call only', async () => {
+    const made = setup();
+    const preview = await made.invokeCancel({ booking_id: 777 });
+    expect(preview.result.isError).toBe(true);
+    const text = textOf(preview);
+    expect(text.startsWith('Nothing was cancelled')).toBe(true);
+    expect(text).toContain('me_list_bookings');
+    expect(routesOf(made.upstream)).toEqual(['GET /user/records']);
+  });
+
+  it('refuses a cancelled booking and a past one, saying why, after the records call only', async () => {
+    for (const [bookingId, reason] of [
+      [4, 'already cancelled'],
+      [1, 'in the past'],
+    ] as const) {
+      const made = setup();
+      const preview = await made.invokeCancel({ booking_id: bookingId });
+      expect(preview.result.isError).toBe(true);
+      const text = textOf(preview);
+      expect(text.startsWith('Nothing was cancelled')).toBe(true);
+      expect(text).toContain(reason);
+      expect(routesOf(made.upstream)).toEqual(['GET /user/records']);
+    }
+  });
+
+  it('refuses a record whose flag forbids cancelling online, naming the business contacts', async () => {
+    const made = setup({
+      records: records((body) => {
+        recordFive(body).allow_delete_record = false;
+      }),
+    });
+    const preview = await made.invokeCancel(CANCEL);
+    expect(preview.result.isError).toBe(true);
+    const text = textOf(preview);
+    expect(text).toContain(
+      'Nothing was cancelled: the business does not allow cancelling this booking online.'
+    );
+    expect(text).toContain('business_get');
+    expect(routesOf(made.upstream)).toEqual(['GET /user/records']);
+  });
+
+  it('refuses a business whose card forbids cancelling online', async () => {
+    const made = setup({
+      company: card((data) => {
+        data.allow_delete_record = false;
+      }),
+    });
+    const preview = await made.invokeCancel(CANCEL);
+    expect(preview.result.isError).toBe(true);
+    expect(textOf(preview)).toContain(
+      'Nothing was cancelled: the business does not allow cancelling this booking online.'
+    );
+    expect(made.upstream.calls.some((call) => call.method === 'DELETE')).toBe(
+      false
+    );
+  });
+
+  it('refuses without any upstream call for a caller with no client sign-in', async () => {
+    const made = setup();
+    const preview = await made.invokeCancel(CANCEL, NO_TOOL_CONTEXT);
+    expect(preview.result.isError).toBe(true);
+    expect(textOf(preview)).toContain('sign-in');
+    expect(made.upstream.calls).toEqual([]);
+  });
+});
+
+describe('me_cancel_booking, second call: the cancellation', () => {
+  it('re-reads the records, sends one DELETE with the user token and shows the booking as cancelled', async () => {
+    const made = setup();
+    const { confirm } = await cancelPreviewThenConfirm(made);
+    expect(confirm.result.isError).not.toBe(true);
+    const out = cancelOutOf(confirm);
+    expect(out.status).toBe('cancelled');
+    expect(out.booking_id).toBe(5);
+    expect(out.booking).toMatchObject({ booking_id: 5, status: 'cancelled' });
+    expect(out.confirmation_token).toBeNull();
+    expect(textOf(confirm)).toContain('Cancelled: booking 5');
+    expect(routesOf(made.upstream)).toEqual([
+      'GET /user/records',
+      'DELETE /user/records/5/0',
+    ]);
+    const [, del] = made.upstream.calls;
+    expect(del?.body).toBeNull();
+    for (const call of made.upstream.calls) {
+      expect(authorizationOf(call)).toBe(USER_AUTHORIZATION);
+    }
+  });
+
+  it('never puts the hash segment, a record token or the path into a response', async () => {
+    const made = setup();
+    const { preview, confirm } = await cancelPreviewThenConfirm(made);
+    for (const invocation of [preview, confirm]) {
+      expectNoBait(invocation);
+      const everything = `${textOf(invocation)}${JSON.stringify(
+        invocation.result.structuredContent ?? null
+      )}`;
+      expect(everything).not.toContain('/user/records');
+    }
+  });
+
+  it('refuses a booking that was cancelled between the preview and the confirm, with no DELETE', async () => {
+    let reads = 0;
+    const made = setup({
+      records: () => {
+        reads += 1;
+        return reads === 1
+          ? loadFixture('user_records', 'default')
+          : records((body) => {
+              recordFive(body).deleted = true;
+            });
+      },
+    });
+    const { confirm } = await cancelPreviewThenConfirm(made);
+    expect(confirm.result.isError).toBe(true);
+    expect(textOf(confirm)).toContain('already cancelled');
+    expect(routesOf(made.upstream)).toEqual(['GET /user/records']);
+  });
+});
+
+describe('me_cancel_booking: the DELETE fails', () => {
+  it('says the business did not accept the cancellation, naming its contacts, for a 403', async () => {
+    const made = setup({
+      cancel: loadFixture('user_record_cancel', 'forbidden_403'),
+    });
+    const { confirm } = await cancelPreviewThenConfirm(made);
+    expect(confirm.result.isError).toBe(true);
+    const text = textOf(confirm);
+    expect(text).toContain(
+      'Nothing was cancelled: the business did not accept the cancellation online, for example because it is too close to the start.'
+    );
+    expect(text).toContain('business_get');
+    expect(text).not.toContain('sign-in');
+    expectNoBait(confirm);
+  });
+
+  it('keeps the sign-in text for a 401', async () => {
+    const made = setup({
+      cancel: { status: 401, body: { success: false, meta: { message: 'x' } } },
+    });
+    const { confirm } = await cancelPreviewThenConfirm(made);
+    expect(confirm.result.isError).toBe(true);
+    expect(textOf(confirm)).toContain("did not accept the client's sign-in");
+  });
+
+  it('says the booking was not found and names me_list_bookings, for a 404', async () => {
+    const made = setup({
+      cancel: loadFixture('user_record_cancel', 'not_found_404'),
+    });
+    const { confirm } = await cancelPreviewThenConfirm(made);
+    expect(confirm.result.isError).toBe(true);
+    const text = textOf(confirm);
+    expect(text).toContain('Nothing was cancelled: the booking was not found.');
+    expect(text).toContain('me_list_bookings');
+  });
+
+  it('says it is not known whether the booking was cancelled, for a 503, and the token stays used', async () => {
+    const made = setup({
+      cancel: { status: 503, body: { success: false, meta: { message: 'x' } } },
+    });
+    const preview = await made.invokeCancel(CANCEL);
+    const args = {
+      ...CANCEL,
+      confirmation_token: cancelOutOf(preview).confirmation_token,
+    };
+    const first = await made.invokeCancel(args);
+    expect(first.result.isError).toBe(true);
+    expect(textOf(first)).toContain(
+      'not known whether the booking was cancelled'
+    );
+    expect(textOf(first)).toContain('me_list_bookings');
+    made.upstream.calls.length = 0;
+    const again = await made.invokeCancel(args);
+    expect(textOf(again)).toContain('already used');
+    expect(made.upstream.calls).toEqual([]);
+  });
+});
+
+describe('me_cancel_booking: tokens of another tool or booking', () => {
+  async function expectRefused(
+    made: Setup,
+    args: Record<string, unknown>
+  ): Promise<void> {
+    made.upstream.calls.length = 0;
+    const result = await made.invokeCancel(args);
+    expect(result.result.isError).toBe(true);
+    const text = textOf(result);
+    expect(text.startsWith('Nothing was cancelled')).toBe(true);
+    expect(text).toContain('Next:');
+    expect(made.upstream.calls).toEqual([]);
+  }
+
+  it('refuses the token of the reschedule preview for the same booking', async () => {
+    const made = setup();
+    const preview = await made.invoke(MOVE);
+    await expectRefused(made, {
+      ...CANCEL,
+      confirmation_token: outOf(preview).confirmation_token,
+    });
+  });
+
+  it('refuses a token issued by me_book', async () => {
+    const made = setup();
+    const issued = made.confirmations.issue('me_book', USER_TOKEN, CANCEL);
+    await expectRefused(made, { ...CANCEL, confirmation_token: issued.token });
+  });
+
+  it('refuses a token for another booking', async () => {
+    const made = setup();
+    const preview = await made.invokeCancel(CANCEL);
+    await expectRefused(made, {
+      booking_id: 6,
+      confirmation_token: cancelOutOf(preview).confirmation_token,
+    });
+  });
+
+  it('refuses a cancel token for the reschedule tool', async () => {
+    const made = setup();
+    const preview = await made.invokeCancel(CANCEL);
+    made.upstream.calls.length = 0;
+    const result = await made.invoke({
+      ...MOVE,
+      confirmation_token: cancelOutOf(preview).confirmation_token,
+    });
     expect(result.result.isError).toBe(true);
     expect(textOf(result).startsWith('Nothing was moved')).toBe(true);
     expect(made.upstream.calls).toEqual([]);

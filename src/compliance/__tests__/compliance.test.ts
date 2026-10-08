@@ -127,7 +127,7 @@ describe('compliant tools', () => {
       productionTools
         .filter((tool) => tool.spec.annotations.readOnlyHint !== true)
         .map((tool) => tool.name)
-    ).toEqual(['me_book', 'me_reschedule_booking']);
+    ).toEqual(['me_book', 'me_reschedule_booking', 'me_cancel_booking']);
     const names = productionTools.map((tool) => tool.name);
     expect(new Set(names).size).toBe(names.length);
   });
@@ -149,6 +149,7 @@ describe('compliant tools', () => {
       'book_check',
       'me_book',
       'me_reschedule_booking',
+      'me_cancel_booking',
     ]);
   });
 
@@ -260,6 +261,7 @@ describe('R14 signed-in routes', () => {
       'me_list_bookings',
       'me_book',
       'me_reschedule_booking',
+      'me_cancel_booking',
     ]);
     for (const tool of own) expect(tool.meta.scopes).toContain(SCOPE_READ);
   });

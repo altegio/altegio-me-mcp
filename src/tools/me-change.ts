@@ -526,3 +526,38 @@ export const meRescheduleBooking = defineTool<
       : confirmMove(input, token, deps, ctx);
   },
 });
+
+const cancelInput = z.strictObject({
+  booking_id: z.number().int().positive(),
+  [CONFIRMATION_TOKEN_ARG]: confirmationTokenInput,
+});
+
+const cancelOutput = z.strictObject({ status: z.string() });
+
+export const meCancelBooking = defineTool<
+  typeof cancelInput,
+  typeof cancelOutput,
+  ToolDeps
+>({
+  name: 'me_cancel_booking',
+  title: 'Cancel one of my bookings',
+  description: 'Cancels one of the signed-in client bookings.',
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: true,
+    openWorldHint: true,
+    idempotentHint: false,
+  },
+  scopes: [SCOPE_READ, SCOPE_BOOK],
+  upstream: [
+    USER_ROUTES.records,
+    BOOKING_ROUTES.company,
+    CLIENT_WRITE_ROUTES.cancel,
+  ],
+  input: cancelInput,
+  output: cancelOutput,
+  render: () => 'not implemented',
+  handler: () => {
+    throw new ToolError('not implemented', 'none');
+  },
+});

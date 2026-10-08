@@ -2,6 +2,7 @@ import { describe, expect, it } from '@jest/globals';
 import {
   BOOKING_ROUTES,
   BookingClient,
+  CANCEL_HASH_SEGMENT,
   CLIENT_WRITE_ROUTES,
   USER_ROUTES,
 } from '../client.js';
@@ -1589,7 +1590,7 @@ describe('the profile and the create route (ADR 0006, D-02)', () => {
     return { client, upstream };
   }
 
-  it('declares the client write routes, frozen: the create and the move', () => {
+  it('declares the client write routes, frozen: the create, the move and the cancel', () => {
     expect(Object.isFrozen(CLIENT_WRITE_ROUTES)).toBe(true);
     expect(
       Object.values(CLIENT_WRITE_ROUTES).map(
@@ -1598,6 +1599,7 @@ describe('the profile and the create route (ADR 0006, D-02)', () => {
     ).toEqual([
       'POST /book_record/{location_id}',
       'PUT /book_record/{location_id}/{record_id}',
+      'DELETE /user/records/{record_id}/{record_hash}',
     ]);
   });
 
@@ -1995,6 +1997,104 @@ describe('the move route (ADR 0006, D-02)', () => {
     await expect(
       client.moveBooking(LOCATION, RECORD, NEW_TIME, {})
     ).rejects.toThrow(TypeError);
+    expect(upstream.calls).toEqual([]);
+  });
+});
+
+describe('the cancel route (ADR 0006, D-02)', () => {
+  const USER_TOKEN = 'client-user-token-0001-abcdef';
+  const RECORD = 5;
+  // The recording accepted the placeholder 0 for a signed-in client
+  // (docs/research/signed-in-routes.md, "## Writes").
+  const CANCEL_PATH = `/user/records/${RECORD}/0`;
+
+  function cancelWith(reply: FakeReply) {
+    const upstream = fakeFetch([
+      { method: 'DELETE', path: CANCEL_PATH, reply },
+    ]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    return { client, upstream };
+  }
+
+  const call = { userToken: USER_TOKEN };
+
+  it('uses the recorded placeholder as the hash segment, a short alphanumeric text', () => {
+    expect(CANCEL_HASH_SEGMENT).toBe('0');
+    expect(CANCEL_HASH_SEGMENT).toMatch(/^[A-Za-z0-9]{1,128}$/);
+  });
+
+  it('sends one DELETE with no body and both tokens, and resolves on a 204 with no body', async () => {
+    const { client, upstream } = cancelWith(
+      loadFixture('user_record_cancel', 'cancelled')
+    );
+    await expect(client.cancelBooking(RECORD, call)).resolves.toBeUndefined();
+    expect(upstream.unmatched).toEqual([]);
+    expect(upstream.calls).toHaveLength(1);
+    const [sent] = upstream.calls;
+    expect(sent?.method).toBe('DELETE');
+    expect(sent?.url.pathname).toBe(`/api/v1${CANCEL_PATH}`);
+    expect(sent?.headers.get('authorization')).toBe(
+      `Bearer ${TOKEN}, User ${USER_TOKEN}`
+    );
+    expect(sent?.body).toBeNull();
+  });
+
+  it('also accepts a 200 that answers an empty list', async () => {
+    const { client } = cancelWith({
+      status: 200,
+      body: { success: true, data: [], meta: [] },
+    });
+    await expect(client.cancelBooking(RECORD, call)).resolves.toBeUndefined();
+  });
+
+  it('treats any other 2xx as contract drift, because the outcome is not known', async () => {
+    const { client } = cancelWith({
+      status: 202,
+      body: { success: true, data: null, meta: [] },
+    });
+    const error = await upstreamError(client.cancelBooking(RECORD, call));
+    expect(error.kind).toBe('contract_drift');
+    expect(error.route).toBe('/user/records/{record_id}/{record_hash}');
+  });
+
+  it('maps a 403 to unauthorized with the user as the credential and a 404 to not_found', async () => {
+    const forbidden = await upstreamError(
+      cancelWith(
+        loadFixture('user_record_cancel', 'forbidden_403')
+      ).client.cancelBooking(RECORD, call)
+    );
+    expect(forbidden.kind).toBe('unauthorized');
+    expect(forbidden.status).toBe(403);
+    expect(forbidden.credential).toBe('user');
+    const missing = await upstreamError(
+      cancelWith(
+        loadFixture('user_record_cancel', 'not_found_404')
+      ).client.cancelBooking(RECORD, call)
+    );
+    expect(missing.kind).toBe('not_found');
+  });
+
+  it('keeps the segment out of the error text', async () => {
+    const error = await upstreamError(
+      cancelWith(
+        loadFixture('user_record_cancel', 'not_found_404')
+      ).client.cancelBooking(RECORD, call)
+    );
+    expect(error.message).not.toContain(CANCEL_PATH);
+  });
+
+  it('refuses a booking id it cannot send, and a missing user token, before anything goes out', async () => {
+    const { client, upstream } = cancelWith(
+      loadFixture('user_record_cancel', 'cancelled')
+    );
+    await expect(client.cancelBooking(0, call)).rejects.toThrow(TypeError);
+    await expect(client.cancelBooking(-3, call)).rejects.toThrow(TypeError);
+    await expect(client.cancelBooking(1.5, call)).rejects.toThrow(TypeError);
+    await expect(client.cancelBooking(RECORD, {})).rejects.toThrow(TypeError);
     expect(upstream.calls).toEqual([]);
   });
 });
