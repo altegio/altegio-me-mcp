@@ -10,6 +10,7 @@ import {
 } from './http.js';
 import {
   bookRecordCreateDataSchema,
+  bookRecordMoveDataSchema,
   bookingUserDataSchema,
   companyDataSchema,
   datesDataSchema,
@@ -84,7 +85,7 @@ export const USER_ROUTES = Object.freeze({
 /**
  * The client's writes (ADR 0006): the only non-read routes the server calls,
  * each made with the signed-in client's user token next to the partner token.
- * This file is the only source file that names the create route.
+ * This file is the only source file that names the create and move routes.
  */
 export const CLIENT_WRITE_ROUTES = Object.freeze({
   create: Object.freeze({
@@ -539,8 +540,8 @@ function toOwnRecord(record: UserRecord): OwnRecord | null {
     attendance:
       typeof record.attendance === 'number' ? record.attendance : null,
     price: sumPrices(prices),
-    moveAllowed: null,
-    cancelAllowed: null,
+    moveAllowed: flagOrNull(record.allow_change_record),
+    cancelAllowed: flagOrNull(record.allow_delete_record),
   };
 }
 
@@ -967,15 +968,42 @@ export class BookingClient {
     return { bookingId };
   }
 
-  /** Moves one of the client's own bookings (not implemented yet). */
+  /**
+   * Moves one of the signed-in client's own bookings to a new time (ADR 0006,
+   * D-02): PUT on the location and the booking id with exactly `{ datetime }`
+   * (no comment, ADR 0006). The answer is a records-list entry that carries
+   * the record token, so it is parsed for its shape and never returned. Only a
+   * 200 is a move; any other 2xx is contract_drift. `call.userToken` is
+   * required. The datetime is sent exactly as given.
+   */
   async moveBooking(
-    _locationId: number,
-    _bookingId: number,
-    _datetime: string,
-    _call: UpstreamCallOptions
+    locationId: number,
+    bookingId: number,
+    datetime: string,
+    call: UpstreamCallOptions
   ): Promise<void> {
-    await Promise.resolve();
-    throw new Error('not implemented');
+    assertUserToken(call.userToken);
+    assertLocationId(locationId);
+    assertPositiveId(bookingId, 'booking id');
+    if (parseSlotDatetime(datetime) === null) {
+      throw new TypeError('datetime must be an ISO 8601 slot datetime');
+    }
+    const { route, method } = CLIENT_WRITE_ROUTES.move;
+    const reply = await this.http.send({
+      method,
+      route,
+      path: `/book_record/${locationId}/${bookingId}`,
+      body: { datetime },
+      ...call,
+    });
+    const parsed = bookRecordMoveDataSchema.safeParse(reply.data);
+    if (!parsed.success || reply.status !== 200) {
+      // Not the documented answer, so whether the booking moved is not known.
+      throw new UpstreamError('contract_drift', route, {
+        status: reply.status,
+        cause: parsed.success ? undefined : parsed.error,
+      });
+    }
   }
 
   /**

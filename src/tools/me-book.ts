@@ -192,7 +192,7 @@ function boundArguments(input: BookInput): Record<string, unknown> {
   };
 }
 
-function durationText(seconds: number): string {
+export function durationText(seconds: number): string {
   if (seconds % 3600 === 0) {
     const hours = seconds / 3600;
     return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
@@ -202,7 +202,7 @@ function durationText(seconds: number): string {
 }
 
 /** The business's online cancellation rule from its card, or null when the card states none. */
-function cancellationText(rules: BusinessRules): string | null {
+export function cancellationText(rules: BusinessRules): string | null {
   if (rules.cancelAllowed === null) return null;
   if (!rules.cancelAllowed) {
     return 'This business does not allow online cancellation.';

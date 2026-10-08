@@ -83,7 +83,7 @@ export interface BookingHttpOptions {
 }
 
 export interface UpstreamCallSpec extends UpstreamCallOptions {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   /** Route template, for example '/company/{location_id}'. */
   route: string;
   /** Concrete path built from integers, for example '/company/722227'. */
@@ -91,7 +91,7 @@ export interface UpstreamCallSpec extends UpstreamCallOptions {
   query?: Readonly<Record<string, string | number | undefined>>;
   /** Sent as repeated service_ids[] entries, in this order. */
   serviceIds?: readonly number[];
-  /** JSON body, POST only. */
+  /** JSON body, for the POST and PUT calls. */
   body?: unknown;
 }
 

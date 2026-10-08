@@ -267,6 +267,9 @@ const userRecordSchema = z.looseObject({
   length: numeric.nullish(),
   paid_amount: numeric.nullish(),
   prepaid: flag.nullish(),
+  /** Whether this record may be moved or cancelled online; the business's rules decide. */
+  allow_change_record: flag.nullish(),
+  allow_delete_record: flag.nullish(),
 });
 
 /**

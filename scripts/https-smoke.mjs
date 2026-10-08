@@ -180,6 +180,7 @@ try {
     'me_book',
     'me_list_bookings',
     'me_list_places',
+    'me_reschedule_booking',
   ]);
   for (const tool of list.body.result.tools)
     assert.equal(tool.inputSchema.type, 'object');
