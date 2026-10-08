@@ -486,7 +486,7 @@ describe('known-business flow from a location id to a pre-selected link (ROADMAP
     for (const line of logs.slice(0, -1)) expect(line.outcome).toBe('ok');
   });
 
-  it('lists the six tools over POST /mcp, with book_check annotated read-only', async () => {
+  it('lists the seven tools over POST /mcp, with book_check annotated read-only', async () => {
     const flow = await startFlow(loadFixture('book_check', 'created_empty'));
     const { tools } = await flow.client.listTools();
     // The MCP layer lists tools by name; the registry order is checked by the compliance suite.
@@ -498,6 +498,7 @@ describe('known-business flow from a location id to a pre-selected link (ROADMAP
         'business_list_dates',
         'business_list_time_slots',
         'book_check',
+        'me_list_places',
       ].sort()
     );
     const check = tools.find((tool) => tool.name === 'book_check');

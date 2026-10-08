@@ -38,12 +38,18 @@ export interface CreateMcpServerOptions<D> {
 export function createMcpServer<D>(options: CreateMcpServerOptions<D>): Server {
   const { name, version, specs, toolsByName, toolDeps, record } = options;
   const caller = options.caller ?? null;
-  const partnerToken = caller?.kind === 'partner' ? caller.partnerToken : null;
-  // The caller's own token is scrubbed from results like ours.
-  const secrets =
-    partnerToken === null
-      ? options.secrets
-      : [...options.secrets, partnerToken];
+  // A partner caller brings a partner token; a client may bring one too.
+  const partnerToken =
+    caller?.kind === 'partner' || caller?.kind === 'client'
+      ? caller.partnerToken
+      : null;
+  const userToken = caller?.kind === 'client' ? caller.userToken : null;
+  // The caller's own tokens are scrubbed from results like ours.
+  const secrets = [
+    ...options.secrets,
+    ...(partnerToken === null ? [] : [partnerToken]),
+    ...(userToken === null ? [] : [userToken]),
+  ];
   const server = new Server(
     { name, version },
     { capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS }
@@ -90,7 +96,8 @@ export function createMcpServer<D>(options: CreateMcpServerOptions<D>): Server {
           extra.signal,
           options.clientKey ?? null,
           TOOL_DEADLINE_MS,
-          partnerToken
+          partnerToken,
+          userToken
         )
       );
       record.outcome = invocation.outcome;

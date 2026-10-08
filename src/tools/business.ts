@@ -41,7 +41,7 @@ import {
 // user-facing term (D-07); the API calls the same thing a location.
 
 /** Read-only tools that call the Altegio API carry openWorldHint, as in Altegio.Pro MCP (D-10). */
-const UPSTREAM_READ_HINTS = {
+export const UPSTREAM_READ_HINTS = {
   readOnlyHint: true,
   destructiveHint: false,
   openWorldHint: true,

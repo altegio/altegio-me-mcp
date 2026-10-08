@@ -14,9 +14,11 @@ import {
   servicesDataSchema,
   teamMembersDataSchema,
   timeSlotsDataSchema,
+  userPlacesDataSchema,
   type CompanyData,
   type ServicesData,
   type TeamMembersData,
+  type UserPlacesData,
 } from './schemas.js';
 
 // Typed client of the public Altegio booking API (D-01). The route table is
@@ -99,6 +101,24 @@ export interface BusinessCard {
   bookingFormUrl: string | null;
 }
 
+/**
+ * One of the signed-in client's own places, as GET /user/companies/yplaces
+ * describes it. Strings are raw business text.
+ */
+export interface OwnPlace {
+  locationId: number;
+  name: string | null;
+  address: string | null;
+  /** Null for the recorded shape, which carries only city_id. */
+  city: string | null;
+  /** An https URL, or null. */
+  logoUrl: string | null;
+  /** The place's active_status.is_active flag. */
+  onlineBooking: boolean;
+  /** YYYY-MM-DD; null while the route gives none (the recorded shape has no such key). */
+  lastVisit: string | null;
+}
+
 export interface ServiceCategory {
   id: number;
   title: string;
@@ -176,6 +196,12 @@ export interface TimeSlot {
 function assertPositiveId(value: number, label: string): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new TypeError(`${label} must be a positive safe integer`);
+  }
+}
+
+function assertUserToken(token: string | undefined): void {
+  if (token === undefined || token === '') {
+    throw new TypeError('a user token is required for a signed-in route');
   }
 }
 
@@ -296,6 +322,39 @@ function toCard(data: CompanyData): BusinessCard {
       nonEmpty(data.default_bookform_url) ??
       bookingForms[0]?.url ??
       null,
+  };
+}
+
+/** A logo address is kept only when it is an https URL. */
+function httpsUrlOrNull(value: string | null | undefined): string | null {
+  const text = nonEmpty(value);
+  if (text === null) return null;
+  try {
+    return new URL(text).protocol === 'https:' ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+function toOwnPlace(place: UserPlacesData[number]): OwnPlace {
+  const status = place.active_status;
+  const flag =
+    status !== null &&
+    status !== undefined &&
+    !Array.isArray(status) &&
+    status.is_active !== null &&
+    status.is_active !== undefined
+      ? status.is_active
+      : place.active;
+  return {
+    locationId: place.id,
+    name: nonEmpty(place.public_title) ?? nonEmpty(place.title),
+    address: nonEmpty(place.address),
+    city: nonEmpty(place.city),
+    logoUrl: httpsUrlOrNull(place.logo),
+    onlineBooking: truthy(flag),
+    // The recorded places route has no last-visit key (docs/research/signed-in-routes.md).
+    lastVisit: null,
   };
 }
 
@@ -581,6 +640,22 @@ export class BookingClient {
         status: reply.status,
       });
     }
+  }
+
+  /**
+   * The signed-in client's own places (ME-02), in upstream order: businesses
+   * where they already have records. `call.userToken` is required and goes
+   * next to the partner token in the Authorization header. Nothing is sent
+   * without it.
+   */
+  async myPlaces(call: UpstreamCallOptions): Promise<OwnPlace[]> {
+    assertUserToken(call.userToken);
+    const { route, method } = USER_ROUTES.places;
+    const data = await this.read(
+      { method, route, path: route, ...call },
+      userPlacesDataSchema
+    );
+    return data.map(toOwnPlace);
   }
 
   /**

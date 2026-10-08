@@ -46,7 +46,7 @@ def request(path, payload=None, signed=True):
 status, _, health = request('/health')
 assert status == 200 and health.get('status') == 'ok' and health.get('commit') == commit, 'liveness/commit failed'
 expected = ['book_check', 'business_get', 'business_list_dates', 'business_list_services',
-            'business_list_team_members', 'business_list_time_slots']
+            'business_list_team_members', 'business_list_time_slots', 'me_list_places']
 for i, (method, params) in enumerate([
     ('initialize', {'protocolVersion': '2025-11-25', 'capabilities': {},
                     'clientInfo': {'name': 'operator-read-canary', 'version': '1'}}),
@@ -66,4 +66,4 @@ for i, (method, params) in enumerate([
     print(f'PASS: {method} HTTP 200 stateless valid result')
 status, _, _ = request('/mcp', {'jsonrpc': '2.0', 'id': 4, 'method': 'tools/list'}, signed=False)
 assert status == 401, 'unsigned direct request accepted'
-print('PASS: deployed commit/liveness, six-tool protocol, business_get(722227), unsigned 401')
+print('PASS: deployed commit/liveness, tool protocol, business_get(722227), unsigned 401')

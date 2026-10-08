@@ -43,6 +43,11 @@ export interface GateCallOptions {
 export interface UpstreamCallOptions extends GateCallOptions {
   /** The caller's validated partner token; missing signs with the server's. */
   partnerToken?: string;
+  /**
+   * The signed-in client's user token (ADR 0005). Sent as `User <token>` next
+   * to the partner token; only the signed-in routes pass it.
+   */
+  userToken?: string;
 }
 
 /** Admission control for upstream calls; the throttle implements it. */
@@ -227,7 +232,10 @@ export class BookingHttp {
     const initFor = (token: string): RequestInit => {
       const headers: Record<string, string> = {
         Accept: ALTEGIO_ACCEPT,
-        Authorization: `Bearer ${token}`,
+        Authorization:
+          call.userToken === undefined
+            ? `Bearer ${token}`
+            : `Bearer ${token}, User ${call.userToken}`,
       };
       if (hasBody) headers['Content-Type'] = 'application/json';
       return {
@@ -305,7 +313,8 @@ export class BookingHttp {
       reply.status,
       reply.text,
       retryAfter,
-      callerToken
+      callerToken,
+      call.userToken
     );
   }
 
@@ -383,7 +392,8 @@ export class BookingHttp {
     status: number,
     text: string,
     retryAfter: number | null,
-    callerToken: string | undefined
+    callerToken: string | undefined,
+    userToken: string | undefined
   ): UpstreamError {
     const meta = readErrorMeta(text);
     const kind = kindOfStatus(status);
@@ -397,12 +407,11 @@ export class BookingHttp {
       upstreamMessage:
         meta.message === null
           ? null
-          : scrubSecrets(
-              meta.message,
-              callerToken === undefined
-                ? this.tokenSource.known()
-                : [callerToken, ...this.tokenSource.known()]
-            ),
+          : scrubSecrets(meta.message, [
+              ...(callerToken === undefined ? [] : [callerToken]),
+              ...(userToken === undefined ? [] : [userToken]),
+              ...this.tokenSource.known(),
+            ]),
     });
   }
 }

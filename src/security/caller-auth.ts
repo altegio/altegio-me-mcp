@@ -47,6 +47,20 @@ export type Caller =
       scopes: ReadonlySet<Scope>;
     }
   | {
+      /**
+       * A signed-in client (ADR 0005, D-01): their Altegio user token, signed
+       * by the proxy or, without it, sent directly.
+       */
+      kind: 'client';
+      /** The client's user token; sent only on the signed-in routes. */
+      userToken: string;
+      /** The partner token that came with the client, when one did. */
+      partnerToken: string | null;
+      /** Pseudonym of that partner token for logs. */
+      partnerId: string | null;
+      scopes: ReadonlySet<Scope>;
+    }
+  | {
       /** CALLER_AUTH=optional without a token: served with our own token. */
       kind: 'anonymous';
       scopes: ReadonlySet<Scope>;
@@ -56,6 +70,9 @@ export type CallerAuthReason = 'no_partner_token' | 'invalid_partner_token';
 
 /** What a partner token grants. The client tier comes only from OAuth (Phase 2). */
 const PARTNER_SCOPES: ReadonlySet<Scope> = new Set<Scope>([SCOPE_READ]);
+
+/** What a client sign-in grants; Task 2 of plan 04-02 splits it from the base tier. */
+const CLIENT_SCOPES: ReadonlySet<Scope> = PARTNER_SCOPES;
 
 /** Kept only while the proxy lane rolls out; see CALLER_AUTH in the README. */
 const ANONYMOUS_SCOPES: ReadonlySet<Scope> = PARTNER_SCOPES;
@@ -68,6 +85,31 @@ function single(value: string | string[] | undefined): string | undefined {
 function nonBlank(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed === undefined || trimmed === '' ? undefined : trimmed;
+}
+
+/** What a request presents as the client's user token. */
+export type PresentedUser = { kind: 'none' } | { kind: 'token'; token: string };
+
+/**
+ * The client's user token a request presents. Behind the proxy only the signed
+ * header counts, and only when the signed kind is the client kind; without the
+ * proxy only the direct header counts.
+ */
+export function presentedUserToken(
+  headers: IncomingHttpHeaders,
+  behindProxy: boolean
+): PresentedUser {
+  if (behindProxy) {
+    const kind = nonBlank(single(headers[SIGNED_KIND_HEADER]));
+    const token = nonBlank(single(headers[SIGNED_USER_TOKEN_HEADER]));
+    return kind === CALLER_KIND_CLIENT && token !== undefined
+      ? { kind: 'token', token }
+      : { kind: 'none' };
+  }
+  const direct = nonBlank(single(headers[DIRECT_USER_TOKEN_HEADER]));
+  return direct === undefined
+    ? { kind: 'none' }
+    : { kind: 'token', token: direct };
 }
 
 const BEARER = /^Bearer[ \t]+(\S+)[ \t]*$/i;
@@ -149,8 +191,22 @@ export function createCallerAuthMiddleware(opts: {
   validator: PartnerTokenValidator;
 }): RequestHandler {
   return (req, res, next) => {
-    const presented = presentedPartnerToken(req.headers, opts.behindProxy);
     const record = getCallRecord(res);
+    const user = presentedUserToken(req.headers, opts.behindProxy);
+    if (user.kind === 'token') {
+      const caller: Caller = {
+        kind: 'client',
+        userToken: user.token,
+        partnerToken: null,
+        partnerId: null,
+        scopes: CLIENT_SCOPES,
+      };
+      res.locals.caller = caller;
+      record.caller = caller.kind;
+      next();
+      return;
+    }
+    const presented = presentedPartnerToken(req.headers, opts.behindProxy);
     if (presented.kind === 'unsupported') {
       refuse(res, 'invalid_partner_token', PARTNER_TOKEN_INVALID);
       return;
