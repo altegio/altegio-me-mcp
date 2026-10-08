@@ -22,6 +22,14 @@ key = subprocess.check_output([
     '--secret=MCP_PROXY_BACKEND_KEY_ME', '--project=altegio-mcp'], text=True).strip().split(',')[0].strip()
 if len(key) < 32:
     sys.exit('Proxy key unavailable or malformed')
+# Since ADR 0004 the backend admits a tools/call only with a partner token the
+# proxy carries inside the signature (x-mcp-auth-kind: partner plus the token
+# header). The canary presents the Altegio.me partner token (account 2630).
+partner_token = subprocess.check_output([
+    'gcloud', 'secrets', 'versions', 'access', 'latest',
+    '--secret=MARKETPLACE_PARTNER_TOKEN', '--project=altegio-mcp'], text=True).strip()
+if len(partner_token) < 8:
+    sys.exit('Partner token unavailable or malformed')
 
 
 def request(path, payload=None, signed=True):
@@ -29,8 +37,13 @@ def request(path, payload=None, signed=True):
     if payload is not None and signed:
         request_id = str(uuid.uuid4())
         headers['x-mcp-auth-request-id'] = request_id
+        headers['x-mcp-auth-kind'] = 'partner'
+        headers['x-mcp-auth-altegio-partner-token'] = partner_token
         seconds = int(time.time())
-        mac = hmac.new(key.encode(), f'mcp-proxy-auth/v1\n{seconds}\nPOST\n{path}\nx-mcp-auth-request-id:{request_id}'.encode(), hashlib.sha256).hexdigest()
+        # One "name:value" line per x-mcp-auth-* header, sorted by name (src/security/proxy-auth.ts).
+        signed_lines = '\n'.join(f'{name}:{value}' for name, value in sorted(
+            (n, v) for n, v in headers.items() if n.startswith('x-mcp-auth-')))
+        mac = hmac.new(key.encode(), f'mcp-proxy-auth/v1\n{seconds}\nPOST\n{path}\n{signed_lines}'.encode(), hashlib.sha256).hexdigest()
         headers['x-mcp-proxy-auth'] = f'v1:{seconds}:{mac}'
     req = urllib.request.Request(base.rstrip('/') + path, headers=headers,
                                  data=None if payload is None else json.dumps(payload).encode())
