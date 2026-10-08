@@ -1,5 +1,7 @@
 # Catalog source for business search (B1)
 
+**Status: parked 2026-10-08** ([ADR 0005](../decisions/0005-own-places-first.md)). No crawl, no own index; kept as research on record. An index by API crawl is the wrong architecture (platform owner, 2026-10-07): if ever needed, it is a ClickHouse or Elastic index built by the development team with a direct connector.
+
 Research date: 2026-10-03. Answers open question B1 without the backend team, at the owner's
 request. Sources: `altegio/biz.erp` code (read via `gh`), the BI replica (read-only aggregate
 queries, no personal data). No live API calls were made.
