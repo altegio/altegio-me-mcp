@@ -20,6 +20,11 @@ export const PARTNER_TOKEN_PROBE_TIMEOUT_MS = 8_000;
 // without a probe, so garbage costs no upstream call.
 const TOKEN_SHAPE = /^[\x21-\x7E]{8,512}$/;
 
+/** True for 8 to 512 printable ASCII characters without spaces: a token worth sending upstream. */
+export function isTokenShaped(token: string): boolean {
+  return TOKEN_SHAPE.test(token);
+}
+
 /**
  * A stable pseudonym for a partner token: the first 16 hex digits of its
  * SHA-256, the same form as the platform proxy's `token_hash`, so our call log
@@ -89,7 +94,7 @@ export function createPartnerTokenValidator(
 
   return {
     validate(token: string): Promise<PartnerTokenVerdict> {
-      if (!TOKEN_SHAPE.test(token)) return Promise.resolve('invalid');
+      if (!isTokenShaped(token)) return Promise.resolve('invalid');
       const key = createHash('sha256').update(token, 'utf8').digest('hex');
       const hit = cache.get(key);
       if (hit !== undefined) {

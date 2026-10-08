@@ -141,6 +141,9 @@ values) when one is missing or invalid.
 | `MCP_PROXY_BACKEND_KEY` | Shared key of the proxy signature, a comma-separated list during a rotation, each key at least 32 characters. Production uses the file form below | none | with `PROXY_AUTH=required`, this or `MCP_PROXY_BACKEND_KEY_FILE` |
 | `MCP_PROXY_BACKEND_KEY_FILE` | Absolute path of a mounted file that holds the proxy key; wins over `MCP_PROXY_BACKEND_KEY` and is re-read lazily every 60 s, so a rotation needs no restart | none | with `PROXY_AUTH=required`, this or `MCP_PROXY_BACKEND_KEY` |
 | `CALLER_AUTH` | `required` or `optional`. With `required`, every `POST /mcp` needs the caller's own Altegio partner token: behind the proxy (`PROXY_AUTH=required`) only in the proxy's signed `x-mcp-auth-altegio-partner-token` header, without it as `Authorization: Bearer <token>` or `X-Altegio-Partner-Token`. The token is checked with Altegio (cached by hash: valid 5 min, invalid 30 s) and signs that caller's upstream calls. `optional` serves a caller without a token with `ALTEGIO_API_TOKEN`, logs one `config_warning` at startup, and exists for the proxy rollout and local runs; a token that is sent is still checked. `.env.example` sets `optional` | `required` | no |
+| `CLIENT_USER_TOKEN_HEADER` | Name of the signed header that carries the client's Altegio user token behind the proxy. It must start with `x-mcp-auth-` (the proxy signature covers only those headers) and is lower-cased. Change it only if the platform's I8 header names differ. `.env.example` leaves it empty | `x-mcp-auth-altegio-user-token` | no |
+| `CLIENT_SCOPE_HEADER` | Name of the signed header that carries the client's space-separated scope list; same rules as `CLIENT_USER_TOKEN_HEADER`. Only `mcp:me:read` in it is honoured, and `mcp:me:book` is granted to nobody. `.env.example` leaves it empty | `x-mcp-auth-scope` | no |
+| `CLIENT_CALLER_KIND` | Value of `x-mcp-auth-kind` that marks a client sign-in; it must not be `partner`. `.env.example` leaves it empty | `client` | no |
 | `COMMIT_SHA` | Commit of the deployed build, 7 to 40 lowercase hex characters; reported as `commit` by `GET /health` | none (`commit` is `null`) | no |
 | `TRUSTED_PROXY_HOPS` | Proxies between the caller and the server, counted from the right of `X-Forwarded-For`. It picks the client address when the proxy does not sign `x-mcp-auth-client-ip`, and with `PROXY_AUTH=off`. `0` means no proxy. The leftmost entries and the TCP peer are never used | `1` | no |
 | `SHARED_EGRESS_CIDRS` | Comma-separated IPv4 or IPv6 CIDRs whose addresses share one request budget and are not limited per address, because many users sit behind them. The default is Anthropic's outbound range used by claude.ai | `160.79.104.0/21` | no |
@@ -186,12 +189,24 @@ Altegio's per-partner limits and licence terms apply to the caller. Without a to
 HTTP 401; with a token Altegio refuses, 401 `invalid_token`; when Altegio cannot be reached for
 the check, 503 with `Retry-After`.
 
-Access is tiered by scope ([ADR 0004](docs/decisions/0004-caller-authorization-tiers.md)). A
-partner token grants `mcp:me:read`, which the six current tools need. Tools that act for one
-client (Phase 2) need `mcp:me:book`, which only that client's OAuth sign-in grants; a call
-without it gets an in-band error naming the missing access, and `tools/list` shows the same tools
-to everyone. Interactive hosts such as claude.ai and ChatGPT cannot send a partner token and
-connect once OAuth arrives in Phase 2.
+Access is tiered by scope ([ADR 0004](docs/decisions/0004-caller-authorization-tiers.md), amended
+by ADR 0005, own places first). Three scopes:
+
+- `mcp:me:discover` is the base tier. Every admitted caller holds it (a partner token, a client
+  sign-in, or no token while `CALLER_AUTH=optional`), and the six known-business tools need only it.
+- `mcp:me:read` is the signed-in client's own places and bookings. Only a client sign-in grants it,
+  and `me_list_places` requires it. An anonymous or partner caller who calls that tool gets an
+  in-band error that names the client sign-in.
+- `mcp:me:book` is declared for later writes and granted to nobody yet, whatever a scope header says.
+
+`tools/list` shows the same tools to everyone. A client sign-in reaches the server as a signed
+`x-mcp-auth-kind: client` with the client's Altegio user token and scope list in signed
+`x-mcp-auth-*` headers (names set by `CLIENT_USER_TOKEN_HEADER`, `CLIENT_SCOPE_HEADER` and
+`CLIENT_CALLER_KIND`). Without the proxy, with `CALLER_AUTH=optional`, a local run sends the user
+token directly as `X-Altegio-User-Token`; with `CALLER_AUTH=required` a direct user token is
+refused. The user token is sent to Altegio only on the signed-in routes, next to the partner token,
+and never appears in a result or a log. Interactive hosts such as claude.ai and ChatGPT cannot
+send a partner token and connect through the platform's sign-in once it ships.
 
 ## Local run
 

@@ -203,6 +203,11 @@ async function main(): Promise<void> {
     proxyAuth,
     callerAuth: {
       mode: config.CALLER_AUTH,
+      client: {
+        userTokenHeader: config.CLIENT_USER_TOKEN_HEADER,
+        scopeHeader: config.CLIENT_SCOPE_HEADER,
+        kind: config.CLIENT_CALLER_KIND,
+      },
       validator: createPartnerTokenValidator({
         probe: (token, signal) => booking.probePartnerToken(token, { signal }),
       }),

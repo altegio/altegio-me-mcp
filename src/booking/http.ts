@@ -399,7 +399,15 @@ export class BookingHttp {
     const kind = kindOfStatus(status);
     return new UpstreamError(kind, route, {
       status,
-      credential: callerToken === undefined ? 'server' : 'caller',
+      // A call that carried the client's user token names the client's
+      // sign-in, whoever's partner token backed it: that is the party who can
+      // fix it by connecting again.
+      credential:
+        userToken !== undefined
+          ? 'user'
+          : callerToken === undefined
+            ? 'server'
+            : 'caller',
       codes: kind === 'rejected' ? meta.codes : [],
       retryAfterSeconds: kind === 'rate_limited' ? retryAfter : null,
       // Scrubbed before anything else touches it (WR-04): later sanitising

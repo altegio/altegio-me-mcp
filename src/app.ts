@@ -247,6 +247,7 @@ export function createApp<D>(deps: AppDeps<D>): Express {
       mode: deps.callerAuth.mode,
       behindProxy: proxyAuth.length > 0,
       validator: deps.callerAuth.validator,
+      client: deps.callerAuth.client,
     }),
     express.json({ limit: MCP_BODY_LIMIT }),
     rejectBatch,

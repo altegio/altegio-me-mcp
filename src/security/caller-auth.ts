@@ -1,12 +1,16 @@
 import type { IncomingHttpHeaders } from 'node:http';
-import type { RequestHandler, Response } from 'express';
+import type { NextFunction, RequestHandler, Response } from 'express';
 import { getCallRecord } from '../observability/call-log.js';
 import {
   CLIENT_GRANTABLE_SCOPES,
   SCOPE_DISCOVER,
   type Scope,
 } from '../tools/scopes.js';
-import { partnerIdOf, type PartnerTokenValidator } from './partner-token.js';
+import {
+  isTokenShaped,
+  partnerIdOf,
+  type PartnerTokenValidator,
+} from './partner-token.js';
 
 // Who may call POST /mcp (ADR 0004). The base tier is an Altegio partner
 // token: the caller's own, validated with Altegio and then used for the
@@ -70,7 +74,8 @@ export type Caller =
       scopes: ReadonlySet<Scope>;
     };
 
-export type CallerAuthReason = 'no_partner_token' | 'invalid_partner_token';
+export type CallerAuthReason =
+  'no_partner_token' | 'invalid_partner_token' | 'invalid_user_token';
 
 /** What a partner token grants: the base tier only. The client tier needs a client sign-in. */
 const PARTNER_SCOPES: ReadonlySet<Scope> = new Set<Scope>([SCOPE_DISCOVER]);
@@ -109,6 +114,13 @@ export interface ClientIdentityNames {
   kind: string;
 }
 
+/** The I8 names the platform proposed; deployments may override them. */
+export const DEFAULT_CLIENT_IDENTITY: ClientIdentityNames = Object.freeze({
+  userTokenHeader: SIGNED_USER_TOKEN_HEADER,
+  scopeHeader: SIGNED_SCOPE_HEADER,
+  kind: CALLER_KIND_CLIENT,
+});
+
 /** What a request presents as the client's user token. */
 export type PresentedUser =
   | { kind: 'none' }
@@ -123,22 +135,21 @@ export type PresentedUser =
 
 /**
  * The client's user token a request presents. Behind the proxy only the signed
- * header counts, and only when the signed kind is the client kind; without the
- * proxy only the direct header counts.
+ * header counts, and only when the signed kind is the client kind (a client
+ * kind with no token is 'missing'); without the proxy only the direct header
+ * counts.
  */
 export function presentedUserToken(
   headers: IncomingHttpHeaders,
   behindProxy: boolean,
-  // Configured names; the I8 defaults when absent. Honoured in the next commit.
-  _client?: ClientIdentityNames
+  client: ClientIdentityNames = DEFAULT_CLIENT_IDENTITY
 ): PresentedUser {
   if (behindProxy) {
     const kind = nonBlank(single(headers[SIGNED_KIND_HEADER]));
-    const token = nonBlank(single(headers[SIGNED_USER_TOKEN_HEADER]));
-    if (kind !== CALLER_KIND_CLIENT || token === undefined) {
-      return { kind: 'none' };
-    }
-    const listed = nonBlank(single(headers[SIGNED_SCOPE_HEADER]));
+    if (kind !== client.kind) return { kind: 'none' };
+    const token = nonBlank(single(headers[client.userTokenHeader]));
+    if (token === undefined) return { kind: 'missing' };
+    const listed = nonBlank(single(headers[client.scopeHeader]));
     return {
       kind: 'token',
       token,
@@ -200,12 +211,27 @@ export const PARTNER_CHECK_UNAVAILABLE = {
   error_description: 'The partner token could not be checked; retry shortly',
 } as const;
 
+export const USER_TOKEN_INVALID = {
+  error: 'invalid_token',
+  error_description: 'The Altegio user token was not accepted',
+} as const;
+
+export const USER_TOKEN_NOT_SIGNED = {
+  error: 'invalid_token',
+  error_description:
+    'A client sign-in reaches this server only through the platform proxy',
+} as const;
+
 const RETRY_AFTER_SECONDS = 5;
 
 function refuse(
   res: Response,
   reason: CallerAuthReason,
-  body: typeof PARTNER_TOKEN_REQUIRED | typeof PARTNER_TOKEN_INVALID
+  body:
+    | typeof PARTNER_TOKEN_REQUIRED
+    | typeof PARTNER_TOKEN_INVALID
+    | typeof USER_TOKEN_INVALID
+    | typeof USER_TOKEN_NOT_SIGNED
 ): void {
   const record = getCallRecord(res);
   record.auth_reason = reason;
@@ -224,27 +250,100 @@ export function getCaller(res: Response): Caller | null {
   return (res.locals.caller as Caller | undefined) ?? null;
 }
 
+/**
+ * The partner token that comes with a client sign-in: behind the proxy the
+ * signed header only, otherwise the same headers a partner uses.
+ */
+function presentedClientPartnerToken(
+  headers: IncomingHttpHeaders,
+  behindProxy: boolean
+): Presented {
+  if (!behindProxy) return presentedPartnerToken(headers, false);
+  const token = nonBlank(single(headers[SIGNED_PARTNER_TOKEN_HEADER]));
+  return token === undefined ? { kind: 'none' } : { kind: 'token', token };
+}
+
 export function createCallerAuthMiddleware(opts: {
   mode: CallerAuthMode;
   behindProxy: boolean;
   validator: PartnerTokenValidator;
+  /** Header names and kind of the signed client identity; the I8 defaults when absent. */
+  client?: ClientIdentityNames;
 }): RequestHandler {
+  // Asks Altegio about a presented partner token and answers the request when
+  // it is not usable; `admit` runs only for a token Altegio accepts.
+  const withValidPartnerToken = (
+    res: Response,
+    next: NextFunction,
+    token: string,
+    admit: (token: string) => void
+  ): void => {
+    const record = getCallRecord(res);
+    opts.validator.validate(token).then(
+      (verdict) => {
+        if (verdict === 'invalid') {
+          refuse(res, 'invalid_partner_token', PARTNER_TOKEN_INVALID);
+          return;
+        }
+        if (verdict === 'unavailable') {
+          record.error_type = 'partner_check_unavailable';
+          res.setHeader('Retry-After', String(RETRY_AFTER_SECONDS));
+          res.status(503).json(PARTNER_CHECK_UNAVAILABLE);
+          return;
+        }
+        admit(token);
+      },
+      (error: unknown) => {
+        next(error);
+      }
+    );
+  };
+
   return (req, res, next) => {
     const record = getCallRecord(res);
-    const user = presentedUserToken(req.headers, opts.behindProxy);
-    if (user.kind === 'token') {
-      const caller: Caller = {
-        kind: 'client',
-        userToken: user.token,
-        partnerToken: null,
-        partnerId: null,
-        scopes: clientScopes(user.scopes),
-      };
-      res.locals.caller = caller;
-      record.caller = caller.kind;
-      next();
+    const user = presentedUserToken(req.headers, opts.behindProxy, opts.client);
+    if (user.kind === 'missing') {
+      refuse(res, 'invalid_user_token', USER_TOKEN_INVALID);
       return;
     }
+    if (user.kind === 'token') {
+      // Without the proxy nothing vouches for a user token, so only the
+      // optional (local and headless) mode serves it.
+      if (!opts.behindProxy && opts.mode === 'required') {
+        refuse(res, 'invalid_user_token', USER_TOKEN_NOT_SIGNED);
+        return;
+      }
+      if (!isTokenShaped(user.token)) {
+        refuse(res, 'invalid_user_token', USER_TOKEN_INVALID);
+        return;
+      }
+      const admitClient = (partnerToken: string | null): void => {
+        const caller: Caller = {
+          kind: 'client',
+          userToken: user.token,
+          partnerToken,
+          partnerId: partnerToken === null ? null : partnerIdOf(partnerToken),
+          scopes: clientScopes(user.scopes),
+        };
+        res.locals.caller = caller;
+        record.caller = caller.kind;
+        if (caller.partnerId !== null) record.partner_id = caller.partnerId;
+        next();
+      };
+      const partner = presentedClientPartnerToken(
+        req.headers,
+        opts.behindProxy
+      );
+      if (partner.kind === 'unsupported') {
+        refuse(res, 'invalid_partner_token', PARTNER_TOKEN_INVALID);
+      } else if (partner.kind === 'none') {
+        admitClient(null);
+      } else {
+        withValidPartnerToken(res, next, partner.token, admitClient);
+      }
+      return;
+    }
+
     const presented = presentedPartnerToken(req.headers, opts.behindProxy);
     if (presented.kind === 'unsupported') {
       refuse(res, 'invalid_partner_token', PARTNER_TOKEN_INVALID);
@@ -262,33 +361,17 @@ export function createCallerAuthMiddleware(opts: {
       return;
     }
 
-    const { token } = presented;
-    opts.validator.validate(token).then(
-      (verdict) => {
-        if (verdict === 'invalid') {
-          refuse(res, 'invalid_partner_token', PARTNER_TOKEN_INVALID);
-          return;
-        }
-        if (verdict === 'unavailable') {
-          record.error_type = 'partner_check_unavailable';
-          res.setHeader('Retry-After', String(RETRY_AFTER_SECONDS));
-          res.status(503).json(PARTNER_CHECK_UNAVAILABLE);
-          return;
-        }
-        const caller: Caller = {
-          kind: 'partner',
-          partnerToken: token,
-          partnerId: partnerIdOf(token),
-          scopes: PARTNER_SCOPES,
-        };
-        res.locals.caller = caller;
-        record.caller = caller.kind;
-        record.partner_id = caller.partnerId;
-        next();
-      },
-      (error: unknown) => {
-        next(error);
-      }
-    );
+    withValidPartnerToken(res, next, presented.token, (token) => {
+      const caller: Caller = {
+        kind: 'partner',
+        partnerToken: token,
+        partnerId: partnerIdOf(token),
+        scopes: PARTNER_SCOPES,
+      };
+      res.locals.caller = caller;
+      record.caller = caller.kind;
+      record.partner_id = caller.partnerId;
+      next();
+    });
   };
 }

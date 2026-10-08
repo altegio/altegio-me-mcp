@@ -288,15 +288,34 @@ describe('the client sign-in settings (ADR 0005, D-01)', () => {
     ['CLIENT_USER_TOKEN_HEADER', 'x-mcp-auth-altegio-partner-token'],
     ['CLIENT_SCOPE_HEADER', 'scope'],
     ['CLIENT_SCOPE_HEADER', 'x-mcp-auth-kind'],
-    ['CLIENT_SCOPE_HEADER', 'x-mcp-auth-altegio-user-token'],
     ['CLIENT_CALLER_KIND', 'partner'],
     ['CLIENT_CALLER_KIND', 'Client Kind'],
     ['CLIENT_CALLER_KIND', ''.padEnd(40, 'a')],
-  ])('rejects %s = %s, naming the key and never the value', (key, value) => {
+  ])('rejects %s = %s with the fixed rule text', (key, value) => {
     const error = configErrorFor({ ...VALID, [key]: value });
     expect(error.issues.map((issue) => issue.key)).toEqual([key]);
-    expect(formatConfigError(error)).not.toContain(value);
     expect(error.issues[0]?.message).toMatch(/x-mcp-auth-|partner/);
+  });
+
+  it.each([
+    'CLIENT_USER_TOKEN_HEADER',
+    'CLIENT_SCOPE_HEADER',
+    'CLIENT_CALLER_KIND',
+  ])('never echoes the value of %s', (key) => {
+    const canary = 'CANARY-7f3a91-do-not-print';
+    const error = configErrorFor({ ...VALID, [key]: canary });
+    expect(error.issues.map((issue) => issue.key)).toEqual([key]);
+    expect(formatConfigError(error)).not.toContain(canary);
+    expect(formatConfigError(error)).not.toContain(canary.toLowerCase());
+  });
+
+  it('rejects a scope header equal to the default user token header', () => {
+    expect(
+      issueKeys({
+        ...VALID,
+        CLIENT_SCOPE_HEADER: 'x-mcp-auth-altegio-user-token',
+      }).sort()
+    ).toEqual(['CLIENT_SCOPE_HEADER', 'CLIENT_USER_TOKEN_HEADER']);
   });
 
   it('rejects the same header name for the user token and the scope list', () => {
