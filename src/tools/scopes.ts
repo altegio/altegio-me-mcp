@@ -8,7 +8,8 @@
 // token, client sign-in, or anonymous while CALLER_AUTH=optional) holds it, and
 // the known-business tools need only it. mcp:me:read is the signed-in client's
 // own places and bookings: only a client sign-in grants it. mcp:me:book is the
-// client's writes (Phase 5): declared, and granted by nobody yet.
+// signed-in client's writes at their own places (ADR 0006): a client sign-in
+// grants it, and nobody else.
 //
 // The names follow the platform's per-service vocabulary (`mcp:pro:read`,
 // `mcp:pro:write` on /pro), so the proxy can issue them unchanged when it mints
@@ -27,9 +28,10 @@ export const SCOPE_DISCOVER = 'mcp:me:discover' as const;
 export const SCOPE_READ = 'mcp:me:read' as const;
 
 /**
- * Client tier, write: acting for one signed-in client (book, reschedule,
- * cancel; Phase 5). Declared so a tool can require it; no caller is granted it
- * yet, whatever a scope header says.
+ * Client tier, write: the signed-in client's writes at their own places (book,
+ * reschedule, cancel; ADR 0006). A client sign-in grants it, with the direct
+ * header always and behind the proxy when the signed scope list names it; a
+ * partner or an anonymous caller never holds it.
  */
 export const SCOPE_BOOK = 'mcp:me:book' as const;
 
@@ -40,6 +42,7 @@ export type Scope = (typeof SCOPES)[number];
 /** The scopes a client sign-in may carry; the proxy's scope list is cut to these. */
 export const CLIENT_GRANTABLE_SCOPES: readonly Scope[] = Object.freeze([
   SCOPE_READ,
+  SCOPE_BOOK,
 ]);
 
 /** The scopes a grant lacks for a tool, in the tool's own order. */

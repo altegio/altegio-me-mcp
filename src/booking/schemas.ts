@@ -39,6 +39,12 @@ const utcOffsetHours = z
       : null;
   });
 
+/** A JSON number, or a string holding a decimal number ("1500", "4.5"). */
+const numeric = z.union([
+  z.number(),
+  z.string().trim().regex(DECIMAL_PATTERN).transform(Number),
+]);
+
 const bookformSchema = z.looseObject({
   id: z.number().int(),
   title: text,
@@ -80,15 +86,14 @@ export const companyDataSchema = z.looseObject({
   next_slot: text,
   bookforms: z.array(bookformSchema).nullish(),
   default_bookform_url: text,
+  /** What a client may do to a booking online: the flags, and the seconds before the start a change is still allowed (0 means no limit). */
+  allow_delete_record: flag.nullish(),
+  allow_delete_record_delay_step: numeric.nullish(),
+  allow_change_record: flag.nullish(),
+  allow_change_record_delay_step: numeric.nullish(),
 });
 
 export type CompanyData = z.infer<typeof companyDataSchema>;
-
-/** A JSON number, or a string holding a decimal number ("1500", "4.5"). */
-const numeric = z.union([
-  z.number(),
-  z.string().trim().regex(DECIMAL_PATTERN).transform(Number),
-]);
 
 const bookServiceSchema = z.looseObject({
   id: z.number().int(),

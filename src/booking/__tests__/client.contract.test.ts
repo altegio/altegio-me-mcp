@@ -1,5 +1,10 @@
 import { describe, expect, it } from '@jest/globals';
-import { BOOKING_ROUTES, BookingClient, USER_ROUTES } from '../client.js';
+import {
+  BOOKING_ROUTES,
+  BookingClient,
+  CLIENT_WRITE_ROUTES,
+  USER_ROUTES,
+} from '../client.js';
 import { UpstreamError, type UpstreamErrorKind } from '../errors.js';
 import { ALTEGIO_ACCEPT, BookingHttp } from '../http.js';
 import {
@@ -127,6 +132,23 @@ describe('company request', () => {
         },
       ],
       bookingFormUrl: 'https://n1463903.alteg.io/',
+      rules: {
+        cancelAllowed: true,
+        cancelBeforeSeconds: 7200,
+        moveAllowed: true,
+        moveBeforeSeconds: 7200,
+      },
+    });
+  });
+
+  it('reads no rule where the card states none', async () => {
+    const fixture = loadFixture('company', 'no_forms');
+    const { client } = clientFor(fixture);
+    expect((await client.company(LOCATION)).rules).toEqual({
+      cancelAllowed: null,
+      cancelBeforeSeconds: null,
+      moveAllowed: null,
+      moveBeforeSeconds: null,
     });
   });
 });
@@ -356,7 +378,7 @@ describe('route table (D-01)', () => {
 });
 
 describe('signed-in route table (D-01, D-02)', () => {
-  it('is frozen and holds exactly the places and records routes', () => {
+  it('is frozen and holds exactly the places, records and profile routes', () => {
     expect(Object.isFrozen(USER_ROUTES)).toBe(true);
     for (const entry of Object.values(USER_ROUTES)) {
       expect(Object.isFrozen(entry)).toBe(true);
@@ -365,7 +387,11 @@ describe('signed-in route table (D-01, D-02)', () => {
       Object.values(USER_ROUTES)
         .map((entry) => `${entry.method} ${entry.route}`)
         .sort()
-    ).toEqual(['GET /user/companies/yplaces', 'GET /user/records']);
+    ).toEqual([
+      'GET /booking/user/data',
+      'GET /user/companies/yplaces',
+      'GET /user/records',
+    ]);
   });
 });
 
@@ -1380,6 +1406,7 @@ describe('user records request (GET /user/records)', () => {
       [722227, '2099-01-12T10:00:00+0300', false],
     ]);
     expect(records[0]).toEqual({
+      id: 1,
       locationId: 722227,
       businessName: 'Fixture Barber',
       city: 'Limassol',
@@ -1393,7 +1420,7 @@ describe('user records request (GET /user/records)', () => {
     });
   });
 
-  it('never reads a record id, token or comment into a record', async () => {
+  it('reads the booking id and never a token, hash, api id or comment into a record', async () => {
     const { client } = recordsClient(loadFixture('user_records', 'default'));
     const records = await client.myRecords({ userToken: USER_TOKEN });
     const text = JSON.stringify(records);
@@ -1414,6 +1441,7 @@ describe('user records request (GET /user/records)', () => {
         'city',
         'currency',
         'datetime',
+        'id',
         'locationId',
         'price',
         'services',
@@ -1477,6 +1505,7 @@ describe('user records request (GET /user/records)', () => {
     const records = await client.myRecords({ userToken: USER_TOKEN });
     expect(records).toEqual([
       {
+        id: 1,
         locationId: 7,
         businessName: 'Plain',
         city: null,
@@ -1489,6 +1518,7 @@ describe('user records request (GET /user/records)', () => {
         price: null,
       },
       {
+        id: 2,
         locationId: 7,
         businessName: 'Public',
         city: null,
@@ -1514,5 +1544,160 @@ describe('user records request (GET /user/records)', () => {
     await expect(
       client.myRecords({ userToken: USER_TOKEN })
     ).rejects.toMatchObject({ kind: 'contract_drift' });
+  });
+});
+
+describe('the profile and the create route (ADR 0006, D-02)', () => {
+  const USER_TOKEN = 'client-user-token-0001-abcdef';
+  const SELECTION = {
+    serviceIds: [10303531],
+    teamMemberId: 2098145,
+    datetime: '2099-01-12T11:00:00+03:00',
+  };
+  const PROFILE = {
+    fullname: 'Fixture Client',
+    phone: '+15550000001',
+    email: null,
+  };
+
+  function writeClient(options: { profile?: FakeReply; create?: FakeReply }) {
+    const upstream = fakeFetch([
+      {
+        method: 'GET',
+        path: '/booking/user/data',
+        reply: options.profile ?? loadFixture('booking_user_data', 'default'),
+      },
+      {
+        method: 'POST',
+        path: `/book_record/${LOCATION}`,
+        reply: options.create ?? loadFixture('book_record_create', 'created'),
+      },
+    ]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    return { client, upstream };
+  }
+
+  it('declares the create route as the one client write route, frozen', () => {
+    expect(Object.isFrozen(CLIENT_WRITE_ROUTES)).toBe(true);
+    expect(
+      Object.values(CLIENT_WRITE_ROUTES).map(
+        (entry) => `${entry.method} ${entry.route}`
+      )
+    ).toEqual(['POST /book_record/{location_id}']);
+  });
+
+  it('reads the profile with both tokens: name, phone as plus and digits, e-mail when set', async () => {
+    const { client, upstream } = writeClient({});
+    expect(await client.myProfile({ userToken: USER_TOKEN })).toEqual({
+      fullname: 'Fixture Client',
+      phone: '+15550000001',
+      email: 'fixture.client@example.invalid',
+    });
+    const [call] = upstream.calls;
+    expect(call?.method).toBe('GET');
+    expect(call?.url.pathname).toBe('/api/v1/booking/user/data');
+    expect(call?.headers.get('authorization')).toBe(
+      `Bearer ${TOKEN}, User ${USER_TOKEN}`
+    );
+  });
+
+  it('adds a plus to bare phone digits, joins name and surname, and gives no e-mail when it is empty', async () => {
+    const { client } = writeClient({
+      profile: loadFixture('booking_user_data', 'bare_digits_no_email'),
+    });
+    expect(await client.myProfile({ userToken: USER_TOKEN })).toEqual({
+      fullname: 'Fixture Client',
+      phone: '+15550000001',
+      email: null,
+    });
+  });
+
+  it.each(['no_phone', 'no_name'])(
+    'gives no profile when the %s scenario lacks what the create needs',
+    async (scenario) => {
+      const { client } = writeClient({
+        profile: loadFixture('booking_user_data', scenario),
+      });
+      expect(await client.myProfile({ userToken: USER_TOKEN })).toBeNull();
+    }
+  );
+
+  it('sends nothing without a user token', async () => {
+    const { client, upstream } = writeClient({});
+    await expect(client.myProfile({})).rejects.toThrow(TypeError);
+    await expect(
+      client.createBooking(LOCATION, SELECTION, PROFILE, {})
+    ).rejects.toThrow(TypeError);
+    expect(upstream.calls).toEqual([]);
+  });
+
+  it('creates one booking with exactly the profile and one appointment, and returns its id', async () => {
+    const { client, upstream } = writeClient({});
+    const created = await client.createBooking(LOCATION, SELECTION, PROFILE, {
+      userToken: USER_TOKEN,
+    });
+    expect(created).toEqual({ bookingId: 990001 });
+    expect(JSON.stringify(created)).not.toContain('fixture-hash-0002');
+    const [call] = upstream.calls;
+    expect(call?.method).toBe('POST');
+    expect(call?.url.pathname).toBe(`/api/v1/book_record/${LOCATION}`);
+    expect(call?.headers.get('authorization')).toBe(
+      `Bearer ${TOKEN}, User ${USER_TOKEN}`
+    );
+    expect(call?.headers.get('content-type')).toBe('application/json');
+    expect(JSON.parse(call?.body ?? 'null')).toEqual({
+      phone: '+15550000001',
+      fullname: 'Fixture Client',
+      appointments: [
+        {
+          id: 1,
+          services: [10303531],
+          staff_id: 2098145,
+          datetime: '2099-01-12T11:00:00+03:00',
+        },
+      ],
+    });
+  });
+
+  it('sends the profile e-mail only when there is one', async () => {
+    const { client, upstream } = writeClient({});
+    await client.createBooking(
+      LOCATION,
+      SELECTION,
+      { ...PROFILE, email: 'fixture.client@example.invalid' },
+      { userToken: USER_TOKEN }
+    );
+    expect(JSON.parse(upstream.calls[0]?.body ?? '{}')).toMatchObject({
+      email: 'fixture.client@example.invalid',
+    });
+  });
+
+  it('rejects ids and datetimes it cannot send before anything goes out', async () => {
+    const { client, upstream } = writeClient({});
+    const call = { userToken: USER_TOKEN };
+    await expect(
+      client.createBooking(
+        LOCATION,
+        { ...SELECTION, serviceIds: [] },
+        PROFILE,
+        call
+      )
+    ).rejects.toThrow(TypeError);
+    await expect(
+      client.createBooking(
+        LOCATION,
+        { ...SELECTION, datetime: 'tomorrow' },
+        PROFILE,
+        call
+      )
+    ).rejects.toThrow(TypeError);
+    await expect(
+      client.createBooking(0, SELECTION, PROFILE, call)
+    ).rejects.toThrow(TypeError);
+    expect(upstream.calls).toEqual([]);
   });
 });

@@ -43,7 +43,11 @@
             "url": "https://n1463903.alteg.io/"
           }
         ],
-        "default_bookform_url": "https://n1463903.alteg.io/"
+        "default_bookform_url": "https://n1463903.alteg.io/",
+        "allow_delete_record": true,
+        "allow_delete_record_delay_step": 7200,
+        "allow_change_record": true,
+        "allow_change_record_delay_step": 7200
       },
       "meta": []
     }

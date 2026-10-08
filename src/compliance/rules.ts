@@ -1,7 +1,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
-import type { ToolMeta, ToolSpec } from '../tools/factory.js';
+import { CLIENT_WRITE_ROUTES } from '../booking/client.js';
+import type { ToolMeta, ToolSpec, UpstreamCall } from '../tools/factory.js';
 import { SCOPE_BOOK, SCOPE_DISCOVER, SCOPE_READ } from '../tools/scopes.js';
 import {
   INVISIBLE_RANGES,
@@ -54,6 +55,13 @@ export interface CheckOptions {
 export const READ_ONLY_POST_ROUTES: ReadonlySet<string> = new Set<string>([
   '/book_check/{location_id}',
 ]);
+
+/** Whether a declared upstream call is one of the client write routes (ADR 0006). */
+function isClientWriteRoute(call: UpstreamCall): boolean {
+  return Object.values(CLIENT_WRITE_ROUTES).some(
+    (route) => route.method === call.method && route.route === call.route
+  );
+}
 
 const MAX_NAME_CHARS = 64;
 const MAX_DESCRIPTION_CHARS = 1024;
@@ -306,9 +314,21 @@ export function checkTool(
     add('R3', 'a tool cannot be both read-only and destructive');
   }
 
-  // R4 v1 policy
-  if (options.production === true && annotations.readOnlyHint !== true) {
-    add('R4', 'every production tool must be read-only in v1');
+  // R4 write policy (ADR 0006): a production tool is read-only, or it is a
+  // client write tool: it needs the book tier and declares a client write route.
+  if (
+    options.production === true &&
+    annotations.readOnlyHint !== true &&
+    !(
+      Array.isArray(meta.scopes) &&
+      meta.scopes.includes(SCOPE_BOOK) &&
+      meta.upstream.some(isClientWriteRoute)
+    )
+  ) {
+    add(
+      'R4',
+      'a production tool that writes must be a client write tool: mcp:me:book and a client write route'
+    );
   }
 
   // R5 name
@@ -333,18 +353,21 @@ export function checkTool(
     }
   }
 
-  // R7 declared upstream calls of a read-only tool
-  if (annotations.readOnlyHint === true) {
-    for (const call of meta.upstream) {
-      const allowed =
-        call.method === 'GET' ||
-        (call.method === 'POST' && READ_ONLY_POST_ROUTES.has(call.route));
-      if (!allowed) {
-        add(
-          'R7',
-          `read-only tool declares ${call.method} ${call.route}, which is not an allowed read`
-        );
-      }
+  // R7 declared upstream calls: a read-only tool declares reads only; a tool
+  // that writes may also declare the client write routes.
+  const readOnly = annotations.readOnlyHint === true;
+  for (const call of meta.upstream) {
+    const allowed =
+      call.method === 'GET' ||
+      (call.method === 'POST' && READ_ONLY_POST_ROUTES.has(call.route)) ||
+      (!readOnly && isClientWriteRoute(call));
+    if (!allowed) {
+      add(
+        'R7',
+        readOnly
+          ? `read-only tool declares ${call.method} ${call.route}, which is not an allowed read`
+          : `tool declares ${call.method} ${call.route}, which is neither a read nor a client write route`
+      );
     }
   }
 
@@ -445,7 +468,11 @@ export function checkTool(
     add('R14', `scopes must include ${SCOPE_DISCOVER}`);
   }
   if (
-    meta.upstream.some((call) => call.route.startsWith('/user/')) &&
+    meta.upstream.some(
+      (call) =>
+        call.route.startsWith('/user/') ||
+        call.route.startsWith('/booking/user/')
+    ) &&
     !scopes.includes(SCOPE_READ)
   ) {
     add(
