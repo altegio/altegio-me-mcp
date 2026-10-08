@@ -281,12 +281,16 @@ describeLive('live own-place flow (ALTEGIO_E2E=1, ALTEGIO_E2E_USER=1)', () => {
       linkUrl = out.link?.url ?? '';
       expect(checkStatus).toBe('verified');
       expect(linkKind).toBe('preselected');
-      // `m-1` stands for any team member; the first service is `s<id>`.
+      // `m-1` stands for any team member; the services follow as `s<id>`, every
+      // service of the usual in order, and the time token `d` comes last.
       const staff =
         (chosen?.team_member_id ?? 0) === 0
           ? 'm-1'
           : `m${String(chosen?.team_member_id)}`;
-      expect(linkUrl).toContain(`${staff}s${String(chosen?.service_ids[0])}d`);
+      const services = (chosen?.service_ids ?? [])
+        .map((id) => `s${String(id)}`)
+        .join('');
+      expect(linkUrl).toContain(`${staff}${services}d`);
     },
     LIVE_TIMEOUT_MS
   );

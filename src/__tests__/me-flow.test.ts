@@ -674,7 +674,9 @@ describe('the own-place flow to a pre-filled widget link (ROADMAP criterion 2, M
     };
     expect(check.status).toBe('verified');
     expect(check.link.kind).toBe('preselected');
-    expect(check.link.url).toContain(`m${teamMemberId}s${serviceIds[0]}d`);
+    // Every service of the usual, in order, between the team member and the time.
+    const serviceTokens = serviceIds.map((id) => `s${String(id)}`).join('');
+    expect(check.link.url).toContain(`m${teamMemberId}${serviceTokens}d`);
     expect(check.selection.team_member?.id).toBe(teamMemberId);
 
     // Nothing but reads and the one validation POST left the server.
