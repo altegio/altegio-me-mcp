@@ -250,8 +250,9 @@ async function readRecordsForUsual(
 }
 
 // me_list_bookings (ME-03, D-02): the client's own records, ordered, with the
-// usual service and team member per place (D-03). A record's id and hash, and
-// any client name, phone or e-mail, are never read, so none can be returned
+// usual service and team member per place (D-03). A record's own id is the
+// booking id the write tools take (ADR 0006); its hash and token, and any
+// client name, phone or e-mail, are never read, so none can be returned
 // (ME-05); the strict schemas below make that a property of the output.
 
 const BOOKING_STATUSES = [
@@ -262,7 +263,11 @@ const BOOKING_STATUSES = [
   'past',
 ] as const;
 
-const bookingItemSchema = z.strictObject({
+export const bookingItemSchema = z.strictObject({
+  booking_id: z
+    .number()
+    .int()
+    .describe('Id of the booking, as the booking tools take it.'),
   location_id: z
     .number()
     .int()
@@ -306,7 +311,7 @@ const bookingItemSchema = z.strictObject({
   currency: untrustedText('Currency sign of the business.'),
 });
 
-type BookingItem = z.infer<typeof bookingItemSchema>;
+export type BookingItem = z.infer<typeof bookingItemSchema>;
 
 const usualItemSchema = z.strictObject({
   location_id: z
@@ -342,8 +347,9 @@ type BookingsOutput = z.infer<typeof bookingsOutput>;
 
 const bookingsInput = z.strictObject(pageInputShape());
 
-function toBookingItem(record: OwnRecord, nowMs: number): BookingItem {
+export function toBookingItem(record: OwnRecord, nowMs: number): BookingItem {
   return {
+    booking_id: record.id,
     location_id: record.locationId,
     business: sanitizeUntrusted(record.businessName, {
       maxChars: NAME_MAX_CHARS,
@@ -409,7 +415,7 @@ function servicesPhrase(
     .join(', ');
 }
 
-function bookingBlockValue(item: BookingItem): string {
+export function bookingBlockValue(item: BookingItem): string {
   const price =
     item.price === null ? '' : `, price ${item.price} ${item.currency ?? ''}`;
   const member =
@@ -434,7 +440,7 @@ function renderBookings(out: BookingsOutput): string {
     number: first + index + 1,
   }));
   const line = ({ item, number }: (typeof numbered)[number]): string =>
-    `${number}. location ${item.location_id}, ${item.datetime}, ${item.status}.`;
+    `${number}. booking ${item.booking_id}, location ${item.location_id}, ${item.datetime}, ${item.status}.`;
   const upcoming = numbered.filter(({ item }) => item.status === 'upcoming');
   const past = numbered.filter(({ item }) => item.status !== 'upcoming');
 
@@ -472,7 +478,7 @@ export const meListBookings = defineTool<
   name: 'me_list_bookings',
   title: 'List my bookings',
   description:
-    "Lists the signed-in client's own bookings, upcoming first, then past ones with the latest first, each with the business, services, team member, time, status and price, and the usual service and team member per place. Needs the client's sign-in. The records route is undocumented, so some fields can be empty.",
+    "Lists the signed-in client's own bookings, upcoming first, then past ones with the latest first, each with the business, services, team member, time, status and price, and the usual service and team member per place. Each booking's booking_id is the id me_reschedule_booking and me_cancel_booking take. Needs the client's sign-in. The records route is undocumented, so some fields can be empty.",
   kind: 'list',
   scopes: [SCOPE_READ],
   annotations: UPSTREAM_READ_HINTS,

@@ -1,0 +1,35 @@
+{
+  "recorded_at": "2026-10-08T11:56:12.533Z",
+  "route": "user_record_cancel",
+  "status": 204,
+  "data": null,
+  "headers": {
+    "names": [
+      "access-control-allow-headers",
+      "access-control-allow-methods",
+      "access-control-allow-origin",
+      "access-control-expose-headers",
+      "cache-control",
+      "cf-cache-status",
+      "cf-ray",
+      "connection",
+      "content-type",
+      "date",
+      "p3p",
+      "server",
+      "set-cookie",
+      "strict-transport-security",
+      "x-bounce-id",
+      "x-content-type-options",
+      "x-csp-token",
+      "x-dns-prefetch-control",
+      "x-feature-notification-next",
+      "x-feature-waiting-room-api",
+      "x-feature-waiting-room-web",
+      "x-node-id",
+      "x-request-id",
+      "x-xss-protection"
+    ],
+    "security": {}
+  }
+}

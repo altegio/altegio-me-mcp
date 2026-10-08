@@ -83,7 +83,7 @@ export interface BookingHttpOptions {
 }
 
 export interface UpstreamCallSpec extends UpstreamCallOptions {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   /** Route template, for example '/company/{location_id}'. */
   route: string;
   /** Concrete path built from integers, for example '/company/722227'. */
@@ -91,7 +91,7 @@ export interface UpstreamCallSpec extends UpstreamCallOptions {
   query?: Readonly<Record<string, string | number | undefined>>;
   /** Sent as repeated service_ids[] entries, in this order. */
   serviceIds?: readonly number[];
-  /** JSON body, POST only. */
+  /** JSON body, for the POST and PUT calls. */
   body?: unknown;
 }
 
@@ -106,6 +106,7 @@ function kindOfStatus(status: number): UpstreamErrorKind {
   if (status === 400) return 'bad_request';
   if (status === 401 || status === 403) return 'unauthorized';
   if (status === 404) return 'not_found';
+  if (status === 412) return 'anti_fraud';
   if (status === 422) return 'rejected';
   if (status === 429) return 'rate_limited';
   if (status >= 500 && status <= 599) return 'unavailable';
@@ -156,23 +157,53 @@ function parseEnvelopeData(
   return envelope.data ?? null;
 }
 
+/** A field message that says the field is required, as in "The required parameter email was not passed." */
+const REQUIRED_MESSAGE = /\brequired\b|was not passed/i;
+const MAX_REQUIRED_FIELDS = 10;
+const MAX_FIELD_NAME_CHARS = 60;
+
 /**
- * meta.message and the numeric meta.errors[].code of an error envelope. A
- * body that is not such an envelope gives neither; the body itself is never
- * kept.
+ * The fields a keyed `meta.errors` ({"[email]": ["The required parameter email
+ * was not passed."]}) says are required: names with the brackets stripped,
+ * never the messages.
+ */
+function requiredFieldsOf(errors: unknown): string[] {
+  if (!isRecord(errors)) return [];
+  const fields: string[] = [];
+  for (const [key, value] of Object.entries(errors)) {
+    const messages = Array.isArray(value) ? (value as unknown[]) : [value];
+    const required = messages.some(
+      (message) => typeof message === 'string' && REQUIRED_MESSAGE.test(message)
+    );
+    const name = key
+      .replace(/[[\]]/g, '')
+      .trim()
+      .slice(0, MAX_FIELD_NAME_CHARS);
+    if (required && name !== '') fields.push(name);
+    if (fields.length >= MAX_REQUIRED_FIELDS) break;
+  }
+  return fields;
+}
+
+/**
+ * meta.message, the numeric meta.errors[].code and the required field names of
+ * an error envelope. A body that is not such an envelope gives none of them;
+ * the body itself is never kept.
  */
 function readErrorMeta(text: string): {
   message: string | null;
   codes: number[];
+  requiredFields: string[];
 } {
+  const none = { message: null, codes: [], requiredFields: [] };
   let envelope: unknown;
   try {
     envelope = JSON.parse(text);
   } catch {
-    return { message: null, codes: [] };
+    return none;
   }
   const meta = isRecord(envelope) ? envelope.meta : undefined;
-  if (!isRecord(meta)) return { message: null, codes: [] };
+  if (!isRecord(meta)) return none;
   const errors = Array.isArray(meta.errors) ? (meta.errors as unknown[]) : [];
   const codes = errors.flatMap((entry) =>
     isRecord(entry) &&
@@ -184,6 +215,7 @@ function readErrorMeta(text: string): {
   return {
     message: typeof meta.message === 'string' ? meta.message : null,
     codes,
+    requiredFields: requiredFieldsOf(meta.errors),
   };
 }
 
@@ -408,7 +440,10 @@ export class BookingHttp {
           : callerToken === undefined
             ? 'server'
             : 'caller',
-      codes: kind === 'rejected' ? meta.codes : [],
+      // A 403 can carry a code as well: 434, a business that does not accept
+      // this client, comes with HTTP 403.
+      codes: kind === 'rejected' || kind === 'unauthorized' ? meta.codes : [],
+      requiredFields: kind === 'rejected' ? meta.requiredFields : [],
       retryAfterSeconds: kind === 'rate_limited' ? retryAfter : null,
       // Scrubbed before anything else touches it (WR-04): later sanitising
       // or truncation could otherwise split the token past the scrubber.

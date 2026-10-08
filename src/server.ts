@@ -21,6 +21,7 @@ import { createSharedEgressList } from './security/client-ip.js';
 import { createEdgeLimiter } from './security/edge-limiter.js';
 import { createPartnerTokenValidator } from './security/partner-token.js';
 import { MIN_PROXY_KEY_LENGTH, parseProxyKeys } from './security/proxy-auth.js';
+import { createConfirmations } from './tools/confirmation.js';
 import { productionTools } from './tools/registry.js';
 import { PACKAGE_NAME, PACKAGE_VERSION } from './util/package-metadata.js';
 
@@ -144,6 +145,9 @@ async function main(): Promise<void> {
     ...knownValues(tokenSource),
     ...(plainToken === undefined ? [] : [plainToken]),
     ...(proxyKeys === null ? [] : knownValues(proxyKeys, parseProxyKeys)),
+    ...(config.CONFIRMATION_SECRET === undefined
+      ? []
+      : [config.CONFIRMATION_SECRET]),
   ];
 
   // The token rule stays as in Altegio.Pro MCP (any non-empty string), so a
@@ -192,7 +196,14 @@ async function main(): Promise<void> {
     name: PACKAGE_NAME,
     version: PACKAGE_VERSION,
     tools: productionTools,
-    toolDeps: { booking },
+    // Confirmation tokens of the write tools: keyed by CONFIRMATION_SECRET when
+    // set, else by a random key of this process.
+    toolDeps: {
+      booking,
+      confirmations: createConfirmations({
+        secret: config.CONFIRMATION_SECRET,
+      }),
+    },
     logger,
     secrets,
     allowedOrigins: allowedOriginsFor(

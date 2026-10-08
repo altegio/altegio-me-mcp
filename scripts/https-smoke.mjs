@@ -177,13 +177,16 @@ try {
     'business_list_services',
     'business_list_team_members',
     'business_list_time_slots',
+    'me_book',
+    'me_cancel_booking',
     'me_list_bookings',
     'me_list_places',
+    'me_reschedule_booking',
   ]);
   for (const tool of list.body.result.tools)
     assert.equal(tool.inputSchema.type, 'object');
   process.stdout.write(
-    'PASS: signed HTTPS initialize and eight-tool catalog, stateless responses\n'
+    'PASS: signed HTTPS initialize and tool catalog, stateless responses\n'
   );
 } finally {
   await new Promise((resolve) => proxy.close(resolve));

@@ -46,7 +46,8 @@ def request(path, payload=None, signed=True):
 status, _, health = request('/health')
 assert status == 200 and health.get('status') == 'ok' and health.get('commit') == commit, 'liveness/commit failed'
 expected = ['book_check', 'business_get', 'business_list_dates', 'business_list_services',
-            'business_list_team_members', 'business_list_time_slots', 'me_list_bookings', 'me_list_places']
+            'business_list_team_members', 'business_list_time_slots', 'me_book', 'me_cancel_booking',
+            'me_list_bookings', 'me_list_places', 'me_reschedule_booking']
 for i, (method, params) in enumerate([
     ('initialize', {'protocolVersion': '2025-11-25', 'capabilities': {},
                     'clientInfo': {'name': 'operator-read-canary', 'version': '1'}}),

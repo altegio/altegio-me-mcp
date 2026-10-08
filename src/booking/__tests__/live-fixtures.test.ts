@@ -2,13 +2,19 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from '@jest/globals';
 import { z } from 'zod';
+import * as routeSchemas from '../schemas.js';
+import { fakeFetch, loadFixture } from './helpers/fake-fetch.js';
 import {
+  bookingUserDataSchema,
+  bookRecordCreateDataSchema,
+  bookRecordMoveDataSchema,
   companyDataSchema,
   datesDataSchema,
   servicesDataSchema,
   teamMembersDataSchema,
   timeSlotsDataSchema,
   userPlacesDataSchema,
+  userRecordCancelDataSchema,
   userRecordsDataSchema,
 } from '../schemas.js';
 import {
@@ -23,6 +29,8 @@ import {
   SANITIZED_TEXT,
   SANITIZED_URL,
   USER_ROUTES,
+  WRITE_SIDE_ROUTES,
+  DIGIT_KEY,
   type RecordedRoute,
   type Recording,
 } from './helpers/live-recorder.js';
@@ -49,6 +57,13 @@ const recordingSchema = z.strictObject({
   route: z.enum(RECORDED_ROUTES),
   status: z.number().int(),
   data: z.unknown(),
+  /** Write-side routes only: header names and the security values. */
+  headers: z
+    .strictObject({
+      names: z.array(z.string()),
+      security: z.record(z.string(), z.string()),
+    })
+    .optional(),
 });
 
 /**
@@ -66,12 +81,19 @@ const DATA_SCHEMAS: DataSchemas = {
   book_times: timeSlotsDataSchema,
   user_yplaces: userPlacesDataSchema,
   user_records: userRecordsDataSchema,
+  booking_user_data: bookingUserDataSchema,
+  book_record_create: bookRecordCreateDataSchema,
+  book_record_move: bookRecordMoveDataSchema,
+  user_record_cancel: userRecordCancelDataSchema,
 };
 
 const TEAM_MEMBER_NAME = /^Team member \d+$/;
 
 function isUserRoute(route: RecordedRoute): boolean {
-  return (USER_ROUTES as readonly string[]).includes(route);
+  return (
+    (USER_ROUTES as readonly string[]).includes(route) ||
+    (WRITE_SIDE_ROUTES as readonly string[]).includes(route)
+  );
 }
 
 function isHashKey(key: string): boolean {
@@ -153,7 +175,11 @@ function unsanitizedValues(
     : SANITIZED_KEYS.text;
   const containers: readonly string[] = SANITIZED_KEYS.personContainers;
   const nameKeys: readonly string[] = user ? SANITIZED_KEYS.nameKeys : ['name'];
-  return Object.entries(value).flatMap(([key, item]) => {
+  const profile =
+    route === 'booking_user_data' && path === 'data'
+      ? unsanitizedProfile(value)
+      : [];
+  const own = Object.entries(value).flatMap(([key, item]) => {
     const here = `${path}.${key}`;
     if (textKeys.includes(key)) return realTextLeaves(item) ? [here] : [];
     if ((SANITIZED_KEYS.coordinate as readonly string[]).includes(key)) {
@@ -163,7 +189,10 @@ function unsanitizedValues(
       return isEmptyOr(item, SANITIZED_ID) ? [] : [here];
     }
     if (user && isHashKey(key)) {
-      return item === '' || isEmptyOr(item, SANITIZED_TEXT) ? [] : [here];
+      // A numeric 0 is "no external id" (the move answer's api_id), not a secret.
+      return item === '' || item === 0 || isEmptyOr(item, SANITIZED_TEXT)
+        ? []
+        : [here];
     }
     if (user && (SANITIZED_KEYS.personIds as readonly string[]).includes(key)) {
       return isEmptyOr(item, SANITIZED_ID) ? [] : [here];
@@ -172,7 +201,9 @@ function unsanitizedValues(
       route,
       item,
       here,
-      inCompany || (route === 'user_records' && key === 'company')
+      inCompany ||
+        ((route === 'user_records' || route === 'book_record_move') &&
+          key === 'company')
     );
     const objects = Array.isArray(item) ? (item as unknown[]) : [item];
     const at = (index: number): string =>
@@ -213,6 +244,49 @@ function unsanitizedValues(
     }
     return [...nested, ...found];
   });
+  return [...profile, ...own];
+}
+
+/**
+ * The profile answer's top-level person: name keys and login, the id, and
+ * every all-digit key (which repeats the user token). Hash keys such as
+ * `user_token` are covered by the general walk.
+ */
+function unsanitizedProfile(profile: Record<string, unknown>): string[] {
+  return Object.entries(profile).flatMap(([key, item]) => {
+    const here = `data.${key}`;
+    if ((SANITIZED_KEYS.profileNameKeys as readonly string[]).includes(key)) {
+      return realTextLeaves(item) ? [here] : [];
+    }
+    if (key === 'id') return isEmptyOr(item, SANITIZED_ID) ? [] : [here];
+    if (DIGIT_KEY.test(key)) {
+      return item === '' || isEmptyOr(item, SANITIZED_TEXT) ? [] : [here];
+    }
+    return [];
+  });
+}
+
+/** Paths of a created booking's record ids, and of a moved booking's id, that are not 1. */
+function unnormalisedWriteIds(route: RecordedRoute, data: unknown): string[] {
+  if (route === 'book_record_create' && Array.isArray(data)) {
+    return (data as unknown[]).flatMap((entry, index) =>
+      isRecord(entry) &&
+      entry.record_id !== undefined &&
+      entry.record_id !== null &&
+      entry.record_id !== 1
+        ? [`data[${index}].record_id is not 1`]
+        : []
+    );
+  }
+  if (
+    route === 'book_record_move' &&
+    isRecord(data) &&
+    data.id !== undefined &&
+    data.id !== 1
+  ) {
+    return ['data.id is not 1'];
+  }
+  return [];
 }
 
 /** Paths of a user_records recording's record ids that are not within 1..n. */
@@ -287,6 +361,9 @@ function recordingProblems(
     for (const path of unrenumberedRecordIds(data)) {
       problems.push(`${name}: ${path}`);
     }
+  }
+  for (const path of unnormalisedWriteIds(route, data)) {
+    problems.push(`${name}: ${path}`);
   }
   return problems;
 }
@@ -1263,5 +1340,670 @@ describe('contract fixtures of the signed-in routes', () => {
     ]) {
       expect(text).toContain(bait);
     }
+  });
+});
+
+// Write-side routes (plan 04.1-01, D-02). Every value below is synthetic.
+// asRoute names a route given as a string, as the it.each tables do.
+
+const asRoute = (name: string): RecordedRoute => name as RecordedRoute;
+
+const WRITE_TOKEN = 'u-tok-bait-0001';
+
+const profileData = {
+  id: 32132133,
+  '0': WRITE_TOKEN,
+  user_token: WRITE_TOKEN,
+  name: 'Fixture Client',
+  phone: '+15550000001',
+  login: 'fixture.login',
+  email: 'fixture.client@example.invalid',
+  avatar: 'https://api.alteg.io/images/a.png',
+};
+
+const createData = [
+  {
+    id: 1,
+    record_id: 2820023,
+    record_hash: '567df655304da9b98487769426d4e76e',
+  },
+  {
+    id: 2,
+    record_id: 2820024,
+    record_hash: '34a45ddabdd446d5d33bdd27fbf855b2',
+  },
+];
+
+/** The documented PUT answer, with a comment added to see it removed. */
+const moveData = {
+  id: 30358,
+  services: [{ id: 2838, title: 'Foot massage', cost: 0, discount: 0 }],
+  company: {
+    id: 4564,
+    title: 'Business Example',
+    country_id: 0,
+    country: 'United States',
+    city_id: 0,
+    city: 'New York',
+    phone: '+13155550175',
+    timezone: '0',
+    address: 'New York, 787 Jackson Drive',
+    coordinate_lat: 40.73061,
+    coordinate_lon: -73.935242,
+  },
+  staff: {
+    id: 924,
+    name: 'Alice',
+    spec: 'about eu',
+    avatar: 'https://app.alteg.io/images/no-master.png',
+  },
+  date: '2026-09-21T23:00:00.000-05:00',
+  create_date: '2026-09-21T23:00:00.000-05:00',
+  comment: 'call me on arrival',
+  deleted: false,
+  length: 3600,
+  online: true,
+  api_id: 0,
+};
+
+describe('sanitizeRecording of the write-side routes', () => {
+  it('replaces the profile of the client: name, login, contact, id and the token under both keys', () => {
+    const result = sanitizeRecording(
+      asRoute('booking_user_data'),
+      profileData,
+      [WRITE_TOKEN]
+    );
+    expect(result).toEqual({
+      id: SANITIZED_ID,
+      '0': SANITIZED_TEXT,
+      user_token: SANITIZED_TEXT,
+      name: SANITIZED_TEXT,
+      phone: SANITIZED_PHONE,
+      login: SANITIZED_TEXT,
+      email: SANITIZED_TEXT,
+      avatar: SANITIZED_IMAGE,
+    });
+    const text = JSON.stringify(result);
+    for (const bait of [
+      WRITE_TOKEN,
+      'Fixture Client',
+      '+15550000001',
+      'fixture.login',
+      'fixture.client@example.invalid',
+      'api.alteg.io/images',
+    ]) {
+      expect(text).not.toContain(bait);
+    }
+  });
+
+  it('replaces a token that sits under an all-digit key only, and fullname', () => {
+    const result = sanitizeRecording(
+      asRoute('booking_user_data'),
+      { '0': WRITE_TOKEN, fullname: 'Fixture Client Full', login: '' },
+      []
+    );
+    expect(result).toEqual({
+      '0': SANITIZED_TEXT,
+      fullname: SANITIZED_TEXT,
+      login: '',
+    });
+  });
+
+  it('removes the record hash of a created booking and sets every record id to 1', () => {
+    const result = sanitizeRecording(
+      asRoute('book_record_create'),
+      createData,
+      []
+    );
+    expect(result).toEqual([
+      { id: 1, record_id: 1, record_hash: SANITIZED_TEXT },
+      { id: 2, record_id: 1, record_hash: SANITIZED_TEXT },
+    ]);
+    const lone = sanitizeRecording(
+      asRoute('book_record_create'),
+      [{ id: 1 }],
+      []
+    );
+    expect(lone).toEqual([{ id: 1 }]);
+  });
+
+  it('sanitises a moved booking as one record of the client and sets its id to 1', () => {
+    const result = sanitizeRecording(
+      asRoute('book_record_move'),
+      moveData,
+      []
+    ) as Record<string, unknown>;
+    expect(result).toMatchObject({
+      id: 1,
+      comment: SANITIZED_TEXT,
+      date: '2026-09-21T23:00:00.000-05:00',
+      services: [{ id: 2838, title: 'Foot massage', cost: 0 }],
+      company: {
+        id: 4564,
+        title: SANITIZED_TEXT,
+        phone: SANITIZED_PHONE,
+        address: SANITIZED_TEXT,
+        coordinate_lat: SANITIZED_COORDINATE,
+        coordinate_lon: SANITIZED_COORDINATE,
+        city: 'New York',
+      },
+      staff: { id: 924, name: 'Team member 924', avatar: SANITIZED_IMAGE },
+    });
+    const text = JSON.stringify(result);
+    for (const bait of ['Alice', 'Business Example', '+13155550175']) {
+      expect(text).not.toContain(bait);
+    }
+  });
+
+  it('keeps an empty answer of a cancelled booking empty', () => {
+    expect(sanitizeRecording(asRoute('user_record_cancel'), null, [])).toBe(
+      null
+    );
+    expect(sanitizeRecording(asRoute('user_record_cancel'), [], [])).toEqual(
+      []
+    );
+  });
+
+  it('scrubs both tokens from every string leaf of a write-side recording', () => {
+    const result = sanitizeRecording(
+      asRoute('book_record_move'),
+      { ...moveData, length: `x ${TOKEN} ${USER_TOKEN}` },
+      [TOKEN, USER_TOKEN]
+    );
+    const text = JSON.stringify(result);
+    expect(text).not.toContain(TOKEN);
+    expect(text).not.toContain(USER_TOKEN);
+    expect(text).toContain('[redacted]');
+  });
+});
+
+describe('createRecordingFetch on the write-side routes', () => {
+  const answer = JSON.stringify({ success: true, data: null, meta: [] });
+
+  async function routesRecorded(
+    input: Parameters<typeof fetch>[0],
+    init?: RequestInit
+  ): Promise<string[]> {
+    const recorded: Recording[] = [];
+    const wrapped = createRecordingFetch(
+      innerFetch(200, answer, []),
+      (recording) => recorded.push(recording),
+      [TOKEN, USER_TOKEN]
+    );
+    await wrapped(input, init);
+    return recorded.map((recording) => recording.route);
+  }
+
+  it.each([
+    ['GET', `${BASE}/booking/user/data`, 'booking_user_data'],
+    ['POST', `${BASE}/book_record/726120`, 'book_record_create'],
+    ['PUT', `${BASE}/book_record/726120/99`, 'book_record_move'],
+    ['DELETE', `${BASE}/user/records/99/abc0`, 'user_record_cancel'],
+    ['DELETE', `${BASE}/user/records/99/0`, 'user_record_cancel'],
+    ['DELETE', `${BASE}/user/records/99/a-b_c.9`, 'user_record_cancel'],
+    ['GET', `${BASE}/user/records`, 'user_records'],
+    ['GET', `${BASE}/user/companies/yplaces`, 'user_yplaces'],
+  ])('records %s %s as %s', async (method, href, route) => {
+    expect(await routesRecorded(new URL(href), { method })).toEqual([route]);
+  });
+
+  it.each([
+    ['GET', `${BASE}/book_record/726120/99/abc0`],
+    ['GET', `${BASE}/book_record/726120`],
+    ['POST', `${BASE}/booking/user/data`],
+    ['POST', `${BASE}/user/records/99/abc0`],
+    ['GET', `${BASE}/user/records/99/abc0`],
+    ['DELETE', `${BASE}/user/records/99`],
+    ['DELETE', `${BASE}/user/records/99/`],
+    ['PUT', `${BASE}/book_record/726120`],
+    ['POST', `${BASE}/user/auth`],
+    ['POST', `${BASE}/book_code/726120`],
+  ])('records nothing for %s %s', async (method, href) => {
+    expect(await routesRecorded(new URL(href), { method })).toEqual([]);
+  });
+
+  it('uses the method of a Request object when init has none', async () => {
+    expect(
+      await routesRecorded(
+        new Request(`${BASE}/user/records/99/abc0`, { method: 'DELETE' })
+      )
+    ).toEqual(['user_record_cancel']);
+    expect(
+      await routesRecorded(
+        new Request(`${BASE}/book_record/726120`, {
+          method: 'POST',
+          body: '{}',
+        })
+      )
+    ).toEqual(['book_record_create']);
+    expect(
+      await routesRecorded(new Request(`${BASE}/book_record/726120/99/abc0`))
+    ).toEqual([]);
+  });
+
+  it('prefers the method of init over the one of a Request object', async () => {
+    expect(
+      await routesRecorded(new Request(`${BASE}/book_record/726120/99`), {
+        method: 'PUT',
+      })
+    ).toEqual(['book_record_move']);
+  });
+
+  it('records the header names and the security values of a write answer, never a cookie value', async () => {
+    const recorded: Recording[] = [];
+    const wrapped = createRecordingFetch(
+      (input, init) => {
+        void input;
+        void init;
+        return Promise.resolve(
+          new Response(JSON.stringify({ success: true, data: [], meta: [] }), {
+            status: 201,
+            headers: {
+              'content-type': 'application/json',
+              'X-App-Security-Level': '2',
+              'X-Fraud-Check': '1',
+              'Set-Cookie': 's=cookie-bait',
+              'X-Request-Id': 'req-bait-12345',
+            },
+          })
+        );
+      },
+      (recording) => recorded.push(recording),
+      [TOKEN, USER_TOKEN]
+    );
+
+    await wrapped(`${BASE}/book_record/726120`, { method: 'POST' });
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({
+      route: 'book_record_create',
+      status: 201,
+      headers: {
+        names: [
+          'content-type',
+          'set-cookie',
+          'x-app-security-level',
+          'x-fraud-check',
+          'x-request-id',
+        ],
+        security: { 'x-app-security-level': '2', 'x-fraud-check': '1' },
+      },
+    });
+    const text = JSON.stringify(recorded);
+    expect(text).not.toContain('cookie-bait');
+    expect(text).not.toContain('req-bait-12345');
+  });
+
+  it('adds no headers key to the recording of a read route', async () => {
+    const recorded: Recording[] = [];
+    const wrapped = createRecordingFetch(
+      innerFetch(200, answer, []),
+      (recording) => recorded.push(recording),
+      [TOKEN, USER_TOKEN]
+    );
+    await wrapped(`${BASE}/user/records`);
+    await wrapped(`${BASE}/book_dates/722227`);
+    expect(recorded).toHaveLength(2);
+    for (const recording of recorded) {
+      expect(recording).not.toHaveProperty('headers');
+    }
+  });
+
+  it('hands the sink a sanitised profile and write answers without either token', async () => {
+    const recorded: Recording[] = [];
+    const wrapped = createRecordingFetch(
+      innerFetch(
+        200,
+        JSON.stringify({
+          success: true,
+          data: { ...profileData, user_token: USER_TOKEN, '0': USER_TOKEN },
+          meta: [],
+        }),
+        []
+      ),
+      (recording) => recorded.push(recording),
+      [TOKEN, USER_TOKEN]
+    );
+    await wrapped(`${BASE}/booking/user/data`);
+    const text = JSON.stringify(recorded);
+    expect(text).not.toContain(USER_TOKEN);
+    expect(text).not.toContain('Fixture Client');
+    expect(text).not.toContain('+15550000001');
+  });
+});
+
+describe('route schemas of the write-side routes', () => {
+  const exported = routeSchemas as unknown as Record<
+    string,
+    z.ZodType | undefined
+  >;
+  const parses = (name: string, data: unknown): boolean | undefined =>
+    exported[name]?.safeParse(data).success;
+
+  it('parse the documented examples', () => {
+    expect(
+      parses('bookingUserDataSchema', {
+        '0': '152afb01134237bc844d7e',
+        id: 32132133,
+        user_token: '152afb01134237bc844d7e',
+        name: 'James',
+        phone: '+13155550175',
+        login: 'j.smith',
+        email: 'j.smith@example.com',
+        avatar: 'https://api.alteg.io/images/avatar.png',
+      })
+    ).toBe(true);
+    expect(parses('bookingUserDataSchema', { fullname: null })).toBe(true);
+    expect(parses('bookRecordCreateDataSchema', createData)).toBe(true);
+    expect(parses('bookRecordMoveDataSchema', moveData)).toBe(true);
+  });
+
+  it('parse a create answer without a record id, so the client can name it', () => {
+    expect(
+      parses('bookRecordCreateDataSchema', [{ id: 1, record_hash: '' }])
+    ).toBe(true);
+    expect(parses('bookRecordCreateDataSchema', [])).toBe(true);
+  });
+
+  it('accept null, an empty list and an object as the answer of a cancel', () => {
+    expect(parses('userRecordCancelDataSchema', null)).toBe(true);
+    expect(parses('userRecordCancelDataSchema', [])).toBe(true);
+    expect(parses('userRecordCancelDataSchema', { id: 1 })).toBe(true);
+  });
+
+  it('refuse a move answer without an integer id', () => {
+    expect(parses('bookRecordMoveDataSchema', { id: 'x' })).toBe(false);
+  });
+});
+
+describe('the recordings check of the write-side routes', () => {
+  const file = (route: string, data: unknown, headers?: unknown): string =>
+    JSON.stringify({
+      recorded_at: '2026-10-08T00:00:00.000Z',
+      route,
+      status: 200,
+      data,
+      ...(headers === undefined ? {} : { headers }),
+    });
+  const anySchema: Record<string, z.ZodType> = {
+    booking_user_data: z.looseObject({}),
+    book_record_create: z.array(z.looseObject({})),
+    book_record_move: z.looseObject({}),
+    user_record_cancel: z.unknown(),
+  };
+
+  it.each([
+    ['booking_user_data', profileData],
+    ['book_record_create', createData],
+    ['book_record_move', moveData],
+    ['user_record_cancel', null],
+  ])(
+    'passes what the sanitiser produced for %s, with the registered schema',
+    (route, data) => {
+      const sanitised = sanitizeRecording(asRoute(route), data, [
+        TOKEN,
+        USER_TOKEN,
+        WRITE_TOKEN,
+      ]);
+      expect(
+        recordingProblems(
+          `${route}.json`,
+          file(route, sanitised, {
+            names: ['content-type'],
+            security: { 'x-app-security-level': '2' },
+          })
+        )
+      ).toEqual([]);
+    }
+  );
+
+  it('reports a recording with a header key that is not names and security', () => {
+    expect(
+      recordingProblems(
+        'book_record_create.json',
+        file('book_record_create', [], {
+          names: [],
+          security: {},
+          cookie: 'x',
+        }),
+        anySchema
+      )
+    ).toEqual(['book_record_create.json: not a recording']);
+  });
+
+  it('reports an unsanitised profile: token, names, login, id and phone', () => {
+    const problems = recordingProblems(
+      'booking_user_data.json',
+      file('booking_user_data', {
+        ...profileData,
+        fullname: 'Fixture Client Full',
+      }),
+      anySchema
+    );
+    expect(problems).toEqual(
+      expect.arrayContaining([
+        'booking_user_data.json: e-mail address',
+        'booking_user_data.json: data.0 is not a placeholder',
+        'booking_user_data.json: data.user_token is not a placeholder',
+        'booking_user_data.json: data.name is not a placeholder',
+        'booking_user_data.json: data.fullname is not a placeholder',
+        'booking_user_data.json: data.login is not a placeholder',
+        'booking_user_data.json: data.id is not a placeholder',
+        'booking_user_data.json: data.phone is not sanitised',
+      ])
+    );
+  });
+
+  it('reports a created booking with a real hash or record id and a moved one with a real id', () => {
+    expect(
+      recordingProblems(
+        'book_record_create.json',
+        file('book_record_create', createData),
+        anySchema
+      )
+    ).toEqual(
+      expect.arrayContaining([
+        'book_record_create.json: data[0].record_hash is not a placeholder',
+        'book_record_create.json: data[0].record_id is not 1',
+      ])
+    );
+    expect(
+      recordingProblems(
+        'book_record_move.json',
+        file('book_record_move', moveData),
+        anySchema
+      )
+    ).toEqual(
+      expect.arrayContaining([
+        'book_record_move.json: data.id is not 1',
+        'book_record_move.json: data.company.title is not a placeholder',
+        'book_record_move.json: data.staff.name is not a placeholder',
+      ])
+    );
+  });
+});
+
+describe('contract fixtures of the write-side routes', () => {
+  interface Scenario {
+    status: number;
+    headers?: Record<string, string>;
+    body: unknown;
+  }
+  const read = (route: string): Record<string, Scenario> =>
+    JSON.parse(
+      readFileSync(
+        join(
+          process.cwd(),
+          'src',
+          'booking',
+          '__tests__',
+          'fixtures',
+          `${route}.json`
+        ),
+        'utf8'
+      )
+    ) as Record<string, Scenario>;
+  const dataOf = (scenario: Scenario | undefined): unknown =>
+    (scenario?.body as { data?: unknown } | undefined)?.data;
+  const BAIT = '+15550000001 Fixture Client';
+  const messageOf = (scenario: Scenario): string =>
+    (scenario.body as { meta?: { message?: string } }).meta?.message ?? '';
+  const codeOf = (scenario: Scenario): unknown =>
+    (
+      scenario.body as {
+        meta?: { errors?: { code?: unknown }[] };
+      }
+    ).meta?.errors?.[0]?.code;
+
+  it('booking_user_data: default, bare digits without an e-mail, no phone and no name, all parse', () => {
+    const scenarios = read('booking_user_data');
+    expect(Object.keys(scenarios)).toEqual([
+      'default',
+      'bare_digits_no_email',
+      'no_phone',
+      'no_name',
+    ]);
+    for (const scenario of Object.values(scenarios)) {
+      expect(scenario.status).toBe(200);
+      expect(bookingUserDataSchema.safeParse(dataOf(scenario)).success).toBe(
+        true
+      );
+    }
+    expect(dataOf(scenarios.default)).toMatchObject({
+      name: 'Fixture Client',
+      phone: '+15550000001',
+      email: 'fixture.client@example.invalid',
+      user_token: 'fixture-user-token-0001',
+    });
+    // The live profile answers with bare digits, a surname and no e-mail.
+    expect(dataOf(scenarios.bare_digits_no_email)).toMatchObject({
+      name: 'Fixture',
+      surname: 'Client',
+      phone: '15550000001',
+      email: '',
+    });
+    expect(dataOf(scenarios.no_phone)).toMatchObject({ phone: '' });
+    expect(dataOf(scenarios.no_name)).toMatchObject({ name: '' });
+    expect(dataOf(scenarios.no_name)).not.toHaveProperty('fullname');
+  });
+
+  it('book_record_create: the created, fake 201, anti-fraud and every documented refusal', () => {
+    const scenarios = read('book_record_create');
+    expect(Object.keys(scenarios)).toEqual([
+      'created',
+      'fake_201',
+      'anti_fraud_412',
+      'taken_433',
+      'blacklisted_434',
+      'no_team_member_436',
+      'overlap_437',
+      'phone_431',
+      'name_435',
+      'code_432',
+      'required_email_422',
+    ]);
+    expect(scenarios.created?.status).toBe(201);
+    expect(
+      bookRecordCreateDataSchema.parse(dataOf(scenarios.created))
+    ).toMatchObject([{ id: 1, record_id: 990001 }]);
+    expect(JSON.stringify(scenarios.created)).toContain('fixture-hash-0002');
+    expect(scenarios.fake_201?.status).toBe(201);
+    expect(
+      bookRecordCreateDataSchema.parse(dataOf(scenarios.fake_201))
+    ).toEqual([]);
+    expect(scenarios.anti_fraud_412?.status).toBe(412);
+    expect(
+      Object.keys(scenarios.anti_fraud_412?.headers ?? {}).map((name) =>
+        name.toLowerCase()
+      )
+    ).toContain('x-app-security-level');
+    const expected: Record<string, [number, number]> = {
+      taken_433: [422, 433],
+      blacklisted_434: [403, 434],
+      no_team_member_436: [422, 436],
+      overlap_437: [422, 437],
+      phone_431: [422, 431],
+      name_435: [422, 435],
+      code_432: [422, 432],
+    };
+    for (const [name, [status, code]] of Object.entries(expected)) {
+      const scenario = scenarios[name] as Scenario;
+      expect(scenario.status).toBe(status);
+      expect(codeOf(scenario)).toBe(code);
+      expect(messageOf(scenario)).toContain(BAIT);
+      expect((scenario.body as { success?: boolean }).success).toBe(false);
+    }
+  });
+
+  it('book_record_create: required_email_422 is the observed refusal, an errors object keyed by field', () => {
+    const scenario = read('book_record_create').required_email_422 as Scenario;
+    expect(scenario.status).toBe(422);
+    expect(scenario.body).toMatchObject({
+      success: false,
+      meta: {
+        message: 'An error occurred',
+        errors: {
+          '[email]': ['The required parameter email was not passed.'],
+        },
+      },
+    });
+  });
+
+  it('book_record_move: moved at the fixture business with id 5, taken_433 and forbidden_403', () => {
+    const scenarios = read('book_record_move');
+    expect(Object.keys(scenarios)).toEqual([
+      'moved',
+      'taken_433',
+      'forbidden_403',
+    ]);
+    expect(scenarios.moved?.status).toBe(200);
+    const moved = bookRecordMoveDataSchema.parse(dataOf(scenarios.moved));
+    expect(moved.id).toBe(5);
+    expect(moved).toMatchObject({ company: { id: 722227 } });
+    expect(
+      userRecordsDataSchema.safeParse([dataOf(scenarios.moved)]).success
+    ).toBe(true);
+    expect(scenarios.taken_433?.status).toBe(422);
+    expect(codeOf(scenarios.taken_433 as Scenario)).toBe(433);
+    expect(scenarios.forbidden_403?.status).toBe(403);
+  });
+
+  it('user_record_cancel: cancelled answers 204 with no body, then forbidden_403 and not_found_404', () => {
+    const scenarios = read('user_record_cancel');
+    expect(Object.keys(scenarios)).toEqual([
+      'cancelled',
+      'forbidden_403',
+      'not_found_404',
+    ]);
+    expect(scenarios.cancelled).toEqual({ status: 204, body: '' });
+    expect(scenarios.forbidden_403?.status).toBe(403);
+    expect(scenarios.not_found_404?.status).toBe(404);
+    expect(userRecordCancelDataSchema.safeParse(null).success).toBe(true);
+  });
+
+  it('the fake fetch serves PUT and DELETE routes, and a 204 with no body', async () => {
+    const fake = fakeFetch([
+      {
+        method: 'DELETE',
+        path: '/user/records/5/0',
+        reply: loadFixture('user_record_cancel', 'cancelled'),
+      },
+      {
+        method: 'PUT',
+        path: '/book_record/722227/5',
+        reply: loadFixture('book_record_move', 'moved'),
+      },
+    ]);
+    const cancelled = await fake.fetch(`${BASE}/user/records/5/0`, {
+      method: 'DELETE',
+    });
+    expect(cancelled.status).toBe(204);
+    expect(await cancelled.text()).toBe('');
+    const moved = await fake.fetch(`${BASE}/book_record/722227/5`, {
+      method: 'PUT',
+      body: '{}',
+    });
+    expect(moved.status).toBe(200);
+    expect(fake.unmatched).toEqual([]);
   });
 });

@@ -59,6 +59,18 @@ describe('SERVER_PROMPTS', () => {
     }
   });
 
+  it('ends with a me_book preview and a booking after the user says yes, and the pre-filled link for a business that needs its widget', () => {
+    const [prompt] = SERVER_PROMPTS;
+    const text = prompt?.text ?? '';
+    expect(text).toContain('me_book');
+    expect(text).toMatch(/only after I say yes/i);
+    expect(text).toContain('pre-filled booking link');
+    expect(text.indexOf('me_book')).toBeGreaterThan(
+      text.indexOf('business_list_time_slots')
+    );
+    expect(prompt?.description).toMatch(/books/i);
+  });
+
   it('asks for nothing about the sign-in and passes the description deny-list', () => {
     for (const prompt of SERVER_PROMPTS) {
       for (const text of [prompt.title, prompt.description, prompt.text]) {

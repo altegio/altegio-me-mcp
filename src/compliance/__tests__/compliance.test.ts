@@ -4,7 +4,11 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { BOOKING_ROUTES, USER_ROUTES } from '../../booking/client.js';
+import {
+  BOOKING_ROUTES,
+  CLIENT_WRITE_ROUTES,
+  USER_ROUTES,
+} from '../../booking/client.js';
 import { createMcpServer } from '../../mcp/create-server.js';
 import { SERVER_INSTRUCTIONS } from '../../mcp/instructions.js';
 import { SERVER_PROMPTS } from '../../mcp/prompts.js';
@@ -27,7 +31,7 @@ import {
   type RuleId,
   type Violation,
 } from '../rules.js';
-import { SCOPE_DISCOVER, SCOPE_READ } from '../../tools/scopes.js';
+import { SCOPE_BOOK, SCOPE_DISCOVER, SCOPE_READ } from '../../tools/scopes.js';
 
 const SINGLE: ToolMeta = {
   kind: 'single',
@@ -105,11 +109,25 @@ describe('compliant tools', () => {
     expect(checkRegistry(registry, { production: true })).toEqual([]);
   });
 
-  it('registers read-only production tools with unique names', () => {
+  it('registers production tools that are read-only or client write tools, with unique names', () => {
     expect(productionTools.length).toBeGreaterThan(0);
     for (const tool of productionTools) {
-      expect(tool.spec.annotations.readOnlyHint).toBe(true);
+      if (tool.spec.annotations.readOnlyHint === true) continue;
+      expect(tool.meta.scopes).toContain(SCOPE_BOOK);
+      expect(
+        tool.meta.upstream.some((call) =>
+          Object.values(CLIENT_WRITE_ROUTES).some(
+            (route) =>
+              route.method === call.method && route.route === call.route
+          )
+        )
+      ).toBe(true);
     }
+    expect(
+      productionTools
+        .filter((tool) => tool.spec.annotations.readOnlyHint !== true)
+        .map((tool) => tool.name)
+    ).toEqual(['me_book', 'me_reschedule_booking', 'me_cancel_booking']);
     const names = productionTools.map((tool) => tool.name);
     expect(new Set(names).size).toBe(names.length);
   });
@@ -119,7 +137,7 @@ describe('compliant tools', () => {
     expect(READ_ONLY_POST_ROUTES.has(BOOKING_ROUTES.check.route)).toBe(true);
   });
 
-  it('registers the two own-data tools first, then the six booking tools in booking-flow order', () => {
+  it('registers the two own-data tools first, then the six booking tools in booking-flow order, then the write tools', () => {
     expect(productionTools.map((tool) => tool.name)).toEqual([
       'me_list_places',
       'me_list_bookings',
@@ -129,13 +147,17 @@ describe('compliant tools', () => {
       'business_list_dates',
       'business_list_time_slots',
       'book_check',
+      'me_book',
+      'me_reschedule_booking',
+      'me_cancel_booking',
     ]);
   });
 
-  it('declares only BOOKING_ROUTES or USER_ROUTES entries as upstream calls', () => {
+  it('declares only BOOKING_ROUTES, USER_ROUTES or CLIENT_WRITE_ROUTES entries as upstream calls', () => {
     const routes = [
       ...Object.values(BOOKING_ROUTES),
       ...Object.values(USER_ROUTES),
+      ...Object.values(CLIENT_WRITE_ROUTES),
     ];
     for (const tool of productionTools) {
       expect(tool.meta.upstream.length).toBeGreaterThan(0);
@@ -192,7 +214,10 @@ describe('R14 signed-in routes', () => {
     );
   });
 
-  it('reports each of the two signed-in routes', () => {
+  it('reports each of the signed-in routes, the profile route under /booking/user/ included', () => {
+    expect(Object.values(USER_ROUTES).map((route) => route.route)).toContain(
+      '/booking/user/data'
+    );
     for (const route of Object.values(USER_ROUTES)) {
       const violations = checkTool(compliantListTool.spec, {
         ...compliantListTool.meta,
@@ -224,7 +249,7 @@ describe('R14 signed-in routes', () => {
     ).not.toContain('R14');
   });
 
-  it('passes both own-data tools and every production tool', () => {
+  it('passes the own-data tools, me_book and every production tool', () => {
     for (const tool of productionTools) {
       expect(checkTool(tool.spec, tool.meta, { production: true })).toEqual([]);
     }
@@ -234,8 +259,79 @@ describe('R14 signed-in routes', () => {
     expect(own.map((tool) => tool.name)).toEqual([
       'me_list_places',
       'me_list_bookings',
+      'me_book',
+      'me_reschedule_booking',
+      'me_cancel_booking',
     ]);
     for (const tool of own) expect(tool.meta.scopes).toContain(SCOPE_READ);
+  });
+});
+
+describe('R4 and R7 for client write tools (ADR 0006)', () => {
+  const WRITE_ANNOTATIONS = {
+    title: 'Demo write',
+    readOnlyHint: false,
+    destructiveHint: false,
+    openWorldHint: true,
+    idempotentHint: false,
+  } as const;
+  const writeSpec = (): ToolSpec => ({
+    ...compliantListTool.spec,
+    name: 'demo_write_thing',
+    title: 'Demo write',
+    annotations: WRITE_ANNOTATIONS,
+  });
+  const writeMeta = (overrides: Partial<ToolMeta>): ToolMeta => ({
+    kind: 'single',
+    upstream: [CLIENT_WRITE_ROUTES.create],
+    scopes: [SCOPE_DISCOVER, SCOPE_READ, SCOPE_BOOK],
+    ...overrides,
+  });
+  const production = { production: true };
+
+  it('accepts a production tool that holds mcp:me:book and declares a client write route', () => {
+    expect(checkTool(writeSpec(), writeMeta({}), production)).toEqual([]);
+  });
+
+  it('reports R4 for a production tool that writes without mcp:me:book', () => {
+    const violations = checkTool(
+      writeSpec(),
+      writeMeta({ scopes: [SCOPE_DISCOVER, SCOPE_READ] }),
+      production
+    );
+    expect(rules(violations)).toContain('R4');
+  });
+
+  it('reports R4 for a production tool that writes and declares no client write route', () => {
+    const violations = checkTool(
+      writeSpec(),
+      writeMeta({ upstream: [USER_ROUTES.records] }),
+      production
+    );
+    expect(rules(violations)).toContain('R4');
+  });
+
+  it('reports R7 for a tool that declares a non-GET route outside the client write routes and the read-only POST routes', () => {
+    const violations = checkTool(
+      writeSpec(),
+      writeMeta({
+        upstream: [
+          CLIENT_WRITE_ROUTES.create,
+          { method: 'PUT', route: '/demo/other' },
+        ],
+      }),
+      production
+    );
+    expect(rules(violations)).toContain('R7');
+  });
+
+  it('reports R7 when a read-only tool declares a client write route', () => {
+    const violations = checkTool(
+      compliantListTool.spec,
+      { ...compliantListTool.meta, upstream: [CLIENT_WRITE_ROUTES.create] },
+      production
+    );
+    expect(rules(violations)).toContain('R7');
   });
 });
 
@@ -450,9 +546,9 @@ describe('R12 forbidden routes', () => {
     expect(scanForbiddenRoutes(resolve('src'))).toEqual([]);
   });
 
-  it('reports a planted reference', () => {
+  it('reports a planted reference to the code request route', () => {
     const dir = temp();
-    const route = ['book', 'record'].join('_');
+    const route = ['book', 'code'].join('_');
     writeFileSync(join(dir, 'client.ts'), `export const route = '${route}';\n`);
     const violations = scanForbiddenRoutes(dir);
     expect(violations).toHaveLength(1);
@@ -478,12 +574,12 @@ describe('R12 forbidden routes', () => {
     expect(violations[0]?.message).toContain(route);
   });
 
-  it('keeps the three earlier entries', () => {
+  it('keeps the three remaining sign-in routes, the create route being retired for the client write path (ADR 0006)', () => {
     const dir = temp();
     const routes = [
-      ['book', 'record'].join('_'),
       ['book', 'code'].join('_'),
       ['', 'user', 'auth'].join('/'),
+      ['', 'booking', 'yplaces'].join('/'),
     ];
     writeFileSync(
       join(dir, 'all.ts'),
@@ -491,6 +587,56 @@ describe('R12 forbidden routes', () => {
     );
     const [violation] = scanForbiddenRoutes(dir);
     for (const route of routes) expect(violation?.message).toContain(route);
+  });
+
+  it('reports the create route anywhere but in booking/client.ts', () => {
+    const dir = temp();
+    const route = ['book', 'record'].join('_');
+    mkdirSync(join(dir, 'tools'));
+    writeFileSync(
+      join(dir, 'tools', 'sneaky.ts'),
+      `export const route = '/${route}/1';\n`
+    );
+    writeFileSync(
+      join(dir, 'client.ts'),
+      `export const route = '/${route}';\n`
+    );
+    const violations = scanForbiddenRoutes(dir);
+    expect(violations.map((violation) => violation.tool)).toEqual([
+      join('client.ts'),
+      join('tools', 'sneaky.ts'),
+    ]);
+  });
+
+  it('allows the create route in booking/client.ts only', () => {
+    const dir = temp();
+    const route = ['book', 'record'].join('_');
+    mkdirSync(join(dir, 'booking'));
+    writeFileSync(
+      join(dir, 'booking', 'client.ts'),
+      `export const route = '/${route}/{location_id}';\n`
+    );
+    expect(scanForbiddenRoutes(dir)).toEqual([]);
+    writeFileSync(
+      join(dir, 'booking', 'other.ts'),
+      `export const route = '/${route}/{location_id}';\n`
+    );
+    const violations = scanForbiddenRoutes(dir);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.tool).toBe(join('booking', 'other.ts'));
+    expect(violations[0]?.message).toBe(
+      'names a client write route outside src/booking/client.ts'
+    );
+  });
+
+  it('still reports the sign-in routes inside booking/client.ts', () => {
+    const dir = temp();
+    mkdirSync(join(dir, 'booking'));
+    writeFileSync(
+      join(dir, 'booking', 'client.ts'),
+      `export const route = '${['', 'user', 'auth'].join('/')}';\n`
+    );
+    expect(rules(scanForbiddenRoutes(dir))).toEqual(['R12']);
   });
 
   it('skips tests and the compliance directory', () => {

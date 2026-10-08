@@ -18,7 +18,7 @@ import { partnerIdOf } from '../security/partner-token.js';
 import { PROXY_AUTH_HEADER } from '../security/proxy-auth.js';
 import { defineTool, type DefinedTool } from '../tools/factory.js';
 import { productionTools } from '../tools/registry.js';
-import { SCOPE_BOOK } from '../tools/scopes.js';
+import { SCOPE_BOOK, SCOPE_READ } from '../tools/scopes.js';
 import {
   CANARY_SECRET,
   CLIENT_USER_TOKEN,
@@ -61,7 +61,7 @@ interface RpcResult {
 }
 
 let bookHandlerRuns = 0;
-// A tool of the future client tier: it needs mcp:me:book, which nobody holds.
+// A tool of the client write tier: it needs mcp:me:read and mcp:me:book, which only a client sign-in holds.
 const bookTool: DefinedTool<unknown> = defineTool({
   name: 'demo_book_thing',
   title: 'Book a demo thing',
@@ -72,7 +72,7 @@ const bookTool: DefinedTool<unknown> = defineTool({
     openWorldHint: false,
     idempotentHint: false,
   },
-  scopes: [SCOPE_BOOK],
+  scopes: [SCOPE_READ, SCOPE_BOOK],
   input: z.strictObject({}),
   output: z.strictObject({ ok: z.boolean() }),
   render: () => 'booked',
@@ -381,7 +381,7 @@ describe('tier separation: discover for everyone, read for a signed-in client', 
     }
   );
 
-  it('grants mcp:me:read from the signed list but never mcp:me:book', async () => {
+  it('grants mcp:me:read and mcp:me:book from the signed list, each only when it is named', async () => {
     bookHandlerRuns = 0;
     const { harness } = await start('default', {
       ...BEHIND_PROXY,
@@ -401,23 +401,32 @@ describe('tier separation: discover for everyone, read for a signed-in client', 
       signedClient('mcp:me:read mcp:me:book')
     );
     const bookBody = (await book.json()) as RpcResult;
-    expect(bookBody.result?.isError).toBe(true);
-    expect(bookBody.result?.content?.[0]?.text).toContain(
-      'acts for a signed-in client'
+    expect(bookBody.result?.isError).not.toBe(true);
+    expect(bookHandlerRuns).toBe(1);
+
+    const readOnly = await postMcp(
+      harness.baseUrl,
+      toolCallBody('demo_book_thing', {}),
+      signedClient('mcp:me:read')
     );
-    expect(bookHandlerRuns).toBe(0);
+    const readOnlyBody = (await readOnly.json()) as RpcResult;
+    expect(readOnlyBody.result?.isError).toBe(true);
+    expect(readOnlyBody.result?.content?.[0]?.text).toContain(
+      "this connection's sign-in does not include booking"
+    );
+    expect(bookHandlerRuns).toBe(1);
   });
 
-  it('gives a direct-header client the discover and read scopes and not book', async () => {
+  it('gives a direct-header client the discover, read and book scopes, and a partner or an anonymous caller none of the client scopes', async () => {
     bookHandlerRuns = 0;
     const { harness } = await start('default', {
       tools: [...productionTools, bookTool],
     });
     const headers = { [DIRECT_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN };
-    for (const [tool, args, refused] of [
-      ['business_get', { location_id: 722227 }, false],
-      ['me_list_places', {}, false],
-      ['demo_book_thing', {}, true],
+    for (const [tool, args] of [
+      ['business_get', { location_id: 722227 }],
+      ['me_list_places', {}],
+      ['demo_book_thing', {}],
     ] as const) {
       const res = await postMcp(
         harness.baseUrl,
@@ -425,9 +434,30 @@ describe('tier separation: discover for everyone, read for a signed-in client', 
         headers
       );
       const body = (await res.json()) as RpcResult;
-      expect(body.result?.isError === true).toBe(refused);
+      expect(body.result?.isError).not.toBe(true);
     }
-    expect(bookHandlerRuns).toBe(0);
+    expect(bookHandlerRuns).toBe(1);
+
+    const anonymous = await postMcp(
+      harness.baseUrl,
+      toolCallBody('demo_book_thing', {})
+    );
+    const anonymousBody = (await anonymous.json()) as RpcResult;
+    expect(anonymousBody.result?.isError).toBe(true);
+    expect(anonymousBody.result?.content?.[0]?.text).toContain(
+      'books for the signed-in client, and this connection has no client sign-in'
+    );
+    const behindProxy = await start('default', {
+      ...REQUIRED,
+      tools: [...productionTools, bookTool],
+    });
+    const partner = await postMcp(
+      behindProxy.harness.baseUrl,
+      toolCallBody('demo_book_thing', {}),
+      { authorization: `Bearer ${PARTNER_TOKEN}` }
+    );
+    expect(((await partner.json()) as RpcResult).result?.isError).toBe(true);
+    expect(bookHandlerRuns).toBe(1);
   });
 });
 
@@ -694,7 +724,7 @@ describe('the own-place flow to a pre-filled widget link (ROADMAP criterion 2, M
     expect(JSON.stringify(harness.logs)).not.toContain(CLIENT_USER_TOKEN);
   });
 
-  it('offers no tool that writes a booking', async () => {
+  it('offers the booking writes only as the me_ tools, behind the client scopes, and no raw write tool', async () => {
     const harness = await startApp({
       tools: productionTools,
       toolDeps: {
@@ -711,6 +741,9 @@ describe('the own-place flow to a pre-filled widget link (ROADMAP criterion 2, M
     const body = (await res.json()) as RpcResult;
     const names = (body.result?.tools ?? []).map((tool) => tool.name);
     expect(names).toContain('me_list_bookings');
+    expect(names).toContain('me_book');
+    expect(names).toContain('me_reschedule_booking');
+    expect(names).toContain('me_cancel_booking');
     expect(names).not.toContain('book_record');
     expect(names.filter((name) => /^(book|cancel|change)_/.test(name))).toEqual(
       ['book_check']

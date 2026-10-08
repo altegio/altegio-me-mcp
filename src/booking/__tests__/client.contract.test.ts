@@ -1,5 +1,11 @@
 import { describe, expect, it } from '@jest/globals';
-import { BOOKING_ROUTES, BookingClient, USER_ROUTES } from '../client.js';
+import {
+  BOOKING_ROUTES,
+  BookingClient,
+  CANCEL_HASH_SEGMENT,
+  CLIENT_WRITE_ROUTES,
+  USER_ROUTES,
+} from '../client.js';
 import { UpstreamError, type UpstreamErrorKind } from '../errors.js';
 import { ALTEGIO_ACCEPT, BookingHttp } from '../http.js';
 import {
@@ -127,6 +133,23 @@ describe('company request', () => {
         },
       ],
       bookingFormUrl: 'https://n1463903.alteg.io/',
+      rules: {
+        cancelAllowed: true,
+        cancelBeforeSeconds: 7200,
+        moveAllowed: true,
+        moveBeforeSeconds: 7200,
+      },
+    });
+  });
+
+  it('reads no rule where the card states none', async () => {
+    const fixture = loadFixture('company', 'no_forms');
+    const { client } = clientFor(fixture);
+    expect((await client.company(LOCATION)).rules).toEqual({
+      cancelAllowed: null,
+      cancelBeforeSeconds: null,
+      moveAllowed: null,
+      moveBeforeSeconds: null,
     });
   });
 });
@@ -356,7 +379,7 @@ describe('route table (D-01)', () => {
 });
 
 describe('signed-in route table (D-01, D-02)', () => {
-  it('is frozen and holds exactly the places and records routes', () => {
+  it('is frozen and holds exactly the places, records and profile routes', () => {
     expect(Object.isFrozen(USER_ROUTES)).toBe(true);
     for (const entry of Object.values(USER_ROUTES)) {
       expect(Object.isFrozen(entry)).toBe(true);
@@ -365,7 +388,11 @@ describe('signed-in route table (D-01, D-02)', () => {
       Object.values(USER_ROUTES)
         .map((entry) => `${entry.method} ${entry.route}`)
         .sort()
-    ).toEqual(['GET /user/companies/yplaces', 'GET /user/records']);
+    ).toEqual([
+      'GET /booking/user/data',
+      'GET /user/companies/yplaces',
+      'GET /user/records',
+    ]);
   });
 });
 
@@ -479,6 +506,7 @@ describe('services request (book_services)', () => {
           priceMax: 0,
           durationSeconds: null,
           prepaid: 'forbidden',
+          membershipOnly: false,
         },
         {
           id: 10303531,
@@ -488,6 +516,7 @@ describe('services request (book_services)', () => {
           priceMax: 1500,
           durationSeconds: null,
           prepaid: 'forbidden',
+          membershipOnly: false,
         },
         {
           id: 10303532,
@@ -497,6 +526,7 @@ describe('services request (book_services)', () => {
           priceMax: 4500,
           durationSeconds: null,
           prepaid: 'required',
+          membershipOnly: false,
         },
         {
           id: 10303533,
@@ -506,6 +536,7 @@ describe('services request (book_services)', () => {
           priceMax: 3500,
           durationSeconds: null,
           prepaid: 'allowed',
+          membershipOnly: false,
         },
         {
           id: 10303534,
@@ -515,6 +546,7 @@ describe('services request (book_services)', () => {
           priceMax: 500,
           durationSeconds: null,
           prepaid: 'forbidden',
+          membershipOnly: false,
         },
         {
           id: 10303535,
@@ -524,6 +556,7 @@ describe('services request (book_services)', () => {
           priceMax: 700,
           durationSeconds: null,
           prepaid: 'forbidden',
+          membershipOnly: false,
         },
         {
           id: 10303536,
@@ -533,6 +566,7 @@ describe('services request (book_services)', () => {
           priceMax: 12.5,
           durationSeconds: null,
           prepaid: 'forbidden',
+          membershipOnly: false,
         },
       ],
       categories: [
@@ -583,6 +617,7 @@ describe('services request (book_services)', () => {
         priceMax: 2500,
         durationSeconds: 3600,
         prepaid: 'required',
+        membershipOnly: false,
       },
       {
         id: 10303532,
@@ -592,6 +627,7 @@ describe('services request (book_services)', () => {
         priceMax: 4500,
         durationSeconds: 3630,
         prepaid: 'allowed',
+        membershipOnly: false,
       },
       {
         id: 10303531,
@@ -601,6 +637,7 @@ describe('services request (book_services)', () => {
         priceMax: 1500,
         durationSeconds: 2700,
         prepaid: 'forbidden',
+        membershipOnly: false,
       },
       {
         id: 10303537,
@@ -610,6 +647,7 @@ describe('services request (book_services)', () => {
         priceMax: 0,
         durationSeconds: 1800,
         prepaid: null,
+        membershipOnly: false,
       },
     ]);
     expect(catalog.services.map((service) => service.id)).not.toContain(
@@ -1380,6 +1418,7 @@ describe('user records request (GET /user/records)', () => {
       [722227, '2099-01-12T10:00:00+0300', false],
     ]);
     expect(records[0]).toEqual({
+      id: 1,
       locationId: 722227,
       businessName: 'Fixture Barber',
       city: 'Limassol',
@@ -1390,10 +1429,12 @@ describe('user records request (GET /user/records)', () => {
       cancelled: false,
       attendance: 1,
       price: 1500,
+      moveAllowed: true,
+      cancelAllowed: true,
     });
   });
 
-  it('never reads a record id, token or comment into a record', async () => {
+  it('reads the booking id and never a token, hash, api id or comment into a record', async () => {
     const { client } = recordsClient(loadFixture('user_records', 'default'));
     const records = await client.myRecords({ userToken: USER_TOKEN });
     const text = JSON.stringify(records);
@@ -1410,11 +1451,14 @@ describe('user records request (GET /user/records)', () => {
       expect(Object.keys(record).sort()).toEqual([
         'attendance',
         'businessName',
+        'cancelAllowed',
         'cancelled',
         'city',
         'currency',
         'datetime',
+        'id',
         'locationId',
+        'moveAllowed',
         'price',
         'services',
         'teamMember',
@@ -1477,6 +1521,7 @@ describe('user records request (GET /user/records)', () => {
     const records = await client.myRecords({ userToken: USER_TOKEN });
     expect(records).toEqual([
       {
+        id: 1,
         locationId: 7,
         businessName: 'Plain',
         city: null,
@@ -1487,8 +1532,11 @@ describe('user records request (GET /user/records)', () => {
         cancelled: false,
         attendance: -1,
         price: null,
+        moveAllowed: null,
+        cancelAllowed: null,
       },
       {
+        id: 2,
         locationId: 7,
         businessName: 'Public',
         city: null,
@@ -1502,6 +1550,8 @@ describe('user records request (GET /user/records)', () => {
         cancelled: true,
         attendance: null,
         price: null,
+        moveAllowed: null,
+        cancelAllowed: null,
       },
     ]);
   });
@@ -1514,5 +1564,600 @@ describe('user records request (GET /user/records)', () => {
     await expect(
       client.myRecords({ userToken: USER_TOKEN })
     ).rejects.toMatchObject({ kind: 'contract_drift' });
+  });
+});
+
+describe('the profile and the create route (ADR 0006, D-02)', () => {
+  const USER_TOKEN = 'client-user-token-0001-abcdef';
+  const SELECTION = {
+    serviceIds: [10303531],
+    teamMemberId: 2098145,
+    datetime: '2099-01-12T11:00:00+03:00',
+  };
+  const PROFILE = {
+    fullname: 'Fixture Client',
+    phone: '+15550000001',
+    email: null,
+  };
+
+  function writeClient(options: { profile?: FakeReply; create?: FakeReply }) {
+    const upstream = fakeFetch([
+      {
+        method: 'GET',
+        path: '/booking/user/data',
+        reply: options.profile ?? loadFixture('booking_user_data', 'default'),
+      },
+      {
+        method: 'POST',
+        path: `/book_record/${LOCATION}`,
+        reply: options.create ?? loadFixture('book_record_create', 'created'),
+      },
+    ]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    return { client, upstream };
+  }
+
+  it('declares the client write routes, frozen: the create, the move and the cancel', () => {
+    expect(Object.isFrozen(CLIENT_WRITE_ROUTES)).toBe(true);
+    expect(
+      Object.values(CLIENT_WRITE_ROUTES).map(
+        (entry) => `${entry.method} ${entry.route}`
+      )
+    ).toEqual([
+      'POST /book_record/{location_id}',
+      'PUT /book_record/{location_id}/{record_id}',
+      'DELETE /user/records/{record_id}/{record_hash}',
+    ]);
+  });
+
+  it('reads the profile with both tokens: name, phone as plus and digits, e-mail when set', async () => {
+    const { client, upstream } = writeClient({});
+    expect(await client.myProfile({ userToken: USER_TOKEN })).toEqual({
+      fullname: 'Fixture Client',
+      phone: '+15550000001',
+      email: 'fixture.client@example.invalid',
+    });
+    const [call] = upstream.calls;
+    expect(call?.method).toBe('GET');
+    expect(call?.url.pathname).toBe('/api/v1/booking/user/data');
+    expect(call?.headers.get('authorization')).toBe(
+      `Bearer ${TOKEN}, User ${USER_TOKEN}`
+    );
+  });
+
+  it('adds a plus to bare phone digits, joins name and surname, and gives no e-mail when it is empty', async () => {
+    const { client } = writeClient({
+      profile: loadFixture('booking_user_data', 'bare_digits_no_email'),
+    });
+    expect(await client.myProfile({ userToken: USER_TOKEN })).toEqual({
+      fullname: 'Fixture Client',
+      phone: '+15550000001',
+      email: null,
+    });
+  });
+
+  it.each(['no_phone', 'no_name'])(
+    'gives no profile when the %s scenario lacks what the create needs',
+    async (scenario) => {
+      const { client } = writeClient({
+        profile: loadFixture('booking_user_data', scenario),
+      });
+      expect(await client.myProfile({ userToken: USER_TOKEN })).toBeNull();
+    }
+  );
+
+  it('sends nothing without a user token', async () => {
+    const { client, upstream } = writeClient({});
+    await expect(client.myProfile({})).rejects.toThrow(TypeError);
+    await expect(
+      client.createBooking(LOCATION, SELECTION, PROFILE, {})
+    ).rejects.toThrow(TypeError);
+    expect(upstream.calls).toEqual([]);
+  });
+
+  it('creates one booking with exactly the profile and one appointment, and returns its id', async () => {
+    const { client, upstream } = writeClient({});
+    const created = await client.createBooking(LOCATION, SELECTION, PROFILE, {
+      userToken: USER_TOKEN,
+    });
+    expect(created).toEqual({ bookingId: 990001 });
+    expect(JSON.stringify(created)).not.toContain('fixture-hash-0002');
+    const [call] = upstream.calls;
+    expect(call?.method).toBe('POST');
+    expect(call?.url.pathname).toBe(`/api/v1/book_record/${LOCATION}`);
+    expect(call?.headers.get('authorization')).toBe(
+      `Bearer ${TOKEN}, User ${USER_TOKEN}`
+    );
+    expect(call?.headers.get('content-type')).toBe('application/json');
+    expect(JSON.parse(call?.body ?? 'null')).toEqual({
+      phone: '+15550000001',
+      fullname: 'Fixture Client',
+      appointments: [
+        {
+          id: 1,
+          services: [10303531],
+          staff_id: 2098145,
+          datetime: '2099-01-12T11:00:00+03:00',
+        },
+      ],
+    });
+  });
+
+  it('sends the profile e-mail only when there is one', async () => {
+    const { client, upstream } = writeClient({});
+    await client.createBooking(
+      LOCATION,
+      SELECTION,
+      { ...PROFILE, email: 'fixture.client@example.invalid' },
+      { userToken: USER_TOKEN }
+    );
+    expect(JSON.parse(upstream.calls[0]?.body ?? '{}')).toMatchObject({
+      email: 'fixture.client@example.invalid',
+    });
+  });
+
+  it('rejects ids and datetimes it cannot send before anything goes out', async () => {
+    const { client, upstream } = writeClient({});
+    const call = { userToken: USER_TOKEN };
+    await expect(
+      client.createBooking(
+        LOCATION,
+        { ...SELECTION, serviceIds: [] },
+        PROFILE,
+        call
+      )
+    ).rejects.toThrow(TypeError);
+    await expect(
+      client.createBooking(
+        LOCATION,
+        { ...SELECTION, datetime: 'tomorrow' },
+        PROFILE,
+        call
+      )
+    ).rejects.toThrow(TypeError);
+    await expect(
+      client.createBooking(0, SELECTION, PROFILE, call)
+    ).rejects.toThrow(TypeError);
+    expect(upstream.calls).toEqual([]);
+  });
+});
+
+describe('create rejections and the anti-fraud signals (ADR 0006, D-02)', () => {
+  const USER_TOKEN = 'client-user-token-0001-abcdef';
+  const SELECTION = {
+    serviceIds: [10303531],
+    teamMemberId: 2098145,
+    datetime: '2099-01-12T11:00:00+03:00',
+  };
+  const PROFILE = {
+    fullname: 'Fixture Client',
+    phone: '+15550000001',
+    email: null,
+  };
+
+  function createWith(scenario: string): {
+    client: BookingClient;
+    upstream: ReturnType<typeof fakeFetch>;
+  } {
+    const upstream = fakeFetch([
+      {
+        method: 'POST',
+        path: `/book_record/${LOCATION}`,
+        reply: loadFixture('book_record_create', scenario),
+      },
+    ]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    return { client, upstream };
+  }
+
+  async function createError(scenario: string): Promise<UpstreamError> {
+    const { client } = createWith(scenario);
+    return upstreamError(
+      client.createBooking(LOCATION, SELECTION, PROFILE, {
+        userToken: USER_TOKEN,
+      })
+    );
+  }
+
+  it('maps a 412 to the anti_fraud kind with its status', async () => {
+    const error = await createError('anti_fraud_412');
+    expect(error.kind).toBe('anti_fraud');
+    expect(error.status).toBe(412);
+    expect(error.route).toBe('/book_record/{location_id}');
+  });
+
+  it.each(['fake_201'])(
+    'maps the %s answer, a 201 that names no booking, to anti_fraud with status 201',
+    async (scenario) => {
+      const error = await createError(scenario);
+      expect(error.kind).toBe('anti_fraud');
+      expect(error.status).toBe(201);
+    }
+  );
+
+  it('maps a 201 whose entry has record id 0 to anti_fraud', async () => {
+    const upstream = fakeFetch([
+      {
+        method: 'POST',
+        path: `/book_record/${LOCATION}`,
+        reply: {
+          status: 201,
+          body: { success: true, data: [{ id: 1, record_id: 0 }], meta: [] },
+        },
+      },
+    ]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    const error = await upstreamError(
+      client.createBooking(LOCATION, SELECTION, PROFILE, {
+        userToken: USER_TOKEN,
+      })
+    );
+    expect(error.kind).toBe('anti_fraud');
+  });
+
+  it('keeps the codes of a 403 with code 434 and names the user as the credential', async () => {
+    const error = await createError('blacklisted_434');
+    expect(error.kind).toBe('unauthorized');
+    expect(error.status).toBe(403);
+    expect(error.codes).toEqual([434]);
+    expect(error.credential).toBe('user');
+  });
+
+  it.each([
+    ['taken_433', 433],
+    ['no_team_member_436', 436],
+    ['overlap_437', 437],
+    ['phone_431', 431],
+    ['name_435', 435],
+    ['code_432', 432],
+  ])('keeps the code of the 422 scenario %s', async (scenario, code) => {
+    const error = await createError(scenario);
+    expect(error.kind).toBe('rejected');
+    expect(error.codes).toEqual([code]);
+  });
+
+  it('names the required fields of a 422 whose errors are keyed by field, and no code', async () => {
+    const error = await createError('required_email_422');
+    expect(error.kind).toBe('rejected');
+    expect(error.codes).toEqual([]);
+    expect(error.requiredFields).toEqual(['email']);
+  });
+
+  it('names no required field for a list of coded errors', async () => {
+    const error = await createError('taken_433');
+    expect(error.requiredFields).toEqual([]);
+  });
+
+  it('keeps the upstream message out of the error text', async () => {
+    const error = await createError('taken_433');
+    expect(error.message).not.toContain('Fixture Client');
+    expect(error.message).not.toContain('+15550000001');
+  });
+});
+
+describe('the change flags of an own record (ADR 0006, D-03)', () => {
+  const USER_TOKEN = 'client-user-token-0001-abcdef';
+
+  async function recordFive(
+    change: (record: Record<string, unknown>) => void
+  ): Promise<{ moveAllowed: boolean | null; cancelAllowed: boolean | null }> {
+    const fixture = loadFixture('user_records', 'default');
+    const body = structuredClone(fixture.body) as {
+      data: { id: number }[];
+    };
+    const record = body.data.find((entry) => entry.id === 5);
+    if (record === undefined) throw new Error('fixture record 5 is missing');
+    change(record);
+    const upstream = fakeFetch([
+      {
+        method: 'GET',
+        path: '/user/records',
+        reply: { ...fixture, body },
+      },
+    ]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    const records = await client.myRecords({ userToken: USER_TOKEN });
+    const found = records.find((entry) => entry.id === 5);
+    if (found === undefined) throw new Error('record 5 was dropped');
+    return {
+      moveAllowed: found.moveAllowed,
+      cancelAllowed: found.cancelAllowed,
+    };
+  }
+
+  it('reads allow_change_record and allow_delete_record as booleans', async () => {
+    expect(
+      await recordFive((record) => {
+        record.allow_change_record = false;
+        record.allow_delete_record = 1;
+      })
+    ).toEqual({ moveAllowed: false, cancelAllowed: true });
+  });
+
+  it('gives null for a flag the record does not carry', async () => {
+    expect(
+      await recordFive((record) => {
+        delete record.allow_change_record;
+        record.allow_delete_record = null;
+      })
+    ).toEqual({ moveAllowed: null, cancelAllowed: null });
+  });
+});
+
+describe('the move route (ADR 0006, D-02)', () => {
+  const USER_TOKEN = 'client-user-token-0001-abcdef';
+  const RECORD = 5;
+  const NEW_TIME = '2099-01-10T11:00:00+03:00';
+  const MOVE_PATH = `/book_record/${LOCATION}/${RECORD}`;
+
+  function moveWith(reply: FakeReply) {
+    const upstream = fakeFetch([{ method: 'PUT', path: MOVE_PATH, reply }]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    return { client, upstream };
+  }
+
+  const call = { userToken: USER_TOKEN };
+
+  it('sends one PUT with exactly the new datetime and both tokens', async () => {
+    const { client, upstream } = moveWith(
+      loadFixture('book_record_move', 'moved')
+    );
+    await expect(
+      client.moveBooking(LOCATION, RECORD, NEW_TIME, call)
+    ).resolves.toBeUndefined();
+    expect(upstream.unmatched).toEqual([]);
+    expect(upstream.calls).toHaveLength(1);
+    const [sent] = upstream.calls;
+    expect(sent?.method).toBe('PUT');
+    expect(sent?.url.pathname).toBe(`/api/v1${MOVE_PATH}`);
+    expect(sent?.headers.get('authorization')).toBe(
+      `Bearer ${TOKEN}, User ${USER_TOKEN}`
+    );
+    expect(sent?.headers.get('content-type')).toBe('application/json');
+    expect(JSON.parse(sent?.body ?? 'null')).toEqual({ datetime: NEW_TIME });
+  });
+
+  it('returns nothing from the answer, which carries the record token', async () => {
+    const { client } = moveWith(loadFixture('book_record_move', 'moved'));
+    const result: unknown = await client.moveBooking(
+      LOCATION,
+      RECORD,
+      NEW_TIME,
+      call
+    );
+    expect(JSON.stringify(result ?? null)).not.toContain('fixture-hash');
+  });
+
+  it('treats any 2xx other than 200 as contract drift', async () => {
+    const moved = loadFixture('book_record_move', 'moved');
+    const { client } = moveWith({ ...moved, status: 201 });
+    const error = await upstreamError(
+      client.moveBooking(LOCATION, RECORD, NEW_TIME, call)
+    );
+    expect(error.kind).toBe('contract_drift');
+    expect(error.route).toBe('/book_record/{location_id}/{record_id}');
+  });
+
+  it('treats a 200 that is not a moved record as contract drift', async () => {
+    const { client } = moveWith({
+      status: 200,
+      body: { success: true, data: [], meta: [] },
+    });
+    const error = await upstreamError(
+      client.moveBooking(LOCATION, RECORD, NEW_TIME, call)
+    );
+    expect(error.kind).toBe('contract_drift');
+  });
+
+  it('keeps code 433 of a taken time and names the user as the credential of a 403', async () => {
+    const taken = await upstreamError(
+      moveWith(loadFixture('book_record_move', 'taken_433')).client.moveBooking(
+        LOCATION,
+        RECORD,
+        NEW_TIME,
+        call
+      )
+    );
+    expect(taken.kind).toBe('rejected');
+    expect(taken.codes).toEqual([433]);
+    const forbidden = await upstreamError(
+      moveWith(
+        loadFixture('book_record_move', 'forbidden_403')
+      ).client.moveBooking(LOCATION, RECORD, NEW_TIME, call)
+    );
+    expect(forbidden.kind).toBe('unauthorized');
+    expect(forbidden.credential).toBe('user');
+  });
+
+  it('refuses ids and a datetime it cannot send, and a missing user token, before anything goes out', async () => {
+    const { client, upstream } = moveWith(
+      loadFixture('book_record_move', 'moved')
+    );
+    await expect(
+      client.moveBooking(LOCATION, 0, NEW_TIME, call)
+    ).rejects.toThrow(TypeError);
+    await expect(
+      client.moveBooking(LOCATION, 1.5, NEW_TIME, call)
+    ).rejects.toThrow(TypeError);
+    await expect(client.moveBooking(0, RECORD, NEW_TIME, call)).rejects.toThrow(
+      TypeError
+    );
+    await expect(
+      client.moveBooking(LOCATION, RECORD, 'tomorrow', call)
+    ).rejects.toThrow(TypeError);
+    await expect(
+      client.moveBooking(LOCATION, RECORD, NEW_TIME, {})
+    ).rejects.toThrow(TypeError);
+    expect(upstream.calls).toEqual([]);
+  });
+});
+
+describe('the cancel route (ADR 0006, D-02)', () => {
+  const USER_TOKEN = 'client-user-token-0001-abcdef';
+  const RECORD = 5;
+  // The recording accepted the placeholder 0 for a signed-in client
+  // (docs/research/signed-in-routes.md, "## Writes").
+  const CANCEL_PATH = `/user/records/${RECORD}/0`;
+
+  function cancelWith(reply: FakeReply) {
+    const upstream = fakeFetch([
+      { method: 'DELETE', path: CANCEL_PATH, reply },
+    ]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    return { client, upstream };
+  }
+
+  const call = { userToken: USER_TOKEN };
+
+  it('uses the recorded placeholder as the hash segment, a short alphanumeric text', () => {
+    expect(CANCEL_HASH_SEGMENT).toBe('0');
+    expect(CANCEL_HASH_SEGMENT).toMatch(/^[A-Za-z0-9]{1,128}$/);
+  });
+
+  it('sends one DELETE with no body and both tokens, and resolves on a 204 with no body', async () => {
+    const { client, upstream } = cancelWith(
+      loadFixture('user_record_cancel', 'cancelled')
+    );
+    await expect(client.cancelBooking(RECORD, call)).resolves.toBeUndefined();
+    expect(upstream.unmatched).toEqual([]);
+    expect(upstream.calls).toHaveLength(1);
+    const [sent] = upstream.calls;
+    expect(sent?.method).toBe('DELETE');
+    expect(sent?.url.pathname).toBe(`/api/v1${CANCEL_PATH}`);
+    expect(sent?.headers.get('authorization')).toBe(
+      `Bearer ${TOKEN}, User ${USER_TOKEN}`
+    );
+    expect(sent?.body).toBeNull();
+  });
+
+  it('also accepts a 200 that answers an empty list', async () => {
+    const { client } = cancelWith({
+      status: 200,
+      body: { success: true, data: [], meta: [] },
+    });
+    await expect(client.cancelBooking(RECORD, call)).resolves.toBeUndefined();
+  });
+
+  it('treats any other 2xx as contract drift, because the outcome is not known', async () => {
+    const { client } = cancelWith({
+      status: 202,
+      body: { success: true, data: null, meta: [] },
+    });
+    const error = await upstreamError(client.cancelBooking(RECORD, call));
+    expect(error.kind).toBe('contract_drift');
+    expect(error.route).toBe('/user/records/{record_id}/{record_hash}');
+  });
+
+  it('maps a 403 to unauthorized with the user as the credential and a 404 to not_found', async () => {
+    const forbidden = await upstreamError(
+      cancelWith(
+        loadFixture('user_record_cancel', 'forbidden_403')
+      ).client.cancelBooking(RECORD, call)
+    );
+    expect(forbidden.kind).toBe('unauthorized');
+    expect(forbidden.status).toBe(403);
+    expect(forbidden.credential).toBe('user');
+    const missing = await upstreamError(
+      cancelWith(
+        loadFixture('user_record_cancel', 'not_found_404')
+      ).client.cancelBooking(RECORD, call)
+    );
+    expect(missing.kind).toBe('not_found');
+  });
+
+  it('keeps the segment out of the error text', async () => {
+    const error = await upstreamError(
+      cancelWith(
+        loadFixture('user_record_cancel', 'not_found_404')
+      ).client.cancelBooking(RECORD, call)
+    );
+    expect(error.message).not.toContain(CANCEL_PATH);
+  });
+
+  it('refuses a booking id it cannot send, and a missing user token, before anything goes out', async () => {
+    const { client, upstream } = cancelWith(
+      loadFixture('user_record_cancel', 'cancelled')
+    );
+    await expect(client.cancelBooking(0, call)).rejects.toThrow(TypeError);
+    await expect(client.cancelBooking(-3, call)).rejects.toThrow(TypeError);
+    await expect(client.cancelBooking(1.5, call)).rejects.toThrow(TypeError);
+    await expect(client.cancelBooking(RECORD, {})).rejects.toThrow(TypeError);
+    expect(upstream.calls).toEqual([]);
+  });
+});
+
+describe('the membership restriction of a service (ADR 0006, D-04)', () => {
+  function catalogOf(reply: FakeReply) {
+    const upstream = fakeFetch([
+      { method: 'GET', path: `/book_services/${LOCATION}`, reply },
+    ]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    return client.services(LOCATION);
+  }
+
+  it('marks no service as membership-only in the default catalog, where 0 and an absent key mean none', async () => {
+    const catalog = await catalogOf(loadFixture('book_services', 'default'));
+    expect(catalog.services.length).toBeGreaterThan(0);
+    for (const service of catalog.services) {
+      expect(service.membershipOnly).toBe(false);
+    }
+  });
+
+  it('marks a service whose abonement_restriction is above 0 as membership-only, and no other', async () => {
+    const catalog = await catalogOf(
+      loadFixture('book_services', 'membership_only')
+    );
+    expect(
+      catalog.services
+        .filter((service) => service.membershipOnly)
+        .map((service) => service.id)
+    ).toEqual([10303531]);
+  });
+
+  it('reads a flag and a number the same way, and treats null as none', async () => {
+    const fixture = loadFixture('book_services', 'default');
+    const body = structuredClone(fixture.body) as {
+      data: { services: Record<string, unknown>[] };
+    };
+    const [first, second, third, fourth] = body.data.services;
+    if (!first || !second || !third || !fourth) {
+      throw new Error('the default catalog has fewer than four services');
+    }
+    first.abonement_restriction = true;
+    second.abonement_restriction = 2;
+    third.abonement_restriction = null;
+    fourth.abonement_restriction = false;
+    const catalog = await catalogOf({ ...fixture, body });
+    expect(
+      catalog.services.slice(0, 4).map((service) => service.membershipOnly)
+    ).toEqual([true, true, false, false]);
   });
 });

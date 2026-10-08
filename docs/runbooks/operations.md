@@ -2,19 +2,27 @@
 
 ME is stateless and admits callers by their own Altegio partner token (ADR 0004;
 `CALLER_AUTH=required` in production since 2026-10-06); Pro is
-authenticated/stateful. All eight ME tools remain user reads (six for a known
-business, plus `me_list_places` and `me_list_bookings` for a signed-in client);
-`book_check` hands confirmation to the booking widget. No OAuth page, booking
-write, catalog search or customer VM autoheal is introduced here.
+authenticated/stateful. ME has eleven tools: eight that read (six for a known
+business, plus `me_list_places` and `me_list_bookings` for a signed-in client)
+and three that write for a signed-in client at their own places, with the user
+token and only after a confirmed preview: `me_book`, `me_reschedule_booking` and
+`me_cancel_booking` (ADR 0006, scope `mcp:me:book`). `book_check` and the
+fallbacks of `me_book` hand what the chat cannot do to the booking widget. No
+OAuth page, catalog search or customer VM autoheal is introduced here.
 
 ## Signals and publication gate
 
 - Liveness: backend `GET /health`, HTTP 200, `status=ok`, `service=altegio-me-mcp`,
   package `version` and deployed `commit`. It performs no upstream API call.
 - Protocol: signed HTTPS `initialize` with protocol `2025-11-25`, then
-  `tools/list`; valid JSON-RPC results, precisely the eight documented tools
-  (six known-business tools, `me_list_places` and `me_list_bookings`),
-  object input schemas and no `mcp-session-id`. Direct unsigned `/mcp` remains 401.
+  `tools/list`; valid JSON-RPC results, precisely the eleven documented tools
+  (six known-business tools, `me_list_places`, `me_list_bookings`, `me_book`,
+  `me_reschedule_booking` and `me_cancel_booking`), object input schemas and no
+  `mcp-session-id`. Direct unsigned `/mcp` remains 401. **The platform owner must
+  update the central monitor's tool list before this release is deployed**: if it
+  pins the earlier eight (or nine) tools, the protocol check fails on the first
+  probe after the deploy. The change is the platform's; this repository only
+  states the catalog.
 - Functional: a separate read-only `business_get` for `location_id=722227` through
   trusted ingress. Require a valid result and `isError != true`; do not log its
   contents. Upstream unauthorized/rate-limited/unavailable outcomes are distinct
@@ -38,6 +46,38 @@ publication and must verify deployed backend commit, protocol, canary and monito
 revision. Monitoring owns alerts/probes. Customer Cloud Run failures must never
 feed staff VM autoheal. This repository does not create or drill central alerts.
 
+## The write tools
+
+`me_book`, `me_reschedule_booking` and `me_cancel_booking` write at the signed-in
+client's own places with the client's user token, in two calls each: a preview
+that changes nothing and returns a `confirmation_token`, then the change with the
+same arguments and that token. They need the client sign-in with `mcp:me:book`;
+anyone else gets an in-band refusal with no upstream call.
+
+- **`CONFIRMATION_SECRET`** is the key of the confirmation tokens (32 to 512
+  printable characters, a secret like the signing keys). Unset, each process uses
+  a random key of its own, so a confirmation is valid only on the instance that
+  issued it, and the client is asked for a new preview when another instance
+  answers. Set it to share confirmations when more than one instance serves.
+  Cloud Run is capped at one instance (see below), so the unset default holds
+  today.
+- **Replay window.** A token is valid for 10 minutes and is redeemed once per
+  instance; a second use is refused with no upstream call. Across instances the
+  window is only closed by the API itself, which refuses a second booking at the
+  same time.
+- **Anti-fraud.** The create route may refuse a call from a cloud address with
+  HTTP 412 and an `X-App-Security-Level` header, or answer 201 with no record id.
+  `me_book` then returns an in-band fallback (`status: fallback`, reason
+  `not_confirmed`) with the pre-filled widget link, never an error. Because it is
+  a result and not an error, its call-log line shows `outcome` ok and no
+  `upstream_kind`, so a log alert keyed on `upstream_kind` `anti_fraud` does not
+  see it; a refused move or cancel is an error and does carry `upstream_kind`
+  `anti_fraud`. A local run saw none; the Cloud Run egress is untested
+  (WRITE-07, B3).
+- **Evidence.** The owner's live run of the three tools on 2026-10-08 is in
+  `docs/research/signed-in-routes.md` ("Tool run"). It books a real appointment at
+  the owner's business and cancels it.
+
 ## Admission and shared partner allocation
 
 ME uses developer **2630**, Secret Manager `MARKETPLACE_PARTNER_TOKEN`.
@@ -46,7 +86,8 @@ Pro uses a different token (`ALTEGIO_API_TOKEN`); its traffic is not automatical
 part of the ME partner allocation.
 
 Client callers (a signed-in client, ADR 0005) share that allocation. Their upstream
-calls, the two signed-in routes (`GET /user/companies/yplaces` and `GET /user/records`)
+calls, the signed-in routes (`GET /user/companies/yplaces`, `GET /user/records`,
+`GET /booking/user/data` and the writes of the three tools)
 and the business routes alike, run on the partner token the proxy sends with the
 client, else on 2630, and pass the same request gate. The call log shows
 `caller: client` and never the user token. Until the proxy's end-client sign-in

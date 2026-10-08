@@ -70,6 +70,17 @@ export const NOTE_NAMES_UNAVAILABLE =
  */
 export const BOOK_CHECK_STEP_MS = 12_000;
 
+/** The datetime of a free slot, as the slot tools return it; me_book takes the same. */
+export const slotDatetimeInput = z
+  .string()
+  .regex(SLOT_DATETIME_PATTERN)
+  .refine((value) => parseSlotDatetime(value) !== null, {
+    message: 'must be a slot datetime with a valid date, time and offset',
+  })
+  .describe(
+    'The datetime of a free slot exactly as business_list_time_slots returned it.'
+  );
+
 const bookCheckInput = z.strictObject({
   location_id: locationIdInput,
   service_ids: uniqueServiceIds(
@@ -77,15 +88,7 @@ const bookCheckInput = z.strictObject({
     `Services to book, 1 to ${MAX_SERVICE_IDS} unique service ids, in the order the client chose them.`
   ),
   team_member_id: teamMemberOrAnyInput,
-  datetime: z
-    .string()
-    .regex(SLOT_DATETIME_PATTERN)
-    .refine((value) => parseSlotDatetime(value) !== null, {
-      message: 'must be a slot datetime with a valid date, time and offset',
-    })
-    .describe(
-      'The datetime of a free slot exactly as business_list_time_slots returned it.'
-    ),
+  datetime: slotDatetimeInput,
 });
 
 type BookCheckInput = z.infer<typeof bookCheckInput>;
@@ -112,7 +115,7 @@ const selectedServiceSchema = z.strictObject({
     ),
 });
 
-type SelectedService = z.infer<typeof selectedServiceSchema>;
+export type SelectedService = z.infer<typeof selectedServiceSchema>;
 
 const bookCheckOutput = z.strictObject({
   status: z
@@ -174,7 +177,7 @@ const TIME_NOT_AVAILABLE: UpstreamErrorText = {
   nextAction: ANOTHER_TIME_NEXT,
 };
 
-const SERVICE_NOT_AVAILABLE: UpstreamErrorText = {
+export const SERVICE_NOT_AVAILABLE: UpstreamErrorText = {
   message: 'One of the chosen services cannot be booked at this time.',
   nextAction: 'choose different services with business_list_services.',
 };
@@ -199,7 +202,7 @@ function rejectedText(error: UpstreamError): UpstreamErrorText {
   return SELECTION_NOT_ACCEPTED;
 }
 
-const CHECK_ERRORS: UpstreamErrorOverrides = {
+export const CHECK_ERRORS: UpstreamErrorOverrides = {
   rejected: rejectedText,
   bad_request: rejectedText,
   not_found: {
@@ -217,7 +220,7 @@ const NO_BOOKING_WIDGET = {
 } as const;
 
 /** The same predicate as business_get's `enabled`: an active widget and a booking form; otherwise a link would lead nowhere. */
-function requireBookingWidget(card: BusinessCard): void {
+export function requireBookingWidget(card: BusinessCard): void {
   if (!canTakeOnlineBookings(card)) {
     throw new ToolError(
       NO_BOOKING_WIDGET.message,
@@ -227,7 +230,7 @@ function requireBookingWidget(card: BusinessCard): void {
 }
 
 /** Date, time and offset from the slot string's digits; never through a Date. */
-function slotFields(datetime: string): {
+export function slotFields(datetime: string): {
   date: string;
   time: string;
   utc_offset: string;
@@ -249,7 +252,7 @@ function unknownService(id: number): SelectedService {
 }
 
 /** The chosen services in input order, with titles and prices from the catalog. */
-function selectedServices(
+export function selectedServices(
   serviceIds: readonly number[],
   catalog: ServiceCatalog | null,
   currency: string | null
@@ -285,7 +288,7 @@ function selectedServices(
   return { services, complete };
 }
 
-function selectedTeamMember(
+export function selectedTeamMember(
   teamMemberId: number,
   members: TeamMember[] | null
 ): {

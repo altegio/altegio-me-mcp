@@ -36,6 +36,7 @@ async function fixtureRecords(scenario: string): Promise<OwnRecord[]> {
 
 function record(overrides: Partial<OwnRecord> = {}): OwnRecord {
   return {
+    id: 1,
     locationId: 1,
     businessName: 'Business',
     city: null,
@@ -46,6 +47,8 @@ function record(overrides: Partial<OwnRecord> = {}): OwnRecord {
     cancelled: false,
     attendance: null,
     price: null,
+    moveAllowed: null,
+    cancelAllowed: null,
     ...overrides,
   };
 }

@@ -84,7 +84,8 @@ const PARTNER_SCOPES: ReadonlySet<Scope> = new Set<Scope>([SCOPE_DISCOVER]);
  * What a client sign-in grants: the base tier plus each grantable scope the
  * proxy's signed scope list names, or all of them when the client came with a
  * direct header (`listed` null: local and headless runs). Nothing else is ever
- * granted, whatever the list says: mcp:me:book is nobody's yet.
+ * granted, whatever the list says: mcp:me:book is the client's writes (ADR
+ * 0006) and only a client sign-in holds it.
  */
 function clientScopes(listed: readonly string[] | null): ReadonlySet<Scope> {
   const granted = new Set<Scope>([SCOPE_DISCOVER]);

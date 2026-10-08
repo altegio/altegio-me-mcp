@@ -1,0 +1,94 @@
+{
+  "default": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": {
+        "0": "fixture-user-token-0001",
+        "id": 32132133,
+        "user_token": "fixture-user-token-0001",
+        "name": "Fixture Client",
+        "surname": "",
+        "patronymic": "",
+        "phone": "+15550000001",
+        "login": "fixture.login",
+        "email": "fixture.client@example.invalid",
+        "lang_id": 2,
+        "avatar": "https://assets.example.invalid/avatar.png"
+      },
+      "meta": []
+    }
+  },
+  "bare_digits_no_email": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": {
+        "0": "fixture-user-token-0001",
+        "id": 32132133,
+        "user_token": "fixture-user-token-0001",
+        "name": "Fixture",
+        "surname": "Client",
+        "patronymic": "",
+        "phone": "15550000001",
+        "login": "fixture.login",
+        "email": "",
+        "lang_id": 2,
+        "avatar": "https://assets.example.invalid/avatar.png"
+      },
+      "meta": []
+    }
+  },
+  "no_phone": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": {
+        "0": "fixture-user-token-0001",
+        "id": 32132133,
+        "user_token": "fixture-user-token-0001",
+        "name": "Fixture Client",
+        "surname": "",
+        "patronymic": "",
+        "phone": "",
+        "login": "fixture.login",
+        "email": "fixture.client@example.invalid",
+        "lang_id": 2,
+        "avatar": ""
+      },
+      "meta": []
+    }
+  },
+  "no_name": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": {
+        "0": "fixture-user-token-0001",
+        "id": 32132133,
+        "user_token": "fixture-user-token-0001",
+        "name": "",
+        "surname": "",
+        "patronymic": "",
+        "phone": "+15550000001",
+        "login": "fixture.login",
+        "email": "fixture.client@example.invalid",
+        "lang_id": 2,
+        "avatar": ""
+      },
+      "meta": []
+    }
+  }
+}

@@ -9,13 +9,18 @@ import {
   type UpstreamCallSpec,
 } from './http.js';
 import {
+  bookRecordCreateDataSchema,
+  bookRecordMoveDataSchema,
+  bookingUserDataSchema,
   companyDataSchema,
   datesDataSchema,
   servicesDataSchema,
   teamMembersDataSchema,
   timeSlotsDataSchema,
   userPlacesDataSchema,
+  userRecordCancelDataSchema,
   userRecordsDataSchema,
+  type BookingUserData,
   type CompanyData,
   type ServicesData,
   type TeamMembersData,
@@ -58,9 +63,10 @@ export const BOOKING_ROUTES = Object.freeze({
 });
 
 /**
- * The two signed-in routes (ADR 0005, D-02): the only routes that carry the
- * client's user token next to the partner token. Both are undocumented; their
- * recorded contract is docs/research/signed-in-routes.md.
+ * The signed-in read routes (ADR 0005, ADR 0006): the routes that carry the
+ * client's user token next to the partner token. Places and records are
+ * undocumented, the profile is documented; the recorded contract is
+ * docs/research/signed-in-routes.md.
  */
 export const USER_ROUTES = Object.freeze({
   places: Object.freeze({
@@ -71,7 +77,42 @@ export const USER_ROUTES = Object.freeze({
     method: 'GET',
     route: '/user/records',
   } as const),
+  profile: Object.freeze({
+    method: 'GET',
+    route: '/booking/user/data',
+  } as const),
 });
+
+/**
+ * The client's writes (ADR 0006): the only non-read routes the server calls,
+ * each made with the signed-in client's user token next to the partner token.
+ * This file is the only source file that names the create and move routes.
+ */
+export const CLIENT_WRITE_ROUTES = Object.freeze({
+  create: Object.freeze({
+    method: 'POST',
+    route: '/book_record/{location_id}',
+  } as const),
+  move: Object.freeze({
+    method: 'PUT',
+    route: '/book_record/{location_id}/{record_id}',
+  } as const),
+  cancel: Object.freeze({
+    method: 'DELETE',
+    route: '/user/records/{record_id}/{record_hash}',
+  } as const),
+});
+
+/**
+ * The hash segment of the cancel path. The recording of 2026-10-08 settled it
+ * (docs/research/signed-in-routes.md, "## Writes", hash answer `placeholder`):
+ * for a signed-in client the user token makes the record id enough, and the
+ * placeholder 0 in the hash position is accepted with a 204. The creation hash
+ * is not needed, so a booking found later can be cancelled too, and no record
+ * token or hash is ever read or sent. A short alphanumeric text, as the path
+ * segment must be.
+ */
+export const CANCEL_HASH_SEGMENT = '0';
 
 export interface BookingForm {
   id: number;
@@ -101,6 +142,18 @@ export interface BusinessCard {
   bookingForms: BookingForm[];
   /** The default form's URL, else default_bookform_url, else the first form's URL, else null. */
   bookingFormUrl: string | null;
+  /** What the business lets a client do to a booking online; null where the card says nothing. */
+  rules: BusinessRules;
+}
+
+/** The business's online cancel and change rules, as the company card states them. */
+export interface BusinessRules {
+  cancelAllowed: boolean | null;
+  /** How long before the start a cancel is still allowed, in seconds; 0 means no limit, null unknown. */
+  cancelBeforeSeconds: number | null;
+  moveAllowed: boolean | null;
+  /** How long before the start a move is still allowed, in seconds; 0 means no limit, null unknown. */
+  moveBeforeSeconds: number | null;
 }
 
 /**
@@ -123,10 +176,16 @@ export interface OwnPlace {
 
 /**
  * One of the signed-in client's own records, as GET /user/records describes
- * it, reduced to what a tool may show. The record id, token, record token,
- * api id and comment are never read (ME-05).
+ * it, reduced to what a tool may show. The token, record token, api id and
+ * comment are never read (ME-05).
  */
 export interface OwnRecord {
+  /**
+   * The booking's own id (the records route's `id`), read since ADR 0006 so a
+   * client can name a booking to move or cancel. The token, record token, api
+   * id and comment are still never read.
+   */
+  id: number;
   locationId: number;
   businessName: string | null;
   /** The business's city text, from the record's company. */
@@ -144,6 +203,24 @@ export interface OwnRecord {
   attendance: number | null;
   /** Sum of the service prices; null when any is unknown or none exist. */
   price: number | null;
+  /** The record's allow_change_record flag; null when the record carries none. */
+  moveAllowed: boolean | null;
+  /** The record's allow_delete_record flag; null when the record carries none. */
+  cancelAllowed: boolean | null;
+}
+
+/** The signed-in client's profile, reduced to what the create call sends. Never returned to a tool result. */
+export interface ClientProfile {
+  fullname: string;
+  /** A plus and digits, as the create route wants it. */
+  phone: string;
+  /** The profile's e-mail when it has one; the create sends it only then. */
+  email: string | null;
+}
+
+/** What a create returns: the id of the new booking. The creation hash is never read. */
+export interface CreatedBooking {
+  bookingId: number;
 }
 
 export interface ServiceCategory {
@@ -162,6 +239,8 @@ export interface BookableService {
   priceMax: number;
   durationSeconds: number | null;
   prepaid: PrepaidSlug | null;
+  /** The service is for membership holders (abonement_restriction above 0). */
+  membershipOnly: boolean;
 }
 
 export interface ServiceCatalog {
@@ -290,6 +369,11 @@ function prepaidSlug(value: unknown): PrepaidSlug | null {
     : null;
 }
 
+/** abonement_restriction above 0, or a true flag: the service is for membership holders only. */
+function isMembershipOnly(value: boolean | number | null | undefined): boolean {
+  return value === true || (typeof value === 'number' && value > 0);
+}
+
 function positiveOrNull(value: number | null | undefined): number | null {
   return typeof value === 'number' && value > 0 ? value : null;
 }
@@ -300,6 +384,18 @@ function nonEmpty(value: string | null | undefined): string | null {
 
 function truthy(value: boolean | number | null | undefined): boolean {
   return value === true || (typeof value === 'number' && value !== 0);
+}
+
+function flagOrNull(
+  value: boolean | number | null | undefined
+): boolean | null {
+  return value === null || value === undefined ? null : truthy(value);
+}
+
+function secondsOrNull(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
 }
 
 function toCard(data: CompanyData): BusinessCard {
@@ -349,6 +445,12 @@ function toCard(data: CompanyData): BusinessCard {
       nonEmpty(data.default_bookform_url) ??
       bookingForms[0]?.url ??
       null,
+    rules: {
+      cancelAllowed: flagOrNull(data.allow_delete_record),
+      cancelBeforeSeconds: secondsOrNull(data.allow_delete_record_delay_step),
+      moveAllowed: flagOrNull(data.allow_change_record),
+      moveBeforeSeconds: secondsOrNull(data.allow_change_record_delay_step),
+    },
   };
 }
 
@@ -442,6 +544,7 @@ function toOwnRecord(record: UserRecord): OwnRecord | null {
       : null;
   const prices = (record.services ?? []).map(lineItemPrice);
   return {
+    id: record.id,
     locationId,
     businessName: nonEmpty(company.public_title) ?? nonEmpty(company.title),
     city: nonEmpty(company.city),
@@ -460,6 +563,8 @@ function toOwnRecord(record: UserRecord): OwnRecord | null {
     attendance:
       typeof record.attendance === 'number' ? record.attendance : null,
     price: sumPrices(prices),
+    moveAllowed: flagOrNull(record.allow_change_record),
+    cancelAllowed: flagOrNull(record.allow_delete_record),
   };
 }
 
@@ -478,6 +583,7 @@ function toCatalog(data: ServicesData): ServiceCatalog {
       priceMax: service.price_max ?? 0,
       durationSeconds: positiveOrNull(service.seance_length),
       prepaid: prepaidSlug(service.prepaid),
+      membershipOnly: isMembershipOnly(service.abonement_restriction),
     });
   }
   return {
@@ -519,6 +625,23 @@ function toTeamMember(member: TeamMembersData[number]): TeamMember {
     rating: shownRating,
     nextFreeDate: nonEmpty(member.seance_date),
   };
+}
+
+/** The phone as the create route wants it: a plus and digits only; null when there is no digit. */
+function createPhone(raw: string | null | undefined): string | null {
+  const digits = (raw ?? '').replace(/\D/g, '');
+  return digits === '' ? null : `+${digits}`;
+}
+
+/** The name the create sends: `fullname`, else `name` and `surname` joined by one space. */
+function createFullname(data: BookingUserData): string | null {
+  const full = nonEmpty(data.fullname?.trim());
+  if (full !== null) return full;
+  const joined = [data.name, data.surname]
+    .map((part) => (part ?? '').trim())
+    .filter((part) => part !== '')
+    .join(' ');
+  return joined === '' ? null : joined;
 }
 
 export type BookingClientOptions = BookingHttpOptions;
@@ -780,6 +903,161 @@ export class BookingClient {
       if (record !== null) records.push(record);
     }
     return records;
+  }
+
+  /**
+   * The signed-in client's profile for the create call (ADR 0006, D-02): the
+   * name, the phone as a plus and digits, and the e-mail when there is one.
+   * Null when the name or the phone is missing, because the create needs both.
+   * `call.userToken` is required. The profile is never returned to a tool.
+   */
+  async myProfile(call: UpstreamCallOptions): Promise<ClientProfile | null> {
+    assertUserToken(call.userToken);
+    const { route, method } = USER_ROUTES.profile;
+    const data = await this.read(
+      { method, route, path: route, ...call },
+      bookingUserDataSchema
+    );
+    const fullname = createFullname(data);
+    const phone = createPhone(data.phone);
+    if (fullname === null || phone === null) return null;
+    return { fullname, phone, email: nonEmpty(data.email?.trim()) };
+  }
+
+  /**
+   * Creates one booking for the signed-in client (ADR 0006, D-02): POST with
+   * exactly phone, fullname, the profile's e-mail when it has one, and one
+   * appointment. No code (the user token replaces it), comment, notify or api
+   * id key. Resolves with the new booking's id; the creation hash is never
+   * read. `call.userToken` is required. The datetime is sent exactly as given.
+   */
+  async createBooking(
+    locationId: number,
+    selection: CheckSelection,
+    profile: ClientProfile,
+    call: UpstreamCallOptions
+  ): Promise<CreatedBooking> {
+    assertUserToken(call.userToken);
+    assertLocationId(locationId);
+    const serviceIds = checkedServiceIds(selection.serviceIds);
+    if (serviceIds.length === 0) {
+      throw new TypeError('at least one service id is required');
+    }
+    assertTeamMemberOrAny(selection.teamMemberId);
+    if (parseSlotDatetime(selection.datetime) === null) {
+      throw new TypeError('datetime must be an ISO 8601 slot datetime');
+    }
+    const { route, method } = CLIENT_WRITE_ROUTES.create;
+    const reply = await this.http.send({
+      method,
+      route,
+      path: `/book_record/${locationId}`,
+      body: {
+        phone: profile.phone,
+        fullname: profile.fullname,
+        ...(profile.email === null ? {} : { email: profile.email }),
+        appointments: [
+          {
+            id: 1,
+            services: [...serviceIds],
+            staff_id: selection.teamMemberId,
+            datetime: selection.datetime,
+          },
+        ],
+      },
+      ...call,
+    });
+    const parsed = bookRecordCreateDataSchema.safeParse(reply.data);
+    if (!parsed.success || (reply.status !== 201 && reply.status !== 200)) {
+      // Not the documented answer, so whether a booking exists is not known.
+      throw new UpstreamError('contract_drift', route, {
+        status: reply.status,
+        cause: parsed.success ? undefined : parsed.error,
+      });
+    }
+    const entry =
+      parsed.data.find((candidate) => candidate.id === 1) ?? parsed.data[0];
+    const bookingId = entry?.record_id;
+    if (
+      typeof bookingId !== 'number' ||
+      !Number.isSafeInteger(bookingId) ||
+      bookingId <= 0
+    ) {
+      // A 201 that names no booking created nothing (the fake 201): the
+      // anti-fraud path, handed off to the business's booking widget.
+      throw new UpstreamError('anti_fraud', route, {
+        status: reply.status,
+      });
+    }
+    return { bookingId };
+  }
+
+  /**
+   * Moves one of the signed-in client's own bookings to a new time (ADR 0006,
+   * D-02): PUT on the location and the booking id with exactly `{ datetime }`
+   * (no comment, ADR 0006). The answer is a records-list entry that carries
+   * the record token, so it is parsed for its shape and never returned. Only a
+   * 200 is a move; any other 2xx is contract_drift. `call.userToken` is
+   * required. The datetime is sent exactly as given.
+   */
+  async moveBooking(
+    locationId: number,
+    bookingId: number,
+    datetime: string,
+    call: UpstreamCallOptions
+  ): Promise<void> {
+    assertUserToken(call.userToken);
+    assertLocationId(locationId);
+    assertPositiveId(bookingId, 'booking id');
+    if (parseSlotDatetime(datetime) === null) {
+      throw new TypeError('datetime must be an ISO 8601 slot datetime');
+    }
+    const { route, method } = CLIENT_WRITE_ROUTES.move;
+    const reply = await this.http.send({
+      method,
+      route,
+      path: `/book_record/${locationId}/${bookingId}`,
+      body: { datetime },
+      ...call,
+    });
+    const parsed = bookRecordMoveDataSchema.safeParse(reply.data);
+    if (!parsed.success || reply.status !== 200) {
+      // Not the documented answer, so whether the booking moved is not known.
+      throw new UpstreamError('contract_drift', route, {
+        status: reply.status,
+        cause: parsed.success ? undefined : parsed.error,
+      });
+    }
+  }
+
+  /**
+   * Cancels one of the signed-in client's own bookings (ADR 0006, D-02):
+   * DELETE on the record id with the placeholder hash segment of
+   * CANCEL_HASH_SEGMENT and no body. Resolves on a 204 (no body) or a 200;
+   * any other 2xx is contract_drift, because whether the booking was cancelled
+   * is then not known. `call.userToken` is required. Nothing is retried with a
+   * different segment.
+   */
+  async cancelBooking(
+    bookingId: number,
+    call: UpstreamCallOptions
+  ): Promise<void> {
+    assertUserToken(call.userToken);
+    assertPositiveId(bookingId, 'booking id');
+    const { route, method } = CLIENT_WRITE_ROUTES.cancel;
+    const reply = await this.http.send({
+      method,
+      route,
+      path: `/user/records/${bookingId}/${CANCEL_HASH_SEGMENT}`,
+      ...call,
+    });
+    const parsed = userRecordCancelDataSchema.safeParse(reply.data);
+    if (!parsed.success || (reply.status !== 204 && reply.status !== 200)) {
+      throw new UpstreamError('contract_drift', route, {
+        status: reply.status,
+        cause: parsed.success ? undefined : parsed.error,
+      });
+    }
   }
 
   /**

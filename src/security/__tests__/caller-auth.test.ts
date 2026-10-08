@@ -15,7 +15,7 @@ import {
 } from '../../__tests__/helpers/http-harness.js';
 import { signProxyRequest } from '../../__tests__/helpers/sign-request.js';
 import { defineTool, type DefinedTool } from '../../tools/factory.js';
-import { SCOPE_BOOK } from '../../tools/scopes.js';
+import { SCOPE_BOOK, SCOPE_READ } from '../../tools/scopes.js';
 import {
   DIRECT_PARTNER_TOKEN_HEADER,
   DIRECT_USER_TOKEN_HEADER,
@@ -96,7 +96,7 @@ const clientTierTool: DefinedTool<unknown> = defineTool({
     openWorldHint: false,
     idempotentHint: false,
   },
-  scopes: [SCOPE_BOOK],
+  scopes: [SCOPE_READ, SCOPE_BOOK],
   input: z.strictObject({}),
   output: z.strictObject({ ok: z.boolean() }),
   render: () => 'booked',
@@ -373,7 +373,7 @@ describe('per-tool scopes in tools/call', () => {
     const body = (await res.json()) as RpcResponse;
     expect(body.result?.isError).toBe(true);
     expect(body.result?.content?.[0]?.text).toContain(
-      'acts for a signed-in client'
+      'books for the signed-in client, and this connection has no client sign-in'
     );
     expect(bookHandlerRuns).toBe(0);
     const lines = await waitForLogs(harness, 2);
@@ -382,6 +382,24 @@ describe('per-tool scopes in tools/call', () => {
       outcome: 'tool_error',
       error_type: 'InsufficientScope',
     });
+  });
+
+  it('grants a client sign-in the book scope: with the direct header always, behind the proxy when the signed list names it', async () => {
+    bookHandlerRuns = 0;
+    const direct = await startApp({ tools: [clientTierTool] });
+    const ran = (await (
+      await postMcp(direct.baseUrl, toolCallBody('demo_book_thing', {}), {
+        [DIRECT_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN,
+      })
+    ).json()) as RpcResponse;
+    expect(ran.result?.isError).not.toBe(true);
+    expect(bookHandlerRuns).toBe(1);
+
+    const anonymous = (await (
+      await postMcp(direct.baseUrl, toolCallBody('demo_book_thing', {}))
+    ).json()) as RpcResponse;
+    expect(anonymous.result?.isError).toBe(true);
+    expect(bookHandlerRuns).toBe(1);
   });
 
   it('runs a base-tier tool on a partner token', async () => {
