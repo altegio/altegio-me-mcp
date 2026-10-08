@@ -25,6 +25,7 @@ import {
 import {
   createRecordingFetch,
   RECORDED_ROUTES,
+  USER_ROUTES,
   type RecordedRoute,
   type Recording,
 } from './helpers/live-recorder.js';
@@ -377,9 +378,15 @@ describeLive('live Altegio booking API (ALTEGIO_E2E=1)', () => {
     // Only file names and a label are reported, never the token.
     expect(problems).toEqual([]);
     if (RECORD) {
-      expect(files.map((name) => name.replace(/\.json$/, '')).sort()).toEqual(
-        [...RECORDED_ROUTES].sort()
-      );
+      // The signed-in routes are recorded by user-routes.live.test.ts.
+      const own = (route: string): boolean =>
+        !(USER_ROUTES as readonly string[]).includes(route);
+      expect(
+        files
+          .map((name) => name.replace(/\.json$/, ''))
+          .filter(own)
+          .sort()
+      ).toEqual([...RECORDED_ROUTES].filter(own).sort());
     }
   });
 

@@ -11,6 +11,11 @@ import { scrubSecrets } from '../../../observability/redact.js';
 // category titles, prices, dates, slot datetimes, booking-form URLs and
 // timezone fields stay as the API wrote them, because the route schemas and the
 // deep link read exactly those.
+//
+// The two signed-in routes (plan 04-01, D-02) add record hashes (a hash lets
+// its holder cancel the booking), person ids, the names of the client and of
+// the team member, and the business titles inside a record; both the partner
+// and the user token are scrubbed, and record ids become 1..n.
 
 /** The six booking routes, named as their URL path segment. */
 const BOOKING_ROUTES = [
@@ -115,6 +120,16 @@ const COORDINATE_KEYS: ReadonlySet<string> = new Set(SANITIZED_KEYS.coordinate);
 const PERSON_CONTAINER_KEYS: ReadonlySet<string> = new Set(
   SANITIZED_KEYS.personContainers
 );
+/** Signed-in routes: keys that are a person's id. */
+const PERSON_ID_KEYS: ReadonlySet<string> = new Set(SANITIZED_KEYS.personIds);
+/** Signed-in routes: objects whose `id` is a person's id. */
+const PERSON_ID_CONTAINER_KEYS: ReadonlySet<string> = new Set(
+  SANITIZED_KEYS.personIdContainers
+);
+/** Signed-in routes: objects holding a team member, named by their own id. */
+const TEAM_MEMBER_CONTAINER_KEYS: ReadonlySet<string> = new Set(
+  SANITIZED_KEYS.teamMemberContainers
+);
 /** Keys whose string leaves are image URLs. */
 const IMAGE_KEYS: ReadonlySet<string> = new Set([
   'avatar',
@@ -126,6 +141,12 @@ const IMAGE_KEYS: ReadonlySet<string> = new Set([
   'photos',
   'company_photos',
   'image_group',
+]);
+
+/** Signed-in routes by exact path suffix; the per-record route has more after it. */
+const USER_ROUTE_PATHS: ReadonlyMap<string, RecordedRoute> = new Map([
+  ['/user/companies/yplaces', 'user_yplaces'],
+  ['/user/records', 'user_records'],
 ]);
 
 const ROUTE_PATTERN = new RegExp(`/(${BOOKING_ROUTES.join('|')})/\\d+(?:/|$)`);
@@ -164,22 +185,60 @@ function sanitizePhone(value: unknown): unknown {
   return SANITIZED_PHONE;
 }
 
-/** `name` inside a user or position object (or a list of them) is a person's name. */
-function renameNested(value: unknown): unknown {
+/** Applies `change` to an object, or to each object of a list. */
+function mapObjects(
+  value: unknown,
+  change: (object: Record<string, unknown>) => Record<string, unknown>
+): unknown {
   if (Array.isArray(value)) {
-    return (value as unknown[]).map((item) => renameNested(item));
+    return (value as unknown[]).map((item) => mapObjects(item, change));
   }
-  if (isRecord(value) && !isEmpty(value.name)) {
-    return { ...value, name: SANITIZED_TEXT };
-  }
-  return value;
+  return isRecord(value) ? change(value) : value;
+}
+
+/** Each non-empty name key of a person object becomes the text placeholder. */
+function renameNested(value: unknown, nameKeys: readonly string[]): unknown {
+  return mapObjects(value, (object) => {
+    const renamed = { ...object };
+    for (const nameKey of nameKeys) {
+      if (!isEmpty(renamed[nameKey])) renamed[nameKey] = SANITIZED_TEXT;
+    }
+    return renamed;
+  });
+}
+
+/** The name of a staff or master object becomes 'Team member <id>'. */
+function nameTeamMember(value: unknown): unknown {
+  return mapObjects(value, (object) => {
+    if (isEmpty(object.name)) return object;
+    const id = /^\d+$/.test(String(object.id)) ? String(object.id) : '0';
+    return { ...object, name: `Team member ${id}` };
+  });
+}
+
+/** The id of a client object is a person id. */
+function clearPersonId(value: unknown): unknown {
+  return mapObjects(value, (object) =>
+    isEmpty(object.id) ? object : { ...object, id: SANITIZED_ID }
+  );
+}
+
+/** What a recording of one route is sanitised with. */
+interface Context {
+  /** The keys whose values are replaced with the text placeholder. */
+  textKeys: ReadonlySet<string>;
+  /** The signed-in rules: hashes, person ids, client names, team members. */
+  user: boolean;
+  /** The keys applied inside a `company` object, when they differ. */
+  companyKeys: ReadonlySet<string> | null;
 }
 
 function sanitizeValue(
   key: string | null,
   value: unknown,
-  textKeys: ReadonlySet<string>
+  context: Context
 ): unknown {
+  const { textKeys, user } = context;
   if (key !== null) {
     if (PHONE_KEYS.has(key)) return sanitizePhone(value);
     if (EMAIL_KEYS.has(key) || textKeys.has(key)) {
@@ -193,6 +252,17 @@ function sanitizeValue(
     if (key.endsWith(SANITIZED_KEYS.idSuffix)) {
       return isEmpty(value) ? value : SANITIZED_ID;
     }
+    if (user) {
+      if (
+        (SANITIZED_KEYS.hash as readonly string[]).includes(key) ||
+        key.endsWith(SANITIZED_KEYS.hashSuffix)
+      ) {
+        return isEmpty(value) ? value : replaceLeaves(value, SANITIZED_TEXT);
+      }
+      if (PERSON_ID_KEYS.has(key)) {
+        return isEmpty(value) ? value : SANITIZED_ID;
+      }
+    }
   }
   if (typeof value === 'string') {
     // An address typed into any other text is removed as well.
@@ -200,21 +270,42 @@ function sanitizeValue(
   }
   if (Array.isArray(value)) {
     return (value as unknown[]).map((item) =>
-      sanitizeValue(null, item, textKeys)
+      sanitizeValue(null, item, context)
     );
   }
   if (isRecord(value)) {
     const cleaned = Object.fromEntries(
       Object.entries(value).map(([childKey, item]) => [
         childKey,
-        sanitizeValue(childKey, item, textKeys),
+        sanitizeValue(
+          childKey,
+          item,
+          childKey === 'company' && context.companyKeys !== null
+            ? { ...context, textKeys: context.companyKeys }
+            : context
+        ),
       ])
     );
-    return key !== null && PERSON_CONTAINER_KEYS.has(key)
-      ? renameNested(cleaned)
-      : cleaned;
+    return key === null ? cleaned : sanitizeContainer(key, cleaned, user);
   }
   return value;
+}
+
+/** A person, client or team member object, once its children are sanitised. */
+function sanitizeContainer(
+  key: string,
+  cleaned: Record<string, unknown>,
+  user: boolean
+): unknown {
+  let result: unknown = cleaned;
+  if (PERSON_CONTAINER_KEYS.has(key)) {
+    result = renameNested(result, user ? SANITIZED_KEYS.nameKeys : ['name']);
+  }
+  if (user && PERSON_ID_CONTAINER_KEYS.has(key)) result = clearPersonId(result);
+  if (user && TEAM_MEMBER_CONTAINER_KEYS.has(key)) {
+    result = nameTeamMember(result);
+  }
+  return result;
 }
 
 /** book_staff entries: the name is a person's name, so it becomes 'Team member <id>'. */
@@ -224,6 +315,14 @@ function renameTeamMembers(data: unknown): unknown {
     isRecord(member) && 'name' in member
       ? { ...member, name: `Team member ${String(member.id)}` }
       : member
+  );
+}
+
+/** user_records entries: the record ids become 1..n in recorded order, so no real id is kept. */
+function renumberRecords(data: unknown): unknown {
+  if (!Array.isArray(data)) return data;
+  return (data as unknown[]).map((record, index) =>
+    isRecord(record) && 'id' in record ? { ...record, id: index + 1 } : record
   );
 }
 
@@ -238,12 +337,16 @@ export function sanitizeRecording(
   data: unknown,
   secrets: readonly string[]
 ): unknown {
-  let result = sanitizeValue(
-    null,
-    data,
-    route === 'company' ? COMPANY_TEXT_KEYS : TEXT_KEYS
-  );
+  const user = (USER_ROUTES as readonly string[]).includes(route);
+  const titled = route === 'company' || route === 'user_yplaces';
+  let result = sanitizeValue(null, data, {
+    textKeys: titled ? COMPANY_TEXT_KEYS : TEXT_KEYS,
+    user,
+    // A business inside a booking is named by its title, a service is not.
+    companyKeys: route === 'user_records' ? COMPANY_TEXT_KEYS : null,
+  });
   if (route === 'book_staff') result = renameTeamMembers(result);
+  if (route === 'user_records') result = renumberRecords(result);
   return scrubSecrets(result, secrets);
 }
 
@@ -258,7 +361,11 @@ function urlOf(input: Parameters<typeof fetch>[0]): URL | null {
 }
 
 function routeOf(url: URL | null): RecordedRoute | null {
-  const match = url === null ? null : ROUTE_PATTERN.exec(url.pathname);
+  if (url === null) return null;
+  for (const [suffix, route] of USER_ROUTE_PATHS) {
+    if (url.pathname.endsWith(suffix)) return route;
+  }
+  const match = ROUTE_PATTERN.exec(url.pathname);
   return match === null ? null : (match[1] as RecordedRoute);
 }
 
@@ -275,7 +382,7 @@ function envelopeData(text: string): unknown {
 
 /**
  * Wraps `inner`: the request goes through unchanged and the caller gets the
- * original response. For each response of one of the six routes, `sink`
+ * original response. For each response of one of the recorded routes, `sink`
  * receives the route, the status and the sanitised envelope data.
  */
 export function createRecordingFetch(
