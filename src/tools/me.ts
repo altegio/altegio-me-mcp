@@ -4,7 +4,8 @@ import {
   type OwnPlace,
   type OwnRecord,
 } from '../booking/client.js';
-import { userCall } from './context.js';
+import { UpstreamError } from '../booking/errors.js';
+import { userCall, type ToolContext } from './context.js';
 import { defineTool } from './factory.js';
 import {
   NAME_MAX_CHARS,
@@ -56,26 +57,82 @@ const placeItemSchema = z.strictObject({
     .string()
     .nullable()
     .describe(
-      'Date of the last visit as YYYY-MM-DD, or null when the places route does not give it.'
+      'Date of the last kept visit as YYYY-MM-DD, taken from the own bookings, or null when there is none or the bookings could not be read.'
+    ),
+  usual: z
+    .strictObject({
+      service_ids: z
+        .array(z.number().int())
+        .describe(
+          'Service ids of the last kept visit, for business_list_dates.'
+        ),
+      service_titles: z
+        .array(z.string().nullable())
+        .describe(`Titles of those services. ${UNTRUSTED_NOTE}`),
+      team_member_id: z
+        .number()
+        .int()
+        .describe(
+          'Team member of the last kept visit; 0 means any team member.'
+        ),
+      team_member_name: untrustedText('Team member name.'),
+      last_booked: z.string().describe('Date of that visit, YYYY-MM-DD.'),
+    })
+    .nullable()
+    .describe(
+      'The usual service and team member at this place, from the last visit that was not cancelled; null when there is none yet or the bookings could not be read.'
     ),
 });
 
 type PlaceItem = z.infer<typeof placeItemSchema>;
 
-const placesOutput = listOutputSchema(placeItemSchema);
+const placesOutput = listOutputSchema(placeItemSchema).extend({
+  usual_available: z
+    .boolean()
+    .describe(
+      'False when the own bookings could not be read just now, so every usual is null for that reason.'
+    ),
+});
 
 const placesInput = z.strictObject(pageInputShape());
 
-function toPlaceItem(place: OwnPlace): PlaceItem {
+function toPlaceItem(
+  place: OwnPlace,
+  usual: Usual | undefined,
+  city: string | null
+): PlaceItem {
   return {
     location_id: place.locationId,
     name: sanitizeUntrusted(place.name, { maxChars: NAME_MAX_CHARS }),
     address: sanitizeUntrusted(place.address),
-    city: sanitizeUntrusted(place.city),
+    city: sanitizeUntrusted(place.city ?? city),
     logo_url: place.logoUrl,
     online_booking: place.onlineBooking,
-    last_visit: place.lastVisit,
+    last_visit: place.lastVisit ?? usual?.date ?? null,
+    usual:
+      usual === undefined
+        ? null
+        : {
+            service_ids: usual.serviceIds,
+            service_titles: usual.serviceTitles.map((title) =>
+              sanitizeUntrusted(title, { maxChars: NAME_MAX_CHARS })
+            ),
+            team_member_id: usual.teamMemberId,
+            team_member_name: sanitizeUntrusted(usual.teamMemberName, {
+              maxChars: NAME_MAX_CHARS,
+            }),
+            last_booked: usual.date,
+          },
   };
+}
+
+/** The city text of each place, from the latest record that has one. */
+function cityByLocation(records: readonly OwnRecord[]): Map<number, string> {
+  const cities = new Map<number, string>();
+  for (const record of records) {
+    if (record.city !== null) cities.set(record.locationId, record.city);
+  }
+  return cities;
 }
 
 function placesPageLine(pagination: Pagination): string {
@@ -91,10 +148,20 @@ function renderPlaces(out: z.infer<typeof placesOutput>): string {
     placesPageLine(pagination),
     ...items.map(
       (item) =>
-        `- location ${item.location_id}: online booking ${item.online_booking ? 'on' : 'off'}, last visit ${item.last_visit ?? 'not given'}.`
+        `- location ${item.location_id}: online booking ${item.online_booking ? 'on' : 'off'}, last visit ${item.last_visit ?? 'not known'}, usual service ${item.usual === null ? 'not known' : 'listed below'}.`
     ),
     'Next: pass a location_id to business_get or business_list_services to look at that business.',
   ];
+  if (items.some((item) => item.usual !== null)) {
+    lines.push(
+      'Next: to book a usual again, pass its location_id, service_ids and team_member_id to business_list_dates.'
+    );
+  }
+  if (!out.usual_available) {
+    lines.push(
+      'The usual service is unknown right now because the own bookings could not be read; call me_list_places again later.'
+    );
+  }
   if (pagination.next_page !== null) {
     lines.push(`More: request page ${pagination.next_page}.`);
   }
@@ -104,6 +171,10 @@ function renderPlaces(out: z.infer<typeof placesOutput>): string {
     fields[`name of location ${item.location_id}`] = item.name;
     fields[`address of location ${item.location_id}`] = item.address;
     fields[`city of location ${item.location_id}`] = item.city;
+    if (item.usual !== null) {
+      fields[`Usual at location ${item.location_id}`] =
+        `${servicesPhrase(item.usual.service_ids, item.usual.service_titles)} with ${teamMemberPhrase(item.usual.team_member_id, item.usual.team_member_name)}, last booked ${item.usual.last_booked}`;
+    }
   }
   return withUntrustedBlock(lines.join('\n'), fields);
 }
@@ -116,24 +187,67 @@ export const meListPlaces = defineTool<
   name: 'me_list_places',
   title: 'List my places',
   description:
-    "Lists the signed-in client's own places: businesses where the client already has bookings and that take bookings through Altegio.me. Each place has the location_id the business tools take, whether online booking is on, and the last visit when known. Needs the client's sign-in. The places route is undocumented, so some fields can be empty.",
+    "Lists the signed-in client's own places: businesses where the client already has bookings and that take bookings through Altegio.me. Each place has the location_id the business tools take, whether online booking is on, the last visit and the usual service and team member from the client's own earlier bookings when known. Needs the client's sign-in. The places and bookings routes are undocumented, so some fields can be empty.",
   kind: 'list',
   scopes: [SCOPE_READ],
   annotations: UPSTREAM_READ_HINTS,
-  upstream: [USER_ROUTES.places],
+  upstream: [USER_ROUTES.places, USER_ROUTES.records],
   input: placesInput,
   output: placesOutput,
   render: renderPlaces,
   handler: async ({ input, deps, ctx }) => {
     try {
-      const places = await deps.booking.myPlaces(userCall(ctx));
-      return paginateArray(places.map(toPlaceItem), input);
+      const call = userCall(ctx);
+      const places = await deps.booking.myPlaces(call);
+      const records = await readRecordsForUsual(deps, call, ctx);
+      const usual =
+        records === null
+          ? new Map<number, Usual>()
+          : usualByLocation(records, Date.now());
+      const cities =
+        records === null ? new Map<number, string>() : cityByLocation(records);
+      return {
+        ...paginateArray(
+          places.map((place) =>
+            toPlaceItem(
+              place,
+              usual.get(place.locationId),
+              cities.get(place.locationId) ?? null
+            )
+          ),
+          input
+        ),
+        usual_available: records !== null,
+      };
     } catch (error) {
       // Every upstream failure becomes an in-band error that names the next action.
       throw toToolError(error);
     }
   },
 });
+
+/**
+ * The records the usual comes from. A failure that says nothing about the
+ * sign-in leaves the places useful on their own, so it gives null (no usual);
+ * a refused sign-in and a call that was dropped or timed out still fail.
+ */
+async function readRecordsForUsual(
+  deps: ToolDeps,
+  call: ReturnType<typeof userCall>,
+  ctx: ToolContext
+): Promise<OwnRecord[] | null> {
+  try {
+    return await deps.booking.myRecords(call);
+  } catch (error) {
+    if (
+      ctx.signal.aborted ||
+      (error instanceof UpstreamError && error.kind === 'unauthorized')
+    ) {
+      throw error;
+    }
+    return null;
+  }
+}
 
 // me_list_bookings (ME-03, D-02): the client's own records, ordered, with the
 // usual service and team member per place (D-03). A record's id and hash, and
