@@ -47,7 +47,7 @@ the client's own places would use `GET /companies` as it is (its `city_id` and
 `business_type_id` filters) and are not in v1 (owner decision 2026-10-08); a client without
 history at a business gives a link or an id, as today.
 
-**D3. The widget stays the completion step.** Booking at an own place ends in the pre-filled
+**D3. The widget stays the completion step.** *Amended 2026-10-08 by [ADR 0006](0006-in-chat-booking-at-own-places.md): at own places the booking is created, moved and cancelled in the chat; the widget remains for prepayment, membership, an inactive widget and foreign places.* Booking at an own place ends in the pre-filled
 widget link (`book_check` plus the deep link), not in an in-chat `book_record`. Writes with the
 user token (`book_record`, cancel, reschedule) come only with the slot-hold case if its research
 says go, under the write-confirmation and anti-fraud rules already listed for them (WRITE-01,
