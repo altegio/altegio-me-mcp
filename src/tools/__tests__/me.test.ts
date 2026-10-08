@@ -8,7 +8,7 @@ import {
 } from '../../booking/__tests__/helpers/fake-fetch.js';
 import { NO_TOOL_CONTEXT, type ToolContext } from '../context.js';
 import type { ToolInvocation } from '../factory.js';
-import { meListBookings } from '../me.js';
+import { meListBookings, meListPlaces } from '../me.js';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from '../untrusted.js';
 
 // The signed-in tools through the real BookingClient with a fake fetch
@@ -34,8 +34,12 @@ interface Setup {
   upstream: FakeFetch;
 }
 
-function setup(records: FakeReply): Setup {
+function setup(
+  records: FakeReply,
+  places: FakeReply = loadFixture('user_yplaces', 'default')
+): Setup {
   const upstream = fakeFetch([
+    { method: 'GET', path: '/user/companies/yplaces', reply: places },
     { method: 'GET', path: '/user/records', reply: records },
   ]);
   return {
@@ -311,5 +315,199 @@ describe('me_list_bookings', () => {
     const text = textOf(result);
     expect(text).toContain("client's sign-in");
     expect(text).not.toContain(USER_TOKEN);
+  });
+});
+
+type PlaceItem = {
+  location_id: number;
+  city: string | null;
+  last_visit: string | null;
+  usual: {
+    service_ids: number[];
+    service_titles: (string | null)[];
+    team_member_id: number;
+    team_member_name: string | null;
+    last_booked: string;
+  } | null;
+};
+
+type PlacesOut = {
+  items: PlaceItem[];
+  usual_available: boolean;
+  pagination: Record<string, unknown>;
+};
+
+describe('me_list_places with the usual (ME-04, D-03)', () => {
+  it('declares both signed-in routes and the read scope', () => {
+    expect(meListPlaces.meta.upstream).toEqual([
+      USER_ROUTES.places,
+      USER_ROUTES.records,
+    ]);
+    expect(meListPlaces.meta.scopes).toEqual([
+      'mcp:me:discover',
+      'mcp:me:read',
+    ]);
+  });
+
+  it('reads the places, then the records, and gives each place its usual', async () => {
+    const { booking, upstream } = setup(loadFixture('user_records', 'default'));
+    const result = await meListPlaces.invoke({}, { booking }, CLIENT_CTX);
+    expect(result.result.isError).not.toBe(true);
+    expect(upstream.calls.map((call) => call.url.pathname)).toEqual([
+      '/api/v1/user/companies/yplaces',
+      '/api/v1/user/records',
+    ]);
+    const out = result.result.structuredContent as PlacesOut;
+    expect(out.usual_available).toBe(true);
+    expect(out.items.map((item) => item.location_id)).toEqual([722227, 726120]);
+    expect(out.items[0]?.usual).toEqual({
+      service_ids: [10303531],
+      service_titles: ['Manicure'],
+      team_member_id: 2098145,
+      team_member_name: 'Anna Smith',
+      last_booked: '2025-06-16',
+    });
+    expect(out.items[1]?.usual).toEqual({
+      service_ids: [10303532],
+      service_titles: ['Hair colouring'],
+      team_member_id: 2098146,
+      team_member_name: 'Maria Lopez',
+      last_booked: '2025-05-05',
+    });
+  });
+
+  it('fills last_visit and the city from the records when the places route gives none', async () => {
+    const { booking } = setup(loadFixture('user_records', 'default'));
+    const result = await meListPlaces.invoke({}, { booking }, CLIENT_CTX);
+    const out = result.result.structuredContent as PlacesOut;
+    expect(out.items.map((item) => item.last_visit)).toEqual([
+      '2025-06-16',
+      '2025-05-05',
+    ]);
+    expect(out.items.map((item) => item.city)).toEqual([
+      'Limassol',
+      'Limassol',
+    ]);
+  });
+
+  it('gives a place with only upcoming or cancelled records no usual and no last visit', async () => {
+    const { booking } = setup({
+      status: 200,
+      body: {
+        success: true,
+        meta: [],
+        data: [
+          {
+            id: 1,
+            company: { id: 722227, public_title: 'Fixture Barber' },
+            services: [{ id: 10303531, title: 'Manicure', cost: 1500 }],
+            datetime: '2099-01-12T10:00:00+0300',
+          },
+        ],
+      },
+    });
+    const result = await meListPlaces.invoke({}, { booking }, CLIENT_CTX);
+    const out = result.result.structuredContent as PlacesOut;
+    expect(out.usual_available).toBe(true);
+    expect(out.items.map((item) => item.usual)).toEqual([null, null]);
+    expect(out.items.map((item) => item.last_visit)).toEqual([null, null]);
+  });
+
+  it('lists the places with usual null and says so when the records fail with 500', async () => {
+    const { booking } = setup({
+      status: 500,
+      body: { success: false, meta: { message: `down for ${USER_TOKEN}` } },
+    });
+    const result = await meListPlaces.invoke({}, { booking }, CLIENT_CTX);
+    expect(result.result.isError).not.toBe(true);
+    expect(result.outcome).toBe('ok');
+    const out = result.result.structuredContent as PlacesOut;
+    expect(out.usual_available).toBe(false);
+    expect(out.items.map((item) => item.usual)).toEqual([null, null]);
+    expect(out.items.map((item) => item.last_visit)).toEqual([null, null]);
+    const text = textOf(result);
+    expect(text).toMatch(/usual service is unknown right now/i);
+    expect(text).not.toContain(USER_TOKEN);
+  });
+
+  it('degrades the same way when the records no longer parse', async () => {
+    const { booking } = setup({
+      status: 200,
+      body: { success: true, data: { records: [] }, meta: [] },
+    });
+    const result = await meListPlaces.invoke({}, { booking }, CLIENT_CTX);
+    expect(result.result.isError).not.toBe(true);
+    expect((result.result.structuredContent as PlacesOut).usual_available).toBe(
+      false
+    );
+  });
+
+  it('fails with the sign-in error when the records refuse the sign-in', async () => {
+    const { booking } = setup({
+      status: 401,
+      body: { success: false, meta: { message: 'expired' } },
+    });
+    const result = await meListPlaces.invoke({}, { booking }, CLIENT_CTX);
+    expect(result.result.isError).toBe(true);
+    expect(textOf(result)).toContain("client's sign-in");
+  });
+
+  it('fails with the call gone, not a degraded list, when the call aborts during the records read', async () => {
+    const controller = new AbortController();
+    const { booking } = setup(() => {
+      // The places have answered; the client drops the call while the records are read.
+      controller.abort();
+      return loadFixture('user_records', 'default');
+    });
+    const result = await meListPlaces.invoke(
+      {},
+      { booking },
+      {
+        ...CLIENT_CTX,
+        signal: controller.signal,
+      }
+    );
+    expect(result.result.isError).toBe(true);
+    expect(result.errorType).toBe('ClientGone');
+  });
+
+  it('puts the usual in the fenced block and names business_list_dates as the next step', async () => {
+    const { booking } = setup(loadFixture('user_records', 'default'));
+    const text = textOf(await meListPlaces.invoke({}, { booking }, CLIENT_CTX));
+    const open = text.indexOf(UNTRUSTED_OPEN);
+    expect(open).toBeGreaterThan(-1);
+    expect(text).toContain('Usual at location 722227');
+    expect(text).toContain('Usual at location 726120');
+    for (const authored of ['Manicure', 'Anna Smith', 'Hair colouring']) {
+      expect(text.slice(0, open)).not.toContain(authored);
+      expect(text.slice(open)).toContain(authored);
+    }
+    expect(text).toContain('business_list_dates');
+    expect(text).toContain('location_id, service_ids and team_member_id');
+  });
+
+  it('says that no own places were found for an empty list', async () => {
+    const { booking } = setup(
+      loadFixture('user_records', 'default'),
+      loadFixture('user_yplaces', 'empty')
+    );
+    const result = await meListPlaces.invoke({}, { booking }, CLIENT_CTX);
+    expect(result.result.isError).not.toBe(true);
+    expect(textOf(result)).toMatch(/no own places/i);
+  });
+
+  it('echoes no record id, hash, client name, phone or e-mail', async () => {
+    const { booking } = setup(loadFixture('user_records', 'default'));
+    const result = await meListPlaces.invoke({}, { booking }, CLIENT_CTX);
+    const structured = JSON.stringify(result.result.structuredContent);
+    const text = textOf(result);
+    for (const bait of BAIT) {
+      expect(structured).not.toContain(bait);
+      expect(text).not.toContain(bait);
+    }
+    const keys = keysAtAnyDepth(result.result.structuredContent);
+    for (const forbidden of ['hash', 'token', 'record_id', 'client', 'phone']) {
+      expect(keys.has(forbidden)).toBe(false);
+    }
   });
 });

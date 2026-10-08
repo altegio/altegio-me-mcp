@@ -42,6 +42,7 @@ import { signProxyRequest } from './helpers/sign-request.js';
 const API_BASE = 'https://api.alteg.io/api/v1';
 const KEY = 'me-flow-test-key-0123456789abcdef0123456789abcdef';
 const PLACES_PATH = '/user/companies/yplaces';
+const RECORDS_PATH = '/user/records';
 
 interface RpcResult {
   result?: {
@@ -126,6 +127,14 @@ async function start(
     },
     {
       method: 'GET',
+      path: RECORDS_PATH,
+      reply: loadFixture(
+        'user_records',
+        scenario === 'empty' ? 'empty' : 'default'
+      ),
+    },
+    {
+      method: 'GET',
       path: '/company/722227',
       reply: loadFixture('company', 'default'),
     },
@@ -178,15 +187,19 @@ describe('me_list_places with the direct user-token header (CALLER_AUTH=optional
       has_more: false,
     });
 
-    expect(upstream.calls).toHaveLength(1);
-    const [call] = upstream.calls;
-    expect(call?.method).toBe('GET');
-    expect(call?.url.pathname).toBe(`/api/v1${PLACES_PATH}`);
-    expect(call?.url.search).toBe('');
-    expect(call?.headers.get('authorization')).toBe(
-      `Bearer ${CANARY_SECRET}, User ${CLIENT_USER_TOKEN}`
-    );
-    expect(call?.headers.get('accept')).toBe(ALTEGIO_ACCEPT);
+    // The places, then the records the usual service comes from.
+    expect(upstream.calls.map((call) => call.url.pathname)).toEqual([
+      `/api/v1${PLACES_PATH}`,
+      `/api/v1${RECORDS_PATH}`,
+    ]);
+    for (const call of upstream.calls) {
+      expect(call.method).toBe('GET');
+      expect(call.url.search).toBe('');
+      expect(call.headers.get('authorization')).toBe(
+        `Bearer ${CANARY_SECRET}, User ${CLIENT_USER_TOKEN}`
+      );
+      expect(call.headers.get('accept')).toBe(ALTEGIO_ACCEPT);
+    }
 
     const [line] = await waitForLogs(harness, 1);
     expect(line).toMatchObject({
@@ -258,7 +271,9 @@ describe('me_list_places with a signed client identity behind the proxy', () => 
     ).toEqual([722227, 726120]);
     expect(
       upstream.calls.map((call) => call.headers.get('authorization'))
-    ).toEqual([`Bearer ${CANARY_SECRET}, User ${CLIENT_USER_TOKEN}`]);
+    ).toEqual(
+      Array(2).fill(`Bearer ${CANARY_SECRET}, User ${CLIENT_USER_TOKEN}`)
+    );
     const [line] = await waitForLogs(harness, 1);
     expect(line).toMatchObject({ caller: 'client', outcome: 'ok' });
     expect(text).not.toContain(CLIENT_USER_TOKEN);
@@ -444,9 +459,9 @@ describe('a partner token that comes with the client sign-in', () => {
     const body = JSON.parse(text) as RpcResult;
     expect(body.result?.isError).not.toBe(true);
     expect(validator.checked).toEqual([PARTNER_TOKEN]);
-    expect(placesAuthorization(upstream)).toEqual([
-      `Bearer ${PARTNER_TOKEN}, User ${CLIENT_USER_TOKEN}`,
-    ]);
+    expect(placesAuthorization(upstream)).toEqual(
+      Array(2).fill(`Bearer ${PARTNER_TOKEN}, User ${CLIENT_USER_TOKEN}`)
+    );
     const [line] = await waitForLogs(harness, 1);
     expect(line).toMatchObject({
       caller: 'client',
@@ -492,9 +507,9 @@ describe('a partner token that comes with the client sign-in', () => {
     );
     const body = (await res.json()) as RpcResult;
     expect(body.result?.isError).not.toBe(true);
-    expect(placesAuthorization(upstream)).toEqual([
-      `Bearer ${PARTNER_TOKEN}, User ${CLIENT_USER_TOKEN}`,
-    ]);
+    expect(placesAuthorization(upstream)).toEqual(
+      Array(2).fill(`Bearer ${PARTNER_TOKEN}, User ${CLIENT_USER_TOKEN}`)
+    );
     const [line] = await waitForLogs(harness, 1);
     expect(line).toMatchObject({
       caller: 'client',
@@ -539,5 +554,164 @@ describe('a refused sign-in upstream', () => {
     expect(body.result?.content?.[0]?.text).toContain("client's sign-in");
     expect(text).not.toContain(CLIENT_USER_TOKEN);
     expect(upstream.calls).toHaveLength(1);
+  });
+});
+
+describe('the own-place flow to a pre-filled widget link (ROADMAP criterion 2, ME-04)', () => {
+  const LOCATION = 722227;
+  const DATE = '2026-10-05';
+
+  function flowUpstream(): FakeFetch {
+    const get = (path: string, reply: ReturnType<typeof loadFixture>) => ({
+      method: 'GET' as const,
+      path,
+      reply,
+    });
+    return fakeFetch([
+      get(PLACES_PATH, loadFixture('user_yplaces', 'default')),
+      get(RECORDS_PATH, loadFixture('user_records', 'default')),
+      get(`/company/${LOCATION}`, loadFixture('company', 'default')),
+      get(
+        `/book_services/${LOCATION}`,
+        loadFixture('book_services', 'default')
+      ),
+      get(`/book_staff/${LOCATION}`, loadFixture('book_staff', 'default')),
+      get(`/book_dates/${LOCATION}`, loadFixture('book_dates', 'default')),
+      get(
+        `/book_times/${LOCATION}/2098145/${DATE}`,
+        loadFixture('book_times', 'named_member')
+      ),
+      {
+        method: 'POST' as const,
+        path: `/book_check/${LOCATION}`,
+        reply: loadFixture('book_check', 'created_empty'),
+      },
+    ]);
+  }
+
+  type Structured = Record<string, unknown>;
+
+  it('goes me_list_places -> business_list_dates -> business_list_time_slots -> book_check with every argument from an earlier result', async () => {
+    const upstream = flowUpstream();
+    const harness = await startApp({
+      tools: productionTools,
+      toolDeps: {
+        booking: new BookingClient({
+          base: API_BASE,
+          token: CANARY_SECRET,
+          fetch: upstream.fetch,
+        }),
+      },
+    });
+    const headers = { [DIRECT_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN };
+    const call = async (
+      name: string,
+      args: Record<string, unknown>
+    ): Promise<Structured> => {
+      const res = await postMcp(
+        harness.baseUrl,
+        toolCallBody(name, args),
+        headers
+      );
+      const body = (await res.json()) as {
+        result?: { isError?: boolean; structuredContent?: Structured };
+      };
+      expect(body.result?.isError).not.toBe(true);
+      return body.result?.structuredContent ?? {};
+    };
+    const items = <T>(out: Structured): T[] => out.items as T[];
+
+    // 1. The own places, each with the usual of an earlier visit.
+    const places = items<{
+      location_id: number;
+      usual: {
+        service_ids: number[];
+        team_member_id: number;
+        team_member_name: string | null;
+      } | null;
+    }>(await call('me_list_places', {}));
+    const place = places.find((entry) => entry.location_id === LOCATION);
+    expect(place?.usual).not.toBeNull();
+    const usual = place?.usual;
+    const serviceIds = usual?.service_ids ?? [];
+    const teamMemberId = usual?.team_member_id ?? -1;
+    expect(serviceIds).toEqual([10303531]);
+    expect(teamMemberId).toBe(2098145);
+
+    // 2. Free dates for the usual service and team member.
+    const dates = items<{ date: string }>(
+      await call('business_list_dates', {
+        location_id: place?.location_id,
+        service_ids: serviceIds,
+        team_member_id: teamMemberId,
+      })
+    );
+    const date = dates[0]?.date ?? '';
+    expect(date).toBe(DATE);
+
+    // 3. Free slots on the first date.
+    const slots = items<{ datetime: string }>(
+      await call('business_list_time_slots', {
+        location_id: place?.location_id,
+        service_ids: serviceIds,
+        team_member_id: teamMemberId,
+        date,
+      })
+    );
+    const datetime = slots[0]?.datetime ?? '';
+    expect(datetime).toBe('2026-10-05T11:00:00+03:00');
+
+    // 4. The check, and the pre-filled widget link.
+    const check = (await call('book_check', {
+      location_id: place?.location_id,
+      service_ids: serviceIds,
+      team_member_id: teamMemberId,
+      datetime,
+    })) as {
+      status: string;
+      link: { url: string; kind: string };
+      selection: { team_member: { id: number } | null };
+    };
+    expect(check.status).toBe('verified');
+    expect(check.link.kind).toBe('preselected');
+    expect(check.link.url).toContain(`m${teamMemberId}s${serviceIds[0]}d`);
+    expect(check.selection.team_member?.id).toBe(teamMemberId);
+
+    // Nothing but reads and the one validation POST left the server.
+    expect(upstream.unmatched).toEqual([]);
+    const posts = upstream.calls.filter((entry) => entry.method === 'POST');
+    expect(posts.map((entry) => entry.url.pathname)).toEqual([
+      `/api/v1/book_check/${LOCATION}`,
+    ]);
+    const paths = upstream.calls.map((entry) => entry.url.pathname);
+    expect(paths.slice(0, 2)).toEqual([
+      `/api/v1${PLACES_PATH}`,
+      `/api/v1${RECORDS_PATH}`,
+    ]);
+    expect(paths.some((path) => path.includes('/user/records/'))).toBe(false);
+    expect(JSON.stringify(harness.logs)).not.toContain(CLIENT_USER_TOKEN);
+  });
+
+  it('offers no tool that writes a booking', async () => {
+    const harness = await startApp({
+      tools: productionTools,
+      toolDeps: {
+        booking: new BookingClient({
+          base: API_BASE,
+          token: CANARY_SECRET,
+          fetch: flowUpstream().fetch,
+        }),
+      },
+    });
+    const res = await postMcp(harness.baseUrl, toolsListBody(), {
+      [DIRECT_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN,
+    });
+    const body = (await res.json()) as RpcResult;
+    const names = (body.result?.tools ?? []).map((tool) => tool.name);
+    expect(names).toContain('me_list_bookings');
+    expect(names).not.toContain('book_record');
+    expect(names.filter((name) => /^(book|cancel|change)_/.test(name))).toEqual(
+      ['book_check']
+    );
   });
 });
