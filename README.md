@@ -1,20 +1,27 @@
 # Altegio.me MCP Server
 
-Status: the stateless MCP server serves eight read-only tools. Six are for a known business:
-business card (`business_get`), services (`business_list_services`), team members
-(`business_list_team_members`), dates with free time (`business_list_dates`), free time slots
-(`business_list_time_slots`) and a slot check that hands off a pre-selected booking widget link
-(`book_check`). Two are for a signed-in client's own data: the places the client already goes to
-(`me_list_places`) and their bookings (`me_list_bookings`), each with the usual service and team
-member, so that "book my usual" ends in the same pre-selected widget link. They call the Altegio public booking API through a throttled client
-(`src/booking`), and a live suite has checked that client against a real business. The hosting
+Status: the stateless MCP server serves eleven tools: eight that read and three that write for a
+signed-in client. Six are for a known business: business card (`business_get`), services
+(`business_list_services`), team members (`business_list_team_members`), dates with free time
+(`business_list_dates`), free time slots (`business_list_time_slots`) and a slot check that hands
+off a pre-selected booking widget link (`book_check`). Two read a signed-in client's own data: the
+places the client already goes to (`me_list_places`) and their bookings (`me_list_bookings`), each
+with the usual service and team member. Three book, move and cancel at the client's own places
+(`me_book`, `me_reschedule_booking`, `me_cancel_booking`), each in two calls: a preview with a
+confirmation token, then the change once the client has agreed. What the chat cannot do (online
+prepayment, memberships, an inactive widget, a place the client has not visited) ends at the
+business's pre-selected widget link, with the reason stated. They call the Altegio public booking
+API through a throttled client
+(`src/booking`), and live suites have checked that client and the three write tools against a real
+business. The hosting
 setup (a Cloud Run pipeline behind the platform proxy, edge limits, secrets as files, alerts) is
 in the repository and live since 2026-10-05 at `https://mcp.alteg.io/me`, see [Deploy](#deploy).
 Callers authenticate with their own Altegio partner token, which the server checks with Altegio
 and uses for their upstream calls. A signed-in client's own tools run on the platform proxy's
 signed client identity; the proxy's phone sign-in page waits for the platform team (I8)
 ([ADR 0004](docs/decisions/0004-caller-authorization-tiers.md),
-[ADR 0005](docs/decisions/0005-own-places-first.md), see [Access](#access)).
+[ADR 0005](docs/decisions/0005-own-places-first.md),
+[ADR 0006](docs/decisions/0006-in-chat-booking-at-own-places.md), see [Access](#access)).
 The catalog of bookable
 businesses and search come next. Decisions and research are in [`docs/`](docs/).
 
@@ -38,10 +45,16 @@ the chat. The caller (a partner's agent or app) presents its Altegio partner tok
   booking widget with service, team member and time already selected. The client confirms
   there, with the business's usual phone confirmation and prepayment rules.
 
-**Phase 2: book in chat.** The client signs in with phone + SMS code on an Altegio.me page
-(OAuth 2.1), then the assistant can create, reschedule and cancel appointments and list the
-client's bookings. Interactive UI (MCP Apps) for hosts that render it. Interactive hosts
-(claude.ai, ChatGPT, connector directories) connect from this phase on, through the same OAuth.
+**Phase 4.1: book in chat at the client's own places (built).** A signed-in client books, moves
+and cancels appointments at the businesses they already go to, in the chat, with `me_book`,
+`me_reschedule_booking` and `me_cancel_booking`. The client's name and phone come from their
+Altegio profile and never from the chat. The widget link stays for partners, anonymous callers,
+services with online prepayment, memberships, inactive widgets and places without earlier visits.
+
+**Phase 2: sign-in for interactive hosts.** The client signs in with phone + SMS code on an
+Altegio.me page (OAuth 2.1), so that interactive hosts (claude.ai, ChatGPT, connector
+directories) can connect and reach the write tools, through the same OAuth. Interactive UI (MCP
+Apps) for hosts that render it.
 
 **Distribution.** Claude Connectors Directory, then ChatGPT plugins, the MCP Registry, and
 outreach to Perplexity, Mistral, xAI and Google. See
@@ -85,7 +98,7 @@ answer 405, because the server is stateless: it never sends an `mcp-session-id`,
 | `src/booking` | Typed client for the six documented booking routes (company card, services, team members, dates, time slots, slot check), the request gate that throttles calls on the partner budget, and the deep-link builder for the booking widget |
 | `src/security` | Proxy signature check, client address and edge limits, the caller's partner token check (`caller-auth.ts`, `partner-token.ts`) |
 | `src/observability` | pino logger, one structured call log line per `POST /mcp`, secret scrubbing |
-| `src/compliance` | Directory-compliance rules R1-R13 and deliberately bad fixtures; test-only, not in the build |
+| `src/compliance` | Directory-compliance rules R1-R14 and deliberately bad fixtures; test-only, not in the build |
 | `src/util` | Package name and version read from `package.json` |
 
 **SDK isolation rule.** Only `src/mcp` imports `@modelcontextprotocol/sdk`; ESLint rejects the
@@ -107,8 +120,9 @@ Other notes:
   route on the platform's `mcp.alteg.io` proxy, next to `https://mcp.alteg.io/pro` (ADR 0002). The `/me` lane
   went live anonymous on 2026-10-05 and moves to partner-token admission (ADR 0004, open item I7).
 - The booking client calls the Altegio public API (`api.alteg.io/api/v1`) with the partner
-  token and never creates, holds or changes a booking: `book_check` is a validation-only call,
-  and a live run confirmed that it leaves the slot free. Later phases add a catalog index of
+  token. Only the three write tools create, move or cancel a booking, and only with the signed-in
+  client's user token after a confirmed preview; `book_check` is a validation-only call, and a
+  live run confirmed that it leaves the slot free. Later phases add a catalog index of
   bookable businesses refreshed by a scheduled job, and phone + SMS sign-in over OAuth 2.1,
   designed together with the platform proxy, which is the authorization server on
   `mcp.alteg.io` (ADR 0002).
@@ -222,7 +236,34 @@ recorded from a live run, and the end-to-end run with a real account, are in
 [`docs/research/signed-in-routes.md`](docs/research/signed-in-routes.md), and some fields can be
 empty. The recorded flow is `me_list_places`, `business_list_dates`, `business_list_time_slots`,
 `book_check`, ending at the pre-selected widget link with the usual service and team member; the
-client confirms in the widget, and no tool writes a booking.
+client can also book in the chat with the tools below.
+
+**The write tools.** With `mcp:me:book` the signed-in client books, moves and cancels at their own
+places, where an own place is any business that holds an earlier record of the client, a cancelled
+one included. Each tool takes two calls with the same arguments:
+
+| Tool | What it does | Scopes | Annotations |
+| --- | --- | --- | --- |
+| `me_book` | Books the chosen services, team member and free slot at an own place | `mcp:me:read`, `mcp:me:book` | write, not destructive |
+| `me_reschedule_booking` | Moves one of the client's upcoming bookings to another free time | `mcp:me:read`, `mcp:me:book` | write, destructive |
+| `me_cancel_booking` | Cancels one of the client's upcoming bookings | `mcp:me:read`, `mcp:me:book` | write, destructive |
+
+- **The confirmation step.** The first call checks with the business and returns a preview and a
+  `confirmation_token`; nothing is changed. After the client agrees, the second call with the same
+  arguments and that token makes the change. The token is valid for 10 minutes, is bound to the
+  selection and the sign-in, and works once per instance. `CONFIRMATION_SECRET` is its key: unset,
+  each process uses its own random key and a confirmation is valid only on the instance that issued
+  it (the client is asked for a new preview elsewhere); set it to share confirmations across
+  instances.
+- **The widget fallbacks.** What the chat cannot do returns `status: fallback` from `me_book`, with
+  a reason (`not_own_place`, `prepayment`, `membership`, `widget_inactive`, `not_confirmed` when the
+  booking service cannot confirm the booking from here, `required_field`) and the pre-filled widget
+  link, or the business contacts when there is no usable form. Nothing is booked in that case.
+- **Personal data.** The client's name and phone are read from their Altegio profile for the
+  create call only. They are never a tool input and never appear in a result or a log.
+- **Evidence.** The routes were recorded from a live create, move and cancel, and the three tools
+  ran once at the owner's business through the real app: see the "Writes" section of
+  [`docs/research/signed-in-routes.md`](docs/research/signed-in-routes.md).
 
 **What waits for I8**, the platform team's request for the proxy's end-client sign-in on `/me`
 (asked 2026-10-08):
@@ -256,7 +297,7 @@ curl -s localhost:8080/health
 npx -y @modelcontextprotocol/inspector@2.9.0 --cli http://localhost:8080/mcp --transport http --method tools/list
 ```
 
-`GET /health` returns the status, version and commit. `tools/list` lists the eight tools. Tool
+`GET /health` returns the status, version and commit. `tools/list` lists the eleven tools. Tool
 calls reach the Altegio API, so they need the real partner token in `.env`; with the placeholder
 token they return an in-band error. `.env.example` sets `CALLER_AUTH=optional`, so these calls
 need no caller token; with `CALLER_AUTH=required` send `Authorization: Bearer <partner token>`. Raw HTTP clients must send `Accept: application/json, text/event-stream` on
@@ -280,7 +321,7 @@ runs lint, format check, typecheck, the Jest tests and the build, in that order.
 set the CI job runs. Tests use Jest with ts-jest, as in Altegio.Pro MCP, and live in
 `__tests__/` directories next to the code. Run them with `npm test` or `npx jest <path>`.
 
-The compliance suite (`src/compliance`) runs every registered tool through rules R1-R13 and fails
+The compliance suite (`src/compliance`) runs every registered tool through rules R1-R14 and fails
 the build when a tool:
 
 - lacks a title or any of the three behaviour hints;
@@ -288,7 +329,8 @@ the build when a tool:
 - has a name longer than 64 characters or outside the naming pattern;
 - has a description that addresses the model with instructions;
 - asks for personal data in its inputs;
-- uses a write or sign-in upstream route (the registry is read-only in this phase).
+- uses a write upstream route other than the three client write routes, or a signed-in route
+  without the client tier (R14: a tool that writes must require `mcp:me:book`).
 
 The live suite checks the booking client against the real Altegio API. It is opt-in and never
 part of CI:
@@ -321,6 +363,20 @@ ALTEGIO_E2E=1 ALTEGIO_E2E_USER=1 node --env-file=.env ./node_modules/jest/bin/je
 ```
 
 It prints the link and the counts and writes them to the git-ignored `loadtest-output/`.
+
+`me-writes.live.test.ts` is the one suite that books. It needs `ALTEGIO_E2E_WRITE=1` as well and
+makes ONE real booking at the owner's own business (location 726120 unless
+`ALTEGIO_E2E_WRITE_LOCATION` says otherwise), at least two days ahead, through `me_book`, moves it
+with `me_reschedule_booking` and cancels it with `me_cancel_booking`, each in its two-call shape, in
+at most 30 upstream calls. The business sees the booking and may send its default reminders. A
+booking it made and did not see cancelled is cancelled in `afterAll`; it prints
+`ME_WRITES_SUMMARY` and writes `loadtest-output/me-writes-run.json`, both holding ids, slot times
+and statuses only:
+
+```bash
+ALTEGIO_E2E=1 ALTEGIO_E2E_USER=1 ALTEGIO_E2E_WRITE=1 node --env-file=.env \
+  ./node_modules/jest/bin/jest.js --testPathPatterns=me-writes.live --runInBand
+```
 
 The real-browser check of the widget link lives in `scripts/browser-check`, an isolated package
 with its own pinned Playwright. It runs only locally and is never part of CI or the Docker image:

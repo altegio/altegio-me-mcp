@@ -353,6 +353,50 @@ git-ignored) are built from an allow-list of ids, slot times, statuses, header n
 the sanitised refusal records; the phone, name, e-mail, hash and both tokens are removed from every
 text of a refusal, and the summary is withheld if it would hold one.
 
+### Tool run
+
+Run once on the owner's machine with the owner's own user token, through the direct
+`X-Altegio-User-Token` header with `CALLER_AUTH=optional`, as the proxy's headless client would send
+it. This is ROADMAP criteria 1 and 5 of Phase 4.1 and ME-06, ME-07 and ME-09 at the tool level: the
+three write tools, each in its two-call shape, against a real business. The route-level contract
+above is the evidence below it. No token, phone, name, record hash or confirmation token is in this
+record; the summary the run printed holds only ids, slot times and statuses.
+
+- **When:** 2026-10-08 14:05 UTC (21:05 UTC+7).
+- **Commit:** ad0ffe5 (branch `phase-04.1-in-chat-booking`, plan 04.1-04).
+- **Command (the owner's shell, the executor never opens the env file):**
+  `ALTEGIO_E2E=1 ALTEGIO_E2E_USER=1 ALTEGIO_E2E_WRITE=1 node --env-file=.env ./node_modules/jest/bin/jest.js --testPathPatterns=me-writes.live --runInBand`
+  (`src/__tests__/me-writes.live.test.ts`; the real app in process, the production request gate, one
+  sequential call per step). 13 of 13 tests passed.
+- **Where:** location 726120, service 13884511 (picked from `business_list_services`, prepayment
+  `not_offered`), team member 0 (any), first slot 2026-10-10T09:00:00+02:00, moved to
+  2026-10-10T10:00:00+02:00.
+
+| Step | Tool | Result |
+| --- | --- | --- |
+| 1 | `me_list_bookings` | ok |
+| 2 | `business_list_services` | ok, a service without online prepayment |
+| 3 | `business_list_dates`, `business_list_time_slots` | ok, ok: two free, non-overlapping slots two days ahead |
+| 4 | `me_book`, first call | status `preview`, a confirmation token issued, nothing booked |
+| 5 | `me_book`, second call | status `booked`, booking id 676218851 |
+| 6 | `me_list_bookings` | ok, the booking is `upcoming` at the first slot |
+| 7 | `me_reschedule_booking`, both calls | `preview`, then `moved` to the second slot |
+| 8 | `me_cancel_booking`, both calls | `preview`, then `cancelled` |
+| 9 | `me_list_bookings` | ok, the booking is `cancelled` |
+
+- **Booking id:** 676218851, at 726120. It was seen cancelled by the closing list, so the cleanup
+  did not run and no `ME_WRITES_CLEANUP` line was printed. Nothing was left at the business.
+- **Upstream calls:** 24 of at most 30. No first failing step, no skipped step.
+- **The suite's own checks passed:** no answer text and no log line held either token; a confirmation
+  token appeared only in the preview answer that issued it; no answer held a phone-number pattern.
+- **Anti-fraud:** none seen. `me_book` booked on its second call with no `fallback`, so the
+  `not_confirmed` answer did not appear, and no fallback of any reason was returned.
+- **What this does not show:** the run came from the owner's own network, not from the Cloud Run
+  egress, so the anti-fraud behaviour keyed on partner types and addresses is still unobserved
+  (WRITE-07 and B3 stay open). The proxy's phone and SMS sign-in and the OAuth step are not covered
+  (I8); the run used the direct header. The move and cancel rules of other businesses are not
+  covered either (726120 only).
+
 ### What 04.1-02 and 04.1-03 build on
 
 - **Profile:** one `GET /booking/user/data` per request, cached for that request only: `name` (and

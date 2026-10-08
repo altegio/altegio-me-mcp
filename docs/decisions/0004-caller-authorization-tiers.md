@@ -48,6 +48,9 @@ It grants the scope `mcp:me:read`, which every current tool needs. There is no a
 *Amended 2026-10-08 (ADR 0005, Phase 4): the base scope is `mcp:me:discover`; `mcp:me:read` is the
 signed-in client's read scope.*
 
+*Amended 2026-10-08 (ADR 0006, Phase 4.1): `mcp:me:book` is granted with a client sign-in; the three
+write tools require it.*
+
 **D2. Altegio decides whether a token is valid.** A token is valid when Altegio accepts it on
 `GET /companies?count=1&page=1`, a call that names no business and answers 401 for an unknown
 token (checked live on 2026-10-06 with a real and a made-up token). Verdicts are cached by the
