@@ -239,6 +239,8 @@ export interface BookableService {
   priceMax: number;
   durationSeconds: number | null;
   prepaid: PrepaidSlug | null;
+  /** The service is for membership holders (abonement_restriction above 0). */
+  membershipOnly: boolean;
 }
 
 export interface ServiceCatalog {
@@ -576,6 +578,7 @@ function toCatalog(data: ServicesData): ServiceCatalog {
       priceMax: service.price_max ?? 0,
       durationSeconds: positiveOrNull(service.seance_length),
       prepaid: prepaidSlug(service.prepaid),
+      membershipOnly: false,
     });
   }
   return {

@@ -506,6 +506,7 @@ describe('services request (book_services)', () => {
           priceMax: 0,
           durationSeconds: null,
           prepaid: 'forbidden',
+          membershipOnly: false,
         },
         {
           id: 10303531,
@@ -515,6 +516,7 @@ describe('services request (book_services)', () => {
           priceMax: 1500,
           durationSeconds: null,
           prepaid: 'forbidden',
+          membershipOnly: false,
         },
         {
           id: 10303532,
@@ -524,6 +526,7 @@ describe('services request (book_services)', () => {
           priceMax: 4500,
           durationSeconds: null,
           prepaid: 'required',
+          membershipOnly: false,
         },
         {
           id: 10303533,
@@ -533,6 +536,7 @@ describe('services request (book_services)', () => {
           priceMax: 3500,
           durationSeconds: null,
           prepaid: 'allowed',
+          membershipOnly: false,
         },
         {
           id: 10303534,
@@ -542,6 +546,7 @@ describe('services request (book_services)', () => {
           priceMax: 500,
           durationSeconds: null,
           prepaid: 'forbidden',
+          membershipOnly: false,
         },
         {
           id: 10303535,
@@ -551,6 +556,7 @@ describe('services request (book_services)', () => {
           priceMax: 700,
           durationSeconds: null,
           prepaid: 'forbidden',
+          membershipOnly: false,
         },
         {
           id: 10303536,
@@ -560,6 +566,7 @@ describe('services request (book_services)', () => {
           priceMax: 12.5,
           durationSeconds: null,
           prepaid: 'forbidden',
+          membershipOnly: false,
         },
       ],
       categories: [
@@ -610,6 +617,7 @@ describe('services request (book_services)', () => {
         priceMax: 2500,
         durationSeconds: 3600,
         prepaid: 'required',
+        membershipOnly: false,
       },
       {
         id: 10303532,
@@ -619,6 +627,7 @@ describe('services request (book_services)', () => {
         priceMax: 4500,
         durationSeconds: 3630,
         prepaid: 'allowed',
+        membershipOnly: false,
       },
       {
         id: 10303531,
@@ -628,6 +637,7 @@ describe('services request (book_services)', () => {
         priceMax: 1500,
         durationSeconds: 2700,
         prepaid: 'forbidden',
+        membershipOnly: false,
       },
       {
         id: 10303537,
@@ -637,6 +647,7 @@ describe('services request (book_services)', () => {
         priceMax: 0,
         durationSeconds: 1800,
         prepaid: null,
+        membershipOnly: false,
       },
     ]);
     expect(catalog.services.map((service) => service.id)).not.toContain(
@@ -2096,5 +2107,57 @@ describe('the cancel route (ADR 0006, D-02)', () => {
     await expect(client.cancelBooking(1.5, call)).rejects.toThrow(TypeError);
     await expect(client.cancelBooking(RECORD, {})).rejects.toThrow(TypeError);
     expect(upstream.calls).toEqual([]);
+  });
+});
+
+describe('the membership restriction of a service (ADR 0006, D-04)', () => {
+  function catalogOf(reply: FakeReply) {
+    const upstream = fakeFetch([
+      { method: 'GET', path: `/book_services/${LOCATION}`, reply },
+    ]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    return client.services(LOCATION);
+  }
+
+  it('marks no service as membership-only in the default catalog, where 0 and an absent key mean none', async () => {
+    const catalog = await catalogOf(loadFixture('book_services', 'default'));
+    expect(catalog.services.length).toBeGreaterThan(0);
+    for (const service of catalog.services) {
+      expect(service.membershipOnly).toBe(false);
+    }
+  });
+
+  it('marks a service whose abonement_restriction is above 0 as membership-only, and no other', async () => {
+    const catalog = await catalogOf(
+      loadFixture('book_services', 'membership_only')
+    );
+    expect(
+      catalog.services
+        .filter((service) => service.membershipOnly)
+        .map((service) => service.id)
+    ).toEqual([10303531]);
+  });
+
+  it('reads a flag and a number the same way, and treats null as none', async () => {
+    const fixture = loadFixture('book_services', 'default');
+    const body = structuredClone(fixture.body) as {
+      data: { services: Record<string, unknown>[] };
+    };
+    const [first, second, third, fourth] = body.data.services;
+    if (!first || !second || !third || !fourth) {
+      throw new Error('the default catalog has fewer than four services');
+    }
+    first.abonement_restriction = true;
+    second.abonement_restriction = 2;
+    third.abonement_restriction = null;
+    fourth.abonement_restriction = false;
+    const catalog = await catalogOf({ ...fixture, body });
+    expect(
+      catalog.services.slice(0, 4).map((service) => service.membershipOnly)
+    ).toEqual([true, true, false, false]);
   });
 });

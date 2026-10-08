@@ -47,6 +47,9 @@ function setup(
     create?: FakeReply;
     profile?: FakeReply;
     company?: FakeReply;
+    services?: FakeReply;
+    /** The card of location 731000, a place the client has no record at. */
+    otherCompany?: FakeReply;
     timeoutMs?: number;
   } = {}
 ): Setup {
@@ -68,8 +71,13 @@ function setup(
     },
     {
       method: 'GET',
+      path: '/company/731000',
+      reply: options.otherCompany ?? loadFixture('company', 'default'),
+    },
+    {
+      method: 'GET',
       path: `/book_services/${LOCATION}`,
-      reply: loadFixture('book_services', 'default'),
+      reply: options.services ?? loadFixture('book_services', 'default'),
     },
     {
       method: 'GET',
@@ -433,5 +441,207 @@ describe('me_book confirm path: an unknown outcome never invites a double bookin
     const text = textOf(confirm);
     expect(text.startsWith('Nothing was booked')).toBe(true);
     expect(text).toContain('without confirmation_token for a new preview');
+  });
+});
+
+// ME-08, D-04: what the chat cannot do ends at the business's booking widget,
+// with the reason and the pre-filled link, in band and with no token.
+
+const PREPAYMENT_SENTENCE =
+  "A chosen service needs online prepayment, which only the business's booking widget takes.";
+const MEMBERSHIP_SENTENCE =
+  "A chosen service is for membership holders, which only the business's booking widget checks.";
+const NOT_OWN_PLACE_SENTENCE =
+  "This client has no earlier booking at this business, so the booking is completed in the business's booking widget.";
+const WIDGET_INACTIVE_SENTENCE =
+  'This business does not take online bookings right now.';
+
+interface PreviewOut extends BookOut {
+  confirmation_token: string | null;
+  preview: { optional_prepayment: boolean } | null;
+}
+
+function previewOf(invocation: ToolInvocation): PreviewOut {
+  return invocation.result.structuredContent as unknown as PreviewOut;
+}
+
+function routesOf(made: Setup): string[] {
+  return made.upstream.calls.map(
+    (call) => `${call.method} ${call.url.pathname.replace('/api/v1', '')}`
+  );
+}
+
+function expectFallback(
+  invocation: ToolInvocation,
+  reason: string,
+  sentence: string
+): PreviewOut {
+  expect(invocation.result.isError).not.toBe(true);
+  const out = previewOf(invocation);
+  expect(out.status).toBe('fallback');
+  expect(out.fallback?.reason).toBe(reason);
+  expect(out.confirmation_token).toBeNull();
+  expect(out.booking_id).toBeNull();
+  expect(textOf(invocation)).toContain(sentence);
+  return out;
+}
+
+describe('me_book preview: the place is not one of the client own places', () => {
+  it('hands off the pre-selected link with the reason not_own_place, after reading only the records and the card', async () => {
+    const made = setup();
+    const result = await made.invoke({ ...SELECTION, location_id: 731000 });
+    const out = expectFallback(result, 'not_own_place', NOT_OWN_PLACE_SENTENCE);
+    expect(out.fallback?.link?.kind).toBe('preselected');
+    expect(out.fallback?.link?.url).toContain('https://n1463903.alteg.io/');
+    expect(out.fallback?.link?.url).toContain('731000');
+    expect(textOf(result)).toContain(out.fallback?.link?.url ?? 'missing');
+    expect(routesOf(made)).toEqual([
+      'GET /user/records',
+      'GET /company/731000',
+    ]);
+    expectNoBait(result);
+  });
+
+  it('names the inactive widget instead when that business also takes no online bookings', async () => {
+    const made = setup({ otherCompany: loadFixture('company', 'inactive') });
+    const result = await made.invoke({ ...SELECTION, location_id: 731000 });
+    const out = expectFallback(
+      result,
+      'widget_inactive',
+      WIDGET_INACTIVE_SENTENCE
+    );
+    expect(out.fallback?.link?.kind).toBe('booking_form');
+    expect(routesOf(made)).toEqual([
+      'GET /user/records',
+      'GET /company/731000',
+    ]);
+  });
+});
+
+describe('me_book preview: prepayment, membership and an unknown prepayment', () => {
+  it('hands off the pre-selected link for a service whose prepayment is required, with no slot check and no token', async () => {
+    const made = setup();
+    const result = await made.invoke({ ...SELECTION, service_ids: [10303532] });
+    const out = expectFallback(result, 'prepayment', PREPAYMENT_SENTENCE);
+    expect(out.fallback?.link?.kind).toBe('preselected');
+    expect(routesOf(made)).not.toContain(`POST /book_check/${LOCATION}`);
+    expect(textOf(result)).toContain(out.fallback?.link?.url ?? 'missing');
+  });
+
+  it('treats a service whose prepaid slug is unknown as prepayment', async () => {
+    const services = loadFixture('book_services', 'default');
+    const body = structuredClone(services.body) as {
+      data: { services: { id: number; prepaid: unknown }[] };
+    };
+    const target = body.data.services.find((entry) => entry.id === 10303531);
+    if (target === undefined) throw new Error('fixture service is missing');
+    target.prepaid = 'mandatory_soon';
+    const made = setup({ services: { ...services, body } });
+    const result = await made.invoke(SELECTION);
+    expectFallback(result, 'prepayment', PREPAYMENT_SENTENCE);
+    expect(routesOf(made)).not.toContain(`POST /book_check/${LOCATION}`);
+  });
+
+  it('treats a service whose prepaid key is missing as prepayment', async () => {
+    const services = loadFixture('book_services', 'default');
+    const body = structuredClone(services.body) as {
+      data: { services: Record<string, unknown>[] };
+    };
+    const target = body.data.services.find((entry) => entry.id === 10303531);
+    if (target === undefined) throw new Error('fixture service is missing');
+    delete target.prepaid;
+    const made = setup({ services: { ...services, body } });
+    expectFallback(
+      await made.invoke(SELECTION),
+      'prepayment',
+      PREPAYMENT_SENTENCE
+    );
+  });
+
+  it('hands off the link for a membership-only service, with no slot check and no token', async () => {
+    const made = setup({
+      services: loadFixture('book_services', 'membership_only'),
+    });
+    const result = await made.invoke(SELECTION);
+    const out = expectFallback(result, 'membership', MEMBERSHIP_SENTENCE);
+    expect(out.fallback?.link?.kind).toBe('preselected');
+    expect(routesOf(made)).not.toContain(`POST /book_check/${LOCATION}`);
+  });
+
+  it('names prepayment before membership when both apply', async () => {
+    const made = setup({
+      services: loadFixture('book_services', 'membership_only'),
+    });
+    const result = await made.invoke({
+      ...SELECTION,
+      service_ids: [10303531, 10303532],
+    });
+    expect(previewOf(result).fallback?.reason).toBe('prepayment');
+  });
+
+  it('keeps a normal preview for optional prepayment and says the widget offers it', async () => {
+    const made = setup();
+    const result = await made.invoke({ ...SELECTION, service_ids: [10303533] });
+    expect(result.result.isError).not.toBe(true);
+    const out = previewOf(result);
+    expect(out.status).toBe('preview');
+    expect(out.confirmation_token).not.toBeNull();
+    expect(out.preview?.optional_prepayment).toBe(true);
+    expect(textOf(result)).toContain(
+      'The business also offers optional online prepayment in its booking widget'
+    );
+  });
+
+  it('does not mention prepayment for a service that offers none', async () => {
+    const made = setup();
+    const result = await made.invoke(SELECTION);
+    expect(previewOf(result).preview?.optional_prepayment).toBe(false);
+    expect(textOf(result)).not.toContain('optional online prepayment');
+  });
+});
+
+describe('me_book preview: a widget that is inactive or has no form', () => {
+  it('hands off the plain booking-form link for an inactive widget that has a form URL, with no slot check and no token', async () => {
+    const made = setup({ company: loadFixture('company', 'inactive') });
+    const result = await made.invoke(SELECTION);
+    const out = expectFallback(
+      result,
+      'widget_inactive',
+      WIDGET_INACTIVE_SENTENCE
+    );
+    expect(out.fallback?.link).toEqual({
+      url: `https://n1463903.alteg.io/company/${LOCATION}`,
+      kind: 'booking_form',
+    });
+    expect(textOf(result)).toContain(out.fallback?.link?.url ?? 'missing');
+    expect(routesOf(made)).not.toContain(`POST /book_check/${LOCATION}`);
+  });
+
+  it('gives no link and names the business contacts when the card has no usable form', async () => {
+    const made = setup({ company: loadFixture('company', 'no_forms') });
+    const result = await made.invoke(SELECTION);
+    const out = expectFallback(
+      result,
+      'widget_inactive',
+      WIDGET_INACTIVE_SENTENCE
+    );
+    expect(out.fallback?.link).toBeNull();
+    const text = textOf(result);
+    expect(text).toContain('business_get');
+    expect(text).not.toMatch(/https?:\/\//);
+    expect(routesOf(made)).not.toContain(`POST /book_check/${LOCATION}`);
+  });
+});
+
+describe('me_book fallbacks: the confirm path keeps its own', () => {
+  it('still returns not_confirmed for an anti-fraud answer of the create', async () => {
+    const made = setup({
+      create: loadFixture('book_record_create', 'anti_fraud_412'),
+    });
+    const { confirm } = await previewThenConfirm(made);
+    expect(previewOf(confirm).fallback?.reason).toBe('not_confirmed');
+    expect(textOf(confirm)).toContain(
+      'Not booked: the business could not confirm this booking from here.'
+    );
   });
 });

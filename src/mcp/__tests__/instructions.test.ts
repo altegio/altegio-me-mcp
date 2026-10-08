@@ -30,14 +30,50 @@ describe('SERVER_INSTRUCTIONS', () => {
     for (const tool of ['me_list_places', 'me_list_bookings', 'book_check']) {
       expect(SERVER_INSTRUCTIONS).toContain(tool);
     }
-    // The sentence that describes the flow, whole, carries no sign-in wording.
+    // The sentence that lists the own places, whole, carries no sign-in wording.
     const sentence = SERVER_INSTRUCTIONS.split('. ').find((part) =>
       part.includes('me_list_places')
     );
     expect(sentence).toBeDefined();
     expect(sentence).not.toMatch(/\b(sms|code|otp|e-?mail|password)\b/i);
     expect(sentence).not.toMatch(/phone/i);
-    expect(sentence).toContain('pre-filled');
+  });
+
+  it('describes booking, moving and cancelling at own places in the chat, in two steps', () => {
+    for (const tool of [
+      'me_book',
+      'me_reschedule_booking',
+      'me_cancel_booking',
+    ]) {
+      expect(SERVER_INSTRUCTIONS).toContain(tool);
+    }
+    expect(SERVER_INSTRUCTIONS).toMatch(/preview/i);
+    expect(SERVER_INSTRUCTIONS).toMatch(/confirmation token/i);
+    expect(SERVER_INSTRUCTIONS).toMatch(/after the client agreed/i);
+  });
+
+  it('keeps the pre-filled widget link for what the chat cannot do', () => {
+    expect(SERVER_INSTRUCTIONS).toContain('pre-filled');
+    for (const case_ of [
+      /prepayment/i,
+      /membership/i,
+      /inactive/i,
+      /earlier visit/i,
+      /without a client sign-in/i,
+    ]) {
+      expect(SERVER_INSTRUCTIONS).toMatch(case_);
+    }
+  });
+
+  it('says the tools take no client personal data and that name and phone come from the profile', () => {
+    expect(SERVER_INSTRUCTIONS).toMatch(/neither take nor return/i);
+    expect(SERVER_INSTRUCTIONS).toMatch(/Altegio profile/);
+  });
+
+  it('no longer says that every booking is completed in the widget', () => {
+    expect(SERVER_INSTRUCTIONS).not.toMatch(
+      /A booking is completed by the client in the business's own Altegio booking widget/
+    );
   });
 
   it('reaches an SDK client through initialize', async () => {

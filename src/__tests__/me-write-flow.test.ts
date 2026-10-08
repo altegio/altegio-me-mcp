@@ -142,6 +142,7 @@ interface Scenario {
   recordsAfterCreate?: 'fail';
   move?: string;
   cancel?: string;
+  company?: string;
 }
 
 async function start(
@@ -166,6 +167,11 @@ async function start(
     {
       method: 'GET',
       path: `/company/${LOCATION}`,
+      reply: loadFixture('company', scenario.company ?? 'default'),
+    },
+    {
+      method: 'GET',
+      path: '/company/731000',
       reply: loadFixture('company', 'default'),
     },
     {
@@ -332,17 +338,67 @@ describe('me_book, first call: the preview', () => {
     }
   });
 
-  it('refuses a place the client has no record at, naming book_check, after reading only the records', async () => {
+  it('hands off the pre-filled link, with the reason, for a place the client has no record at, and issues no token', async () => {
     const { harness, upstream } = await start();
-    const { body } = await callBook(harness, {
+    const { body, text } = await callBook(harness, {
       ...SELECTION,
       location_id: 731000,
     });
-    expect(body.result?.isError).toBe(true);
-    const text = body.result?.content?.[0]?.text ?? '';
-    expect(text).toContain('not among the places');
-    expect(text).toContain('book_check');
-    expect(routesOf(upstream)).toEqual(['GET /user/records']);
+    expect(body.result?.isError).not.toBe(true);
+    const out = body.result?.structuredContent as unknown as {
+      status: string;
+      confirmation_token: string | null;
+      fallback: { reason: string; link: { url: string; kind: string } | null };
+    };
+    expect(out.status).toBe('fallback');
+    expect(out.confirmation_token).toBeNull();
+    expect(out.fallback.reason).toBe('not_own_place');
+    expect(out.fallback.link?.kind).toBe('preselected');
+    expect(text).toContain('no earlier booking at this business');
+    expect(text).toContain(out.fallback.link?.url ?? 'missing');
+    expect(routesOf(upstream)).toEqual([
+      'GET /user/records',
+      'GET /company/731000',
+    ]);
+  });
+
+  it('hands off the pre-filled link for a service that needs prepayment, with no slot check', async () => {
+    const { harness, upstream } = await start();
+    const { body, text } = await callBook(harness, {
+      ...SELECTION,
+      service_ids: [10303532],
+    });
+    const out = body.result?.structuredContent as unknown as {
+      status: string;
+      fallback: { reason: string; link: { kind: string } | null };
+    };
+    expect(out.status).toBe('fallback');
+    expect(out.fallback.reason).toBe('prepayment');
+    expect(out.fallback.link?.kind).toBe('preselected');
+    expect(text).toContain('needs online prepayment');
+    expect(routesOf(upstream)).not.toContain(`POST /book_check/${LOCATION}`);
+  });
+
+  it('hands off the plain form link for an inactive widget, and no link when the card has no form', async () => {
+    const inactive = await start({ company: 'inactive' });
+    const first = await callBook(inactive.harness, SELECTION);
+    const firstOut = first.body.result?.structuredContent as unknown as {
+      fallback: { reason: string; link: { kind: string } | null };
+    };
+    expect(firstOut.fallback.reason).toBe('widget_inactive');
+    expect(firstOut.fallback.link?.kind).toBe('booking_form');
+
+    const noForms = await start({ company: 'no_forms' });
+    const second = await callBook(noForms.harness, SELECTION);
+    const secondOut = second.body.result?.structuredContent as unknown as {
+      fallback: { reason: string; link: unknown };
+    };
+    expect(secondOut.fallback.reason).toBe('widget_inactive');
+    expect(secondOut.fallback.link).toBeNull();
+    expect(second.text).toContain('business_get');
+    expect(noForms.upstream.calls.some((call) => call.method === 'PUT')).toBe(
+      false
+    );
   });
 });
 
