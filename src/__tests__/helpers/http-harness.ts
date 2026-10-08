@@ -13,6 +13,9 @@ import type { PartnerTokenValidator } from '../../security/partner-token.js';
 export const CANARY_SECRET = 'canary-secret-token-0001';
 export const ALLOWED_ORIGIN = 'http://localhost:8080';
 
+/** The Altegio user token of a signed-in client; a canary for the no-leak tests. */
+export const CLIENT_USER_TOKEN = 'client-user-token-0001-abcdef';
+
 /** A partner token the stub validator accepts. */
 export const PARTNER_TOKEN = 'partner-token-valid-0001';
 /** A partner token whose check cannot be completed (Altegio down). */

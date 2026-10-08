@@ -4,7 +4,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { BOOKING_ROUTES } from '../../booking/client.js';
+import { BOOKING_ROUTES, USER_ROUTES } from '../../booking/client.js';
 import { createMcpServer } from '../../mcp/create-server.js';
 import { SERVER_INSTRUCTIONS } from '../../mcp/instructions.js';
 import { createCallRecord } from '../../observability/call-log.js';
@@ -114,8 +114,9 @@ describe('compliant tools', () => {
     expect(READ_ONLY_POST_ROUTES.has(BOOKING_ROUTES.check.route)).toBe(true);
   });
 
-  it('registers exactly the six Phase 2 tools, in booking-flow order', () => {
+  it('registers the own-places tool first, then the six booking tools in booking-flow order', () => {
     expect(productionTools.map((tool) => tool.name)).toEqual([
+      'me_list_places',
       'business_get',
       'business_list_services',
       'business_list_team_members',
@@ -125,8 +126,11 @@ describe('compliant tools', () => {
     ]);
   });
 
-  it('declares only BOOKING_ROUTES entries as upstream calls', () => {
-    const routes = Object.values(BOOKING_ROUTES);
+  it('declares only BOOKING_ROUTES or USER_ROUTES entries as upstream calls', () => {
+    const routes = [
+      ...Object.values(BOOKING_ROUTES),
+      ...Object.values(USER_ROUTES),
+    ];
     for (const tool of productionTools) {
       expect(tool.meta.upstream.length).toBeGreaterThan(0);
       for (const call of tool.meta.upstream) {

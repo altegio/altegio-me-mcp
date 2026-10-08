@@ -27,6 +27,12 @@ export const SIGNED_PARTNER_TOKEN_HEADER = 'x-mcp-auth-altegio-partner-token';
 export const DIRECT_PARTNER_TOKEN_HEADER = 'x-altegio-partner-token';
 
 export const CALLER_KIND_PARTNER = 'partner';
+export const CALLER_KIND_CLIENT = 'client';
+/** The signed client identity: the user token and the scopes the proxy grants. */
+export const SIGNED_USER_TOKEN_HEADER = 'x-mcp-auth-altegio-user-token';
+export const SIGNED_SCOPE_HEADER = 'x-mcp-auth-scope';
+/** Sent by a client itself when no proxy is in front (local and headless runs). */
+export const DIRECT_USER_TOKEN_HEADER = 'x-altegio-user-token';
 
 /** Shown in WWW-Authenticate; names the protection space, not a host. */
 const REALM = 'altegio-me';

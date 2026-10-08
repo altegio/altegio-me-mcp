@@ -53,6 +53,22 @@ export const BOOKING_ROUTES = Object.freeze({
   } as const),
 });
 
+/**
+ * The two signed-in routes (ADR 0005, D-02): the only routes that carry the
+ * client's user token next to the partner token. Both are undocumented; their
+ * recorded contract is docs/research/signed-in-routes.md.
+ */
+export const USER_ROUTES = Object.freeze({
+  places: Object.freeze({
+    method: 'GET',
+    route: '/user/companies/yplaces',
+  } as const),
+  records: Object.freeze({
+    method: 'GET',
+    route: '/user/records',
+  } as const),
+});
+
 export interface BookingForm {
   id: number;
   title: string | null;
