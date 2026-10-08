@@ -12,8 +12,8 @@ import { scrubSecrets } from '../../../observability/redact.js';
 // timezone fields stay as the API wrote them, because the route schemas and the
 // deep link read exactly those.
 
-/** The six upstream routes, named as their URL path segment. */
-export const RECORDED_ROUTES = [
+/** The six booking routes, named as their URL path segment. */
+const BOOKING_ROUTES = [
   'company',
   'book_services',
   'book_staff',
@@ -21,6 +21,16 @@ export const RECORDED_ROUTES = [
   'book_times',
   'book_check',
 ] as const;
+
+/**
+ * The two signed-in routes, named for the file they are recorded to. They are
+ * recognised by their exact path (`/user/companies/yplaces`, `/user/records`),
+ * never by a segment followed by an id.
+ */
+export const USER_ROUTES = ['user_yplaces', 'user_records'] as const;
+
+/** Every recorded route; one committed file per route. */
+export const RECORDED_ROUTES = [...BOOKING_ROUTES, ...USER_ROUTES] as const;
 
 export type RecordedRoute = (typeof RECORDED_ROUTES)[number];
 
@@ -58,7 +68,25 @@ export const SANITIZED_KEYS = {
   /** Every key ending in this is replaced with SANITIZED_ID. */
   idSuffix: '_account_id',
   /** Objects whose `name` is a person's name, replaced with SANITIZED_TEXT. */
-  personContainers: ['user', 'position'],
+  personContainers: ['user', 'position', 'client'],
+  /** Signed-in routes: keys equal to these, or ending in `hashSuffix`, are record hashes. */
+  hash: ['hash'],
+  hashSuffix: '_hash',
+  /** Signed-in routes: replaced with SANITIZED_ID. */
+  personIds: ['client_id', 'user_id'],
+  /** Signed-in routes: objects whose `id` is a person id. */
+  personIdContainers: ['client'],
+  /** Signed-in routes: the name keys of a person container. */
+  nameKeys: [
+    'name',
+    'fullname',
+    'surname',
+    'patronymic',
+    'first_name',
+    'last_name',
+  ],
+  /** Signed-in routes: objects whose `name` becomes 'Team member <id>'. */
+  teamMemberContainers: ['staff', 'master'],
 } as const;
 
 const EMAIL_PATTERN = /[\w.+-]+@[\w-]+\.[\w.]+/g;
@@ -100,7 +128,7 @@ const IMAGE_KEYS: ReadonlySet<string> = new Set([
   'image_group',
 ]);
 
-const ROUTE_PATTERN = new RegExp(`/(${RECORDED_ROUTES.join('|')})/\\d+(?:/|$)`);
+const ROUTE_PATTERN = new RegExp(`/(${BOOKING_ROUTES.join('|')})/\\d+(?:/|$)`);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
