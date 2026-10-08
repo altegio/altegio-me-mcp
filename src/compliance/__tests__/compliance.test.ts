@@ -127,7 +127,7 @@ describe('compliant tools', () => {
       productionTools
         .filter((tool) => tool.spec.annotations.readOnlyHint !== true)
         .map((tool) => tool.name)
-    ).toEqual(['me_book']);
+    ).toEqual(['me_book', 'me_reschedule_booking']);
     const names = productionTools.map((tool) => tool.name);
     expect(new Set(names).size).toBe(names.length);
   });
@@ -137,7 +137,7 @@ describe('compliant tools', () => {
     expect(READ_ONLY_POST_ROUTES.has(BOOKING_ROUTES.check.route)).toBe(true);
   });
 
-  it('registers the two own-data tools first, then the six booking tools in booking-flow order, then the write tool', () => {
+  it('registers the two own-data tools first, then the six booking tools in booking-flow order, then the write tools', () => {
     expect(productionTools.map((tool) => tool.name)).toEqual([
       'me_list_places',
       'me_list_bookings',
@@ -148,6 +148,7 @@ describe('compliant tools', () => {
       'business_list_time_slots',
       'book_check',
       'me_book',
+      'me_reschedule_booking',
     ]);
   });
 
@@ -258,6 +259,7 @@ describe('R14 signed-in routes', () => {
       'me_list_places',
       'me_list_bookings',
       'me_book',
+      'me_reschedule_booking',
     ]);
     for (const tool of own) expect(tool.meta.scopes).toContain(SCOPE_READ);
   });

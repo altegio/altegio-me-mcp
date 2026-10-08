@@ -30,6 +30,7 @@ import {
   startApp,
   stubPartnerValidator,
   toolCallBody,
+  toolsListBody,
   waitForLogs,
   type Harness,
 } from './helpers/http-harness.js';
@@ -46,6 +47,8 @@ const SERVICE = 10303531;
 const TEAM_MEMBER = 2098145;
 const DATETIME = '2099-01-12T11:00:00+03:00';
 const NEW_RECORD_ID = 990001;
+const MOVE_TO = '2099-01-13T11:00:00+03:00';
+const MOVED_DATETIME = '2099-01-13T11:00:00+0300';
 const CLIENT_HEADERS = { [DIRECT_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN };
 const USER_AUTHORIZATION = `Bearer ${CANARY_SECRET}, User ${CLIENT_USER_TOKEN}`;
 const PARTNER_AUTHORIZATION = `Bearer ${CANARY_SECRET}`;
@@ -58,6 +61,7 @@ const BAIT = [
   'fixture.client@example.invalid',
   'fixture-user-token-0001',
   'fixture-hash-0002',
+  'fixture-hash-0005',
 ];
 
 interface BookOutput {
@@ -96,11 +100,21 @@ afterEach(async () => {
 
 /** The default records, plus the new booking once the create call has been made. */
 function recordsReply(
-  state: { created: boolean },
+  state: { created: boolean; moved: boolean },
   failAfterCreate: boolean
 ): () => FixtureResponse {
   return () => {
     const fixture = loadFixture('user_records', 'default');
+    if (state.moved) {
+      const moved = structuredClone(fixture.body) as {
+        data: { id: number; datetime: string; date: string }[];
+      };
+      const record = moved.data.find((entry) => entry.id === 5);
+      if (record === undefined) throw new Error('fixture record 5 is missing');
+      record.datetime = MOVED_DATETIME;
+      record.date = '2099-01-13 11:00:00';
+      return { ...fixture, body: moved };
+    }
     if (!state.created) return fixture;
     if (failAfterCreate) {
       return { status: 500, body: { success: false, meta: {} } };
@@ -126,13 +140,14 @@ interface Scenario {
   profile?: string;
   records?: string;
   recordsAfterCreate?: 'fail';
+  move?: string;
 }
 
 async function start(
   scenario: Scenario = {},
   overrides: Parameters<typeof startApp>[0] = {}
 ): Promise<{ harness: Harness; upstream: FakeFetch }> {
-  const state = { created: false };
+  const state = { created: false, moved: false };
   const routes: FakeRoute[] = [
     {
       method: 'GET',
@@ -173,6 +188,14 @@ async function start(
       reply: () => {
         state.created = true;
         return loadFixture('book_record_create', scenario.create ?? 'created');
+      },
+    },
+    {
+      method: 'PUT',
+      path: `/book_record/${LOCATION}/5`,
+      reply: () => {
+        state.moved = true;
+        return loadFixture('book_record_move', scenario.move ?? 'moved');
       },
     },
   ];
@@ -670,5 +693,256 @@ describe('me_book confirmation tokens', () => {
       JSON.stringify(harness.logs),
     ].join('\n');
     expect(everything).not.toContain(secret);
+  });
+});
+
+// me_reschedule_booking over HTTP (ADR 0006, D-02, D-03): the same two steps
+// for a booking the client already has.
+
+async function callChange(
+  harness: Harness,
+  name: string,
+  args: Record<string, unknown>,
+  headers: Record<string, string> = CLIENT_HEADERS
+): Promise<{ body: RpcResult; text: string }> {
+  const res = await postMcp(harness.baseUrl, toolCallBody(name, args), headers);
+  expect(res.status).toBe(200);
+  const text = await res.text();
+  return { body: JSON.parse(text) as RpcResult, text };
+}
+
+const MOVE = { booking_id: 5, datetime: MOVE_TO };
+
+async function movePreview(
+  harness: Harness
+): Promise<{ token: string; out: BookOutput }> {
+  const { body } = await callChange(harness, 'me_reschedule_booking', MOVE);
+  const out = body.result?.structuredContent;
+  if (
+    out?.confirmation_token === null ||
+    out?.confirmation_token === undefined
+  ) {
+    throw new Error('the preview carried no confirmation token');
+  }
+  return { token: out.confirmation_token, out };
+}
+
+describe('me_reschedule_booking, first call: the preview', () => {
+  it('reads the records, the card and the slot, writes nothing and returns a token', async () => {
+    const { harness, upstream } = await start();
+    const { body, text } = await callChange(
+      harness,
+      'me_reschedule_booking',
+      MOVE
+    );
+    expect(body.result?.isError).not.toBe(true);
+    const out = body.result?.structuredContent;
+    expect(out?.status).toBe('preview');
+    expect(out?.confirmation_token).toMatch(/^\d+\.[A-Za-z0-9_-]{43}$/);
+    expect(text).toContain('Preview, nothing is moved yet');
+    expect(routesOf(upstream).sort()).toEqual(
+      [
+        'GET /user/records',
+        `GET /company/${LOCATION}`,
+        `POST /book_check/${LOCATION}`,
+      ].sort()
+    );
+    for (const call of upstream.calls) {
+      const route = `${call.method} ${call.url.pathname.replace('/api/v1', '')}`;
+      expect(call.headers.get('authorization')).toBe(
+        route === 'GET /user/records'
+          ? USER_AUTHORIZATION
+          : PARTNER_AUTHORIZATION
+      );
+    }
+  });
+
+  it('refuses a booking that is not the client own, after reading only the records', async () => {
+    const { harness, upstream } = await start();
+    const { body } = await callChange(harness, 'me_reschedule_booking', {
+      ...MOVE,
+      booking_id: 777,
+    });
+    expect(body.result?.isError).toBe(true);
+    const text = body.result?.content?.[0]?.text ?? '';
+    expect(text.startsWith('Nothing was moved')).toBe(true);
+    expect(text).toContain('me_list_bookings');
+    expect(routesOf(upstream)).toEqual(['GET /user/records']);
+  });
+});
+
+describe('me_reschedule_booking, second call: the move', () => {
+  it('moves with exactly the new datetime and the user token, and returns the booking at its new time', async () => {
+    const { harness, upstream } = await start();
+    const { token } = await movePreview(harness);
+    upstream.calls.length = 0;
+
+    const { body, text } = await callChange(harness, 'me_reschedule_booking', {
+      ...MOVE,
+      confirmation_token: token,
+    });
+    expect(body.result?.isError).not.toBe(true);
+    const out = body.result?.structuredContent;
+    expect(out?.status).toBe('moved');
+    expect(out?.booking).toMatchObject({
+      booking_id: 5,
+      status: 'upcoming',
+      datetime: MOVED_DATETIME,
+    });
+    expect(text).toContain('Moved: booking 5');
+    expect(routesOf(upstream)).toEqual([
+      'GET /user/records',
+      `PUT /book_record/${LOCATION}/5`,
+      'GET /user/records',
+    ]);
+    for (const call of upstream.calls) {
+      expect(call.headers.get('authorization')).toBe(USER_AUTHORIZATION);
+    }
+    const put = upstream.calls[1];
+    expect(JSON.parse(put?.body ?? 'null')).toEqual({ datetime: MOVE_TO });
+  });
+
+  it('says the time was taken when the PUT answers 433, and moves nothing', async () => {
+    const { harness, upstream } = await start({ move: 'taken_433' });
+    const { token } = await movePreview(harness);
+    upstream.calls.length = 0;
+    const { body } = await callChange(harness, 'me_reschedule_booking', {
+      ...MOVE,
+      confirmation_token: token,
+    });
+    expect(body.result?.isError).toBe(true);
+    const text = body.result?.content?.[0]?.text ?? '';
+    expect(text).toContain('Nothing was moved: this time was taken meanwhile.');
+    expect(text).toContain('business_list_time_slots');
+  });
+
+  it('refuses a token that was used once already, and sends one PUT only', async () => {
+    const { harness, upstream } = await start();
+    const { token } = await movePreview(harness);
+    await callChange(harness, 'me_reschedule_booking', {
+      ...MOVE,
+      confirmation_token: token,
+    });
+    upstream.calls.length = 0;
+    const { body } = await callChange(harness, 'me_reschedule_booking', {
+      ...MOVE,
+      confirmation_token: token,
+    });
+    expect(body.result?.isError).toBe(true);
+    expect(body.result?.content?.[0]?.text).toContain('already used');
+    expect(upstream.calls).toEqual([]);
+  });
+
+  it('refuses a token that another tool issued, with no upstream call', async () => {
+    const { harness, upstream } = await start();
+    const booked = await preview(harness);
+    upstream.calls.length = 0;
+    const { body } = await callChange(harness, 'me_reschedule_booking', {
+      ...MOVE,
+      confirmation_token: booked.token,
+    });
+    expect(body.result?.isError).toBe(true);
+    expect(
+      (body.result?.content?.[0]?.text ?? '').startsWith('Nothing was moved')
+    ).toBe(true);
+    expect(upstream.calls).toEqual([]);
+  });
+});
+
+describe('me_reschedule_booking output and logs', () => {
+  it('leaks neither the sign-in, the profile nor a record token into any response or log line', async () => {
+    const { harness } = await start();
+    const first = await callChange(harness, 'me_reschedule_booking', MOVE);
+    const token = first.body.result?.structuredContent?.confirmation_token;
+    const second = await callChange(harness, 'me_reschedule_booking', {
+      ...MOVE,
+      confirmation_token: token,
+    });
+    await waitForLogs(harness, 2);
+    const everything = [
+      first.text,
+      second.text,
+      JSON.stringify(harness.logs),
+    ].join('\n');
+    for (const bait of BAIT) expect(everything).not.toContain(bait);
+  });
+
+  it('takes no phone, name, e-mail or code in its input', () => {
+    const tool = productionTools.find(
+      (entry) => entry.name === 'me_reschedule_booking'
+    );
+    const properties = Object.keys(
+      (tool?.spec.inputSchema as { properties: Record<string, unknown> })
+        .properties
+    );
+    expect(properties.sort()).toEqual([
+      'booking_id',
+      'confirmation_token',
+      'datetime',
+    ]);
+  });
+
+  it('is listed as a write that is destructive, for a client caller', async () => {
+    const { harness } = await start();
+    const res = await postMcp(harness.baseUrl, toolsListBody(), CLIENT_HEADERS);
+    const body = (await res.json()) as {
+      result?: {
+        tools?: { name: string; annotations?: Record<string, unknown> }[];
+      };
+    };
+    const tool = body.result?.tools?.find(
+      (entry) => entry.name === 'me_reschedule_booking'
+    );
+    expect(tool?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: true,
+      idempotentHint: false,
+    });
+  });
+});
+
+describe('me_reschedule_booking for callers that are not a signed-in client with the book scope', () => {
+  it('refuses an anonymous caller in band, naming the sign-in, with no upstream call', async () => {
+    const { harness, upstream } = await start();
+    const { body } = await callChange(
+      harness,
+      'me_reschedule_booking',
+      MOVE,
+      {}
+    );
+    expect(body.result?.isError).toBe(true);
+    expect(body.result?.content?.[0]?.text).toContain('sign-in');
+    expect(upstream.calls).toEqual([]);
+    const lines = await waitForLogs(harness, 1);
+    expect(lines[0]).toMatchObject({
+      tool: 'me_reschedule_booking',
+      error_type: 'InsufficientScope',
+    });
+  });
+
+  it('refuses a partner caller the same way', async () => {
+    const { harness, upstream } = await start({}, REQUIRED);
+    const { body } = await callChange(harness, 'me_reschedule_booking', MOVE, {
+      authorization: `Bearer ${PARTNER_TOKEN}`,
+    });
+    expect(body.result?.isError).toBe(true);
+    expect(body.result?.content?.[0]?.text).toContain('sign-in');
+    expect(upstream.calls).toEqual([]);
+  });
+
+  it('refuses a client whose signed scope list lacks booking', async () => {
+    const { harness, upstream } = await start({}, BEHIND_PROXY);
+    const { body } = await callChange(
+      harness,
+      'me_reschedule_booking',
+      MOVE,
+      signedClient('mcp:me:read')
+    );
+    expect(body.result?.isError).toBe(true);
+    expect(body.result?.content?.[0]?.text).toContain(
+      "this connection's sign-in does not include booking"
+    );
+    expect(upstream.calls).toEqual([]);
   });
 });

@@ -724,7 +724,7 @@ describe('the own-place flow to a pre-filled widget link (ROADMAP criterion 2, M
     expect(JSON.stringify(harness.logs)).not.toContain(CLIENT_USER_TOKEN);
   });
 
-  it('offers the booking write only as me_book, behind the client scopes, and no raw write tool', async () => {
+  it('offers the booking writes only as the me_ tools, behind the client scopes, and no raw write tool', async () => {
     const harness = await startApp({
       tools: productionTools,
       toolDeps: {
@@ -742,6 +742,7 @@ describe('the own-place flow to a pre-filled widget link (ROADMAP criterion 2, M
     const names = (body.result?.tools ?? []).map((tool) => tool.name);
     expect(names).toContain('me_list_bookings');
     expect(names).toContain('me_book');
+    expect(names).toContain('me_reschedule_booking');
     expect(names).not.toContain('book_record');
     expect(names.filter((name) => /^(book|cancel|change)_/.test(name))).toEqual(
       ['book_check']

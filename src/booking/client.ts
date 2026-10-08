@@ -91,6 +91,10 @@ export const CLIENT_WRITE_ROUTES = Object.freeze({
     method: 'POST',
     route: '/book_record/{location_id}',
   } as const),
+  move: Object.freeze({
+    method: 'PUT',
+    route: '/book_record/{location_id}/{record_id}',
+  } as const),
 });
 
 export interface BookingForm {
@@ -182,6 +186,10 @@ export interface OwnRecord {
   attendance: number | null;
   /** Sum of the service prices; null when any is unknown or none exist. */
   price: number | null;
+  /** The record's allow_change_record flag; null when the record carries none. */
+  moveAllowed: boolean | null;
+  /** The record's allow_delete_record flag; null when the record carries none. */
+  cancelAllowed: boolean | null;
 }
 
 /** The signed-in client's profile, reduced to what the create call sends. Never returned to a tool result. */
@@ -531,6 +539,8 @@ function toOwnRecord(record: UserRecord): OwnRecord | null {
     attendance:
       typeof record.attendance === 'number' ? record.attendance : null,
     price: sumPrices(prices),
+    moveAllowed: null,
+    cancelAllowed: null,
   };
 }
 
@@ -955,6 +965,17 @@ export class BookingClient {
       });
     }
     return { bookingId };
+  }
+
+  /** Moves one of the client's own bookings (not implemented yet). */
+  async moveBooking(
+    _locationId: number,
+    _bookingId: number,
+    _datetime: string,
+    _call: UpstreamCallOptions
+  ): Promise<void> {
+    await Promise.resolve();
+    throw new Error('not implemented');
   }
 
   /**

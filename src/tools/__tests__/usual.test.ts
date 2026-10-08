@@ -47,6 +47,8 @@ function record(overrides: Partial<OwnRecord> = {}): OwnRecord {
     cancelled: false,
     attendance: null,
     price: null,
+    moveAllowed: null,
+    cancelAllowed: null,
     ...overrides,
   };
 }

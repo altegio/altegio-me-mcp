@@ -1417,6 +1417,8 @@ describe('user records request (GET /user/records)', () => {
       cancelled: false,
       attendance: 1,
       price: 1500,
+      moveAllowed: true,
+      cancelAllowed: true,
     });
   });
 
@@ -1437,12 +1439,14 @@ describe('user records request (GET /user/records)', () => {
       expect(Object.keys(record).sort()).toEqual([
         'attendance',
         'businessName',
+        'cancelAllowed',
         'cancelled',
         'city',
         'currency',
         'datetime',
         'id',
         'locationId',
+        'moveAllowed',
         'price',
         'services',
         'teamMember',
@@ -1516,6 +1520,8 @@ describe('user records request (GET /user/records)', () => {
         cancelled: false,
         attendance: -1,
         price: null,
+        moveAllowed: null,
+        cancelAllowed: null,
       },
       {
         id: 2,
@@ -1532,6 +1538,8 @@ describe('user records request (GET /user/records)', () => {
         cancelled: true,
         attendance: null,
         price: null,
+        moveAllowed: null,
+        cancelAllowed: null,
       },
     ]);
   });
@@ -1581,13 +1589,16 @@ describe('the profile and the create route (ADR 0006, D-02)', () => {
     return { client, upstream };
   }
 
-  it('declares the create route as the one client write route, frozen', () => {
+  it('declares the client write routes, frozen: the create and the move', () => {
     expect(Object.isFrozen(CLIENT_WRITE_ROUTES)).toBe(true);
     expect(
       Object.values(CLIENT_WRITE_ROUTES).map(
         (entry) => `${entry.method} ${entry.route}`
       )
-    ).toEqual(['POST /book_record/{location_id}']);
+    ).toEqual([
+      'POST /book_record/{location_id}',
+      'PUT /book_record/{location_id}/{record_id}',
+    ]);
   });
 
   it('reads the profile with both tokens: name, phone as plus and digits, e-mail when set', async () => {
@@ -1820,5 +1831,170 @@ describe('create rejections and the anti-fraud signals (ADR 0006, D-02)', () => 
     const error = await createError('taken_433');
     expect(error.message).not.toContain('Fixture Client');
     expect(error.message).not.toContain('+15550000001');
+  });
+});
+
+describe('the change flags of an own record (ADR 0006, D-03)', () => {
+  const USER_TOKEN = 'client-user-token-0001-abcdef';
+
+  async function recordFive(
+    change: (record: Record<string, unknown>) => void
+  ): Promise<{ moveAllowed: boolean | null; cancelAllowed: boolean | null }> {
+    const fixture = loadFixture('user_records', 'default');
+    const body = structuredClone(fixture.body) as {
+      data: { id: number }[];
+    };
+    const record = body.data.find((entry) => entry.id === 5);
+    if (record === undefined) throw new Error('fixture record 5 is missing');
+    change(record);
+    const upstream = fakeFetch([
+      {
+        method: 'GET',
+        path: '/user/records',
+        reply: { ...fixture, body },
+      },
+    ]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    const records = await client.myRecords({ userToken: USER_TOKEN });
+    const found = records.find((entry) => entry.id === 5);
+    if (found === undefined) throw new Error('record 5 was dropped');
+    return {
+      moveAllowed: found.moveAllowed,
+      cancelAllowed: found.cancelAllowed,
+    };
+  }
+
+  it('reads allow_change_record and allow_delete_record as booleans', async () => {
+    expect(
+      await recordFive((record) => {
+        record.allow_change_record = false;
+        record.allow_delete_record = 1;
+      })
+    ).toEqual({ moveAllowed: false, cancelAllowed: true });
+  });
+
+  it('gives null for a flag the record does not carry', async () => {
+    expect(
+      await recordFive((record) => {
+        delete record.allow_change_record;
+        record.allow_delete_record = null;
+      })
+    ).toEqual({ moveAllowed: null, cancelAllowed: null });
+  });
+});
+
+describe('the move route (ADR 0006, D-02)', () => {
+  const USER_TOKEN = 'client-user-token-0001-abcdef';
+  const RECORD = 5;
+  const NEW_TIME = '2099-01-10T11:00:00+03:00';
+  const MOVE_PATH = `/book_record/${LOCATION}/${RECORD}`;
+
+  function moveWith(reply: FakeReply) {
+    const upstream = fakeFetch([{ method: 'PUT', path: MOVE_PATH, reply }]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    return { client, upstream };
+  }
+
+  const call = { userToken: USER_TOKEN };
+
+  it('sends one PUT with exactly the new datetime and both tokens', async () => {
+    const { client, upstream } = moveWith(
+      loadFixture('book_record_move', 'moved')
+    );
+    await expect(
+      client.moveBooking(LOCATION, RECORD, NEW_TIME, call)
+    ).resolves.toBeUndefined();
+    expect(upstream.unmatched).toEqual([]);
+    expect(upstream.calls).toHaveLength(1);
+    const [sent] = upstream.calls;
+    expect(sent?.method).toBe('PUT');
+    expect(sent?.url.pathname).toBe(`/api/v1${MOVE_PATH}`);
+    expect(sent?.headers.get('authorization')).toBe(
+      `Bearer ${TOKEN}, User ${USER_TOKEN}`
+    );
+    expect(sent?.headers.get('content-type')).toBe('application/json');
+    expect(JSON.parse(sent?.body ?? 'null')).toEqual({ datetime: NEW_TIME });
+  });
+
+  it('returns nothing from the answer, which carries the record token', async () => {
+    const { client } = moveWith(loadFixture('book_record_move', 'moved'));
+    const result: unknown = await client.moveBooking(
+      LOCATION,
+      RECORD,
+      NEW_TIME,
+      call
+    );
+    expect(JSON.stringify(result ?? null)).not.toContain('fixture-hash');
+  });
+
+  it('treats any 2xx other than 200 as contract drift', async () => {
+    const moved = loadFixture('book_record_move', 'moved');
+    const { client } = moveWith({ ...moved, status: 201 });
+    const error = await upstreamError(
+      client.moveBooking(LOCATION, RECORD, NEW_TIME, call)
+    );
+    expect(error.kind).toBe('contract_drift');
+    expect(error.route).toBe('/book_record/{location_id}/{record_id}');
+  });
+
+  it('treats a 200 that is not a moved record as contract drift', async () => {
+    const { client } = moveWith({
+      status: 200,
+      body: { success: true, data: [], meta: [] },
+    });
+    const error = await upstreamError(
+      client.moveBooking(LOCATION, RECORD, NEW_TIME, call)
+    );
+    expect(error.kind).toBe('contract_drift');
+  });
+
+  it('keeps code 433 of a taken time and names the user as the credential of a 403', async () => {
+    const taken = await upstreamError(
+      moveWith(loadFixture('book_record_move', 'taken_433')).client.moveBooking(
+        LOCATION,
+        RECORD,
+        NEW_TIME,
+        call
+      )
+    );
+    expect(taken.kind).toBe('rejected');
+    expect(taken.codes).toEqual([433]);
+    const forbidden = await upstreamError(
+      moveWith(
+        loadFixture('book_record_move', 'forbidden_403')
+      ).client.moveBooking(LOCATION, RECORD, NEW_TIME, call)
+    );
+    expect(forbidden.kind).toBe('unauthorized');
+    expect(forbidden.credential).toBe('user');
+  });
+
+  it('refuses ids and a datetime it cannot send, and a missing user token, before anything goes out', async () => {
+    const { client, upstream } = moveWith(
+      loadFixture('book_record_move', 'moved')
+    );
+    await expect(
+      client.moveBooking(LOCATION, 0, NEW_TIME, call)
+    ).rejects.toThrow(TypeError);
+    await expect(
+      client.moveBooking(LOCATION, 1.5, NEW_TIME, call)
+    ).rejects.toThrow(TypeError);
+    await expect(client.moveBooking(0, RECORD, NEW_TIME, call)).rejects.toThrow(
+      TypeError
+    );
+    await expect(
+      client.moveBooking(LOCATION, RECORD, 'tomorrow', call)
+    ).rejects.toThrow(TypeError);
+    await expect(
+      client.moveBooking(LOCATION, RECORD, NEW_TIME, {})
+    ).rejects.toThrow(TypeError);
+    expect(upstream.calls).toEqual([]);
   });
 });
