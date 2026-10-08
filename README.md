@@ -25,22 +25,22 @@ a separate server; this repository is that server.
 
 ## Product scope
 
-**Phase 1: discover in chat, book in the widget.** No end-user sign-in and no personal data in
-the chat. The caller (a partner's agent or app) presents its Altegio partner token.
+**Live today: a known business, booked in the widget.** The caller (a partner's agent or app)
+presents its Altegio partner token. The tools show a business card, its bookable services, team
+members, dates and free time slots, check that the chosen slot is still bookable, and return a
+link to the business's Altegio booking widget with service, team member and time already selected.
+The client confirms there, with the business's usual phone confirmation and prepayment rules. No
+personal data passes through the chat.
 
-- Search businesses that use Altegio and have online booking enabled.
-- Show a business card, its bookable services, team members, dates and free time slots.
-- Check that the chosen slot is still bookable, then return a link to the business's Altegio
-  booking widget with service, team member and time already selected. The client confirms
-  there, with the business's usual phone confirmation and prepayment rules.
+**Next: the client's own places** ([ADR 0005](docs/decisions/0005-own-places-first.md)). The client
+signs in through the platform proxy's OAuth flow (phone + SMS on the proxy's page, never in chat),
+sees the places they already go to and their bookings, and books there through the same pre-filled
+widget link. Then the cases the Altegio.me app lacks: two people side by side, a freed slot at a
+favourite team member, a held slot. A searchable catalog of all businesses is parked: scenarios
+outside the client's own places are not in this version.
 
-**Phase 2: book in chat.** The client signs in with phone + SMS code on an Altegio.me page
-(OAuth 2.1), then the assistant can create, reschedule and cancel appointments and list the
-client's bookings. Interactive UI (MCP Apps) for hosts that render it. Interactive hosts
-(claude.ai, ChatGPT, connector directories) connect from this phase on, through the same OAuth.
-
-**Distribution.** Claude Connectors Directory, then ChatGPT plugins, the MCP Registry, and
-outreach to Perplexity, Mistral, xAI and Google. See
+**Distribution.** Claude Connectors Directory listing and promo inside the Altegio.me app; later
+ChatGPT, the MCP Registry, and outreach to Perplexity, Mistral, xAI and Google. See
 [`docs/research/ai-platforms-distribution.md`](docs/research/ai-platforms-distribution.md).
 
 ## Architecture
