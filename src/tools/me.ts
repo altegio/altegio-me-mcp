@@ -120,3 +120,28 @@ export const meListPlaces = defineTool<
     }
   },
 });
+
+// me_list_bookings (ME-03): declared so its tests compile; behaviour follows.
+
+const bookingsOutput = z.strictObject({
+  items: z.array(z.never()),
+  pagination: z.strictObject({}),
+});
+
+export const meListBookings = defineTool<
+  typeof placesInput,
+  typeof bookingsOutput,
+  ToolDeps
+>({
+  name: 'me_list_bookings',
+  title: 'List my bookings',
+  description: "Lists the signed-in client's own bookings.",
+  kind: 'list',
+  scopes: [SCOPE_READ],
+  annotations: UPSTREAM_READ_HINTS,
+  upstream: [USER_ROUTES.records],
+  input: placesInput,
+  output: bookingsOutput,
+  render: () => '',
+  handler: () => Promise.reject(new Error('not implemented')),
+});

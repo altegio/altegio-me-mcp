@@ -118,9 +118,10 @@ describe('compliant tools', () => {
     expect(READ_ONLY_POST_ROUTES.has(BOOKING_ROUTES.check.route)).toBe(true);
   });
 
-  it('registers the own-places tool first, then the six booking tools in booking-flow order', () => {
+  it('registers the two own-data tools first, then the six booking tools in booking-flow order', () => {
     expect(productionTools.map((tool) => tool.name)).toEqual([
       'me_list_places',
+      'me_list_bookings',
       'business_get',
       'business_list_services',
       'business_list_team_members',

@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import { BOOKING_ROUTES, BookingClient } from '../client.js';
+import { BOOKING_ROUTES, BookingClient, USER_ROUTES } from '../client.js';
 import { UpstreamError, type UpstreamErrorKind } from '../errors.js';
 import { ALTEGIO_ACCEPT, BookingHttp } from '../http.js';
 import {
@@ -352,6 +352,20 @@ describe('route table (D-01)', () => {
         'POST /book_check/{location_id}',
       ].sort()
     );
+  });
+});
+
+describe('signed-in route table (D-01, D-02)', () => {
+  it('is frozen and holds exactly the places and records routes', () => {
+    expect(Object.isFrozen(USER_ROUTES)).toBe(true);
+    for (const entry of Object.values(USER_ROUTES)) {
+      expect(Object.isFrozen(entry)).toBe(true);
+    }
+    expect(
+      Object.values(USER_ROUTES)
+        .map((entry) => `${entry.method} ${entry.route}`)
+        .sort()
+    ).toEqual(['GET /user/companies/yplaces', 'GET /user/records']);
   });
 });
 
@@ -1316,4 +1330,189 @@ describe('check request (book_check, the validation route)', () => {
       expect(upstream.calls).toHaveLength(0);
     }
   );
+});
+
+describe('user records request (GET /user/records)', () => {
+  const USER_TOKEN = 'client-user-token-0001-abcdef';
+
+  function recordsClient(reply: FakeReply) {
+    const upstream = fakeFetch([
+      { method: 'GET', path: '/user/records', reply },
+    ]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    return { client, upstream };
+  }
+
+  it('sends exactly GET /user/records with Accept v2 and both tokens, and no query', async () => {
+    const { client, upstream } = recordsClient(
+      loadFixture('user_records', 'default')
+    );
+    await client.myRecords({ userToken: USER_TOKEN });
+    expect(upstream.calls).toHaveLength(1);
+    const [call] = upstream.calls;
+    expect(call?.method).toBe('GET');
+    expect(call?.url.href).toBe(`${BASE}/user/records`);
+    expect(call?.headers.get('accept')).toBe(ALTEGIO_ACCEPT);
+    expect(call?.headers.get('authorization')).toBe(
+      `Bearer ${TOKEN}, User ${USER_TOKEN}`
+    );
+    expect(call?.body).toBeNull();
+  });
+
+  it('parses the default fixture into records in upstream order', async () => {
+    const { client } = recordsClient(loadFixture('user_records', 'default'));
+    const records = await client.myRecords({ userToken: USER_TOKEN });
+    expect(
+      records.map((record) => [
+        record.locationId,
+        record.datetime,
+        record.cancelled,
+      ])
+    ).toEqual([
+      [722227, '2025-03-10T10:00:00+0300', false],
+      [726120, '2025-05-05T16:00:00+0300', false],
+      [722227, '2025-06-16T14:30:00+0300', false],
+      [722227, '2025-09-01T11:00:00+0300', true],
+      [722227, '2099-01-12T10:00:00+0300', false],
+    ]);
+    expect(records[0]).toEqual({
+      locationId: 722227,
+      businessName: 'Fixture Barber',
+      city: 'Limassol',
+      currency: '\u20ac',
+      services: [{ id: 10303531, title: 'Manicure', price: 1500 }],
+      teamMember: { id: 2098145, name: 'Anna Smith' },
+      datetime: '2025-03-10T10:00:00+0300',
+      cancelled: false,
+      attendance: 1,
+      price: 1500,
+    });
+  });
+
+  it('never reads a record id, token or comment into a record', async () => {
+    const { client } = recordsClient(loadFixture('user_records', 'default'));
+    const records = await client.myRecords({ userToken: USER_TOKEN });
+    const text = JSON.stringify(records);
+    for (const bait of [
+      'fixture-hash-0001',
+      'fixture-api-id-0001',
+      'Fixture Client',
+      'fixture.client@example.invalid',
+      '+15550000001',
+    ]) {
+      expect(text).not.toContain(bait);
+    }
+    for (const record of records) {
+      expect(Object.keys(record).sort()).toEqual([
+        'attendance',
+        'businessName',
+        'cancelled',
+        'city',
+        'currency',
+        'datetime',
+        'locationId',
+        'price',
+        'services',
+        'teamMember',
+      ]);
+    }
+  });
+
+  it('parses an empty list', async () => {
+    const { client } = recordsClient(loadFixture('user_records', 'empty'));
+    await expect(client.myRecords({ userToken: USER_TOKEN })).resolves.toEqual(
+      []
+    );
+  });
+
+  it.each([undefined, ''])(
+    'refuses with a TypeError and sends nothing without a user token (%p)',
+    async (userToken) => {
+      const { client, upstream } = recordsClient(
+        loadFixture('user_records', 'default')
+      );
+      await expect(
+        client.myRecords(userToken === undefined ? {} : { userToken })
+      ).rejects.toThrow(TypeError);
+      expect(upstream.calls).toHaveLength(0);
+    }
+  );
+
+  it('maps a record with an empty staff, no services or a discount, and drops one without a place or a datetime', async () => {
+    const { client } = recordsClient({
+      status: 200,
+      body: {
+        success: true,
+        meta: [],
+        data: [
+          {
+            id: 1,
+            company: { id: 7, title: 'Plain', public_title: '' },
+            services: [],
+            staff: [],
+            datetime: '2025-01-01T10:00:00+0700',
+            deleted: 0,
+            attendance: -1,
+          },
+          {
+            id: 2,
+            company: { id: 7, public_title: 'Public' },
+            services: [
+              { id: 3, title: 'A', cost: 100, amount: 2, discount: 0 },
+              { id: 4, title: 'B', cost: 50, amount: 1, discount: 10 },
+            ],
+            staff: { id: 0, name: '' },
+            datetime: '2025-02-01T10:00:00+0700',
+            deleted: true,
+          },
+          { id: 3, company: [], datetime: '2025-03-01T10:00:00+0700' },
+          { id: 4, company: { id: 7 }, datetime: null },
+        ],
+      },
+    });
+    const records = await client.myRecords({ userToken: USER_TOKEN });
+    expect(records).toEqual([
+      {
+        locationId: 7,
+        businessName: 'Plain',
+        city: null,
+        currency: null,
+        services: [],
+        teamMember: null,
+        datetime: '2025-01-01T10:00:00+0700',
+        cancelled: false,
+        attendance: -1,
+        price: null,
+      },
+      {
+        locationId: 7,
+        businessName: 'Public',
+        city: null,
+        currency: null,
+        services: [
+          { id: 3, title: 'A', price: 200 },
+          { id: 4, title: 'B', price: null },
+        ],
+        teamMember: null,
+        datetime: '2025-02-01T10:00:00+0700',
+        cancelled: true,
+        attendance: null,
+        price: null,
+      },
+    ]);
+  });
+
+  it('treats a body that is not a list as contract drift', async () => {
+    const { client } = recordsClient({
+      status: 200,
+      body: { success: true, data: { records: [] }, meta: [] },
+    });
+    await expect(
+      client.myRecords({ userToken: USER_TOKEN })
+    ).rejects.toMatchObject({ kind: 'contract_drift' });
+  });
 });

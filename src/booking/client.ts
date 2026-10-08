@@ -119,6 +119,31 @@ export interface OwnPlace {
   lastVisit: string | null;
 }
 
+/**
+ * One of the signed-in client's own records, as GET /user/records describes
+ * it, reduced to what a tool may show. The record id, token, record token,
+ * api id and comment are never read (ME-05).
+ */
+export interface OwnRecord {
+  locationId: number;
+  businessName: string | null;
+  /** The business's city text, from the record's company. */
+  city: string | null;
+  /** The business's currency sign, for the prices of this record. */
+  currency: string | null;
+  services: { id: number; title: string | null; price: number | null }[];
+  /** Null when the record has no team member. */
+  teamMember: { id: number; name: string | null } | null;
+  /** Exactly as the records route wrote it, offset without a colon. */
+  datetime: string;
+  /** The record's `deleted` flag: the booking was cancelled. */
+  cancelled: boolean;
+  /** 1 and -1 are seen on past records; the meaning is inferred. */
+  attendance: number | null;
+  /** Sum of the service prices; null when any is unknown or none exist. */
+  price: number | null;
+}
+
 export interface ServiceCategory {
   id: number;
   title: string;
@@ -656,6 +681,15 @@ export class BookingClient {
       userPlacesDataSchema
     );
     return data.map(toOwnPlace);
+  }
+
+  /**
+   * The signed-in client's own records (ME-03, ME-04), in upstream order
+   * (oldest first). `call.userToken` is required, as for myPlaces.
+   */
+  myRecords(call: UpstreamCallOptions): Promise<OwnRecord[]> {
+    assertUserToken(call.userToken);
+    return Promise.reject(new Error('not implemented'));
   }
 
   /**
