@@ -26,6 +26,20 @@ describe('SERVER_INSTRUCTIONS', () => {
     expect(SERVER_INSTRUCTIONS).not.toMatch(/\b(ask|share|provide|send)\b/i);
   });
 
+  it('describes the signed-in flow without a sign-in request', () => {
+    for (const tool of ['me_list_places', 'me_list_bookings', 'book_check']) {
+      expect(SERVER_INSTRUCTIONS).toContain(tool);
+    }
+    // The sentence that describes the flow, whole, carries no sign-in wording.
+    const sentence = SERVER_INSTRUCTIONS.split('. ').find((part) =>
+      part.includes('me_list_places')
+    );
+    expect(sentence).toBeDefined();
+    expect(sentence).not.toMatch(/\b(sms|code|otp|e-?mail|password)\b/i);
+    expect(sentence).not.toMatch(/phone/i);
+    expect(sentence).toContain('pre-filled');
+  });
+
   it('reaches an SDK client through initialize', async () => {
     const server = createMcpServer({
       name: 'jest-server',

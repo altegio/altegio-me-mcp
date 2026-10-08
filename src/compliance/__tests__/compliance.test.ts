@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { BOOKING_ROUTES, USER_ROUTES } from '../../booking/client.js';
 import { createMcpServer } from '../../mcp/create-server.js';
 import { SERVER_INSTRUCTIONS } from '../../mcp/instructions.js';
+import { SERVER_PROMPTS } from '../../mcp/prompts.js';
 import { createCallRecord } from '../../observability/call-log.js';
 import type { ToolMeta, ToolSpec } from '../../tools/factory.js';
 import { productionTools } from '../../tools/registry.js';
@@ -172,6 +173,69 @@ describe('R14 base tier', () => {
         })
       )
     ).not.toContain('R14');
+  });
+});
+
+describe('R14 signed-in routes', () => {
+  it('reports a tool that declares a /user/ route without mcp:me:read', () => {
+    const violations = checkTool(compliantListTool.spec, {
+      ...compliantListTool.meta,
+      upstream: [USER_ROUTES.records],
+      scopes: [SCOPE_DISCOVER],
+    });
+    expect(violations).toContainEqual(
+      expect.objectContaining({
+        rule: 'R14',
+        message:
+          "a tool that reads a signed-in client's data must require mcp:me:read",
+      })
+    );
+  });
+
+  it('reports each of the two signed-in routes', () => {
+    for (const route of Object.values(USER_ROUTES)) {
+      const violations = checkTool(compliantListTool.spec, {
+        ...compliantListTool.meta,
+        upstream: [route],
+        scopes: [SCOPE_DISCOVER],
+      });
+      expect(rules(violations)).toContain('R14');
+    }
+  });
+
+  it('accepts the same tool with mcp:me:read, and a tool with no /user/ route without it', () => {
+    expect(
+      rules(
+        checkTool(compliantListTool.spec, {
+          ...compliantListTool.meta,
+          upstream: [USER_ROUTES.records],
+          scopes: [SCOPE_DISCOVER, SCOPE_READ],
+        })
+      )
+    ).not.toContain('R14');
+    expect(
+      rules(
+        checkTool(compliantListTool.spec, {
+          ...compliantListTool.meta,
+          upstream: [BOOKING_ROUTES.company],
+          scopes: [SCOPE_DISCOVER],
+        })
+      )
+    ).not.toContain('R14');
+  });
+
+  it('passes both own-data tools and every production tool', () => {
+    for (const tool of productionTools) {
+      expect(checkTool(tool.spec, tool.meta, { production: true })).toEqual([]);
+    }
+    const own = productionTools.filter((tool) =>
+      tool.meta.upstream.some((call) => call.route.startsWith('/user/'))
+    );
+    expect(own.map((tool) => tool.name)).toEqual([
+      'me_list_places',
+      'me_list_bookings',
+    ]);
+    for (const tool of own) expect(tool.meta.scopes).toContain(SCOPE_READ);
   });
 });
 
@@ -402,6 +466,33 @@ describe('R12 forbidden routes', () => {
     expect(rules(scanForbiddenRoutes(dir))).toEqual(['R12']);
   });
 
+  it('reports the network-wide sign-in prefix of the booking API', () => {
+    const dir = temp();
+    const route = ['', 'booking', 'yplaces'].join('/');
+    writeFileSync(
+      join(dir, 'yplaces.ts'),
+      `export const route = '${route}/x';\n`
+    );
+    const violations = scanForbiddenRoutes(dir);
+    expect(rules(violations)).toEqual(['R12']);
+    expect(violations[0]?.message).toContain(route);
+  });
+
+  it('keeps the three earlier entries', () => {
+    const dir = temp();
+    const routes = [
+      ['book', 'record'].join('_'),
+      ['book', 'code'].join('_'),
+      ['', 'user', 'auth'].join('/'),
+    ];
+    writeFileSync(
+      join(dir, 'all.ts'),
+      `export const r = '${routes.join(' ')}';\n`
+    );
+    const [violation] = scanForbiddenRoutes(dir);
+    for (const route of routes) expect(violation?.message).toContain(route);
+  });
+
   it('skips tests and the compliance directory', () => {
     const dir = temp();
     const route = ['book', 'code'].join('_');
@@ -427,6 +518,19 @@ describe('server instructions', () => {
     expect(SERVER_INSTRUCTIONS).toContain(UNTRUSTED_OPEN);
     expect(SERVER_INSTRUCTIONS).toContain(UNTRUSTED_CLOSE);
     expect(textViolations(SERVER_INSTRUCTIONS)).not.toEqual([]);
+  });
+});
+
+describe('server prompts', () => {
+  it('pass the same deny-list as tool descriptions', () => {
+    for (const prompt of SERVER_PROMPTS) {
+      expect(textViolations(prompt.description)).toEqual([]);
+      expect(textViolations(prompt.text)).toEqual([]);
+      expect(`${prompt.description} ${prompt.text}`).not.toMatch(
+        /phone|sms|\bcode\b|otp|e-?mail|password/i
+      );
+    }
+    expect(SERVER_PROMPTS.length).toBeGreaterThan(0);
   });
 });
 

@@ -11,6 +11,7 @@ import {
   pageInputShape,
   paginateArray,
 } from '../tools/pagination.js';
+import { USER_ROUTES } from '../booking/client.js';
 import { SCOPE_BOOK, SCOPE_DISCOVER, type Scope } from '../tools/scopes.js';
 import type { RuleId } from './rules.js';
 
@@ -248,6 +249,11 @@ export const badFixtures: readonly BadFixture[] = [
     spec: built({}).spec,
     meta: { kind: 'single', upstream: [], scopes: [] },
   }),
+  fixture(
+    'R14 tool that reads a signed-in route without the client read tier',
+    'R14',
+    built({ upstream: [USER_ROUTES.records] })
+  ),
   fixture(
     'R14 write tool without the client tier',
     'R14',
