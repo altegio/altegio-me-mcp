@@ -18,6 +18,7 @@ import {
   teamMembersDataSchema,
   timeSlotsDataSchema,
   userPlacesDataSchema,
+  userRecordCancelDataSchema,
   userRecordsDataSchema,
   type BookingUserData,
   type CompanyData,
@@ -102,8 +103,16 @@ export const CLIENT_WRITE_ROUTES = Object.freeze({
   } as const),
 });
 
-/** The hash segment of the cancel path (not implemented yet). */
-export const CANCEL_HASH_SEGMENT = 'unset';
+/**
+ * The hash segment of the cancel path. The recording of 2026-10-08 settled it
+ * (docs/research/signed-in-routes.md, "## Writes", hash answer `placeholder`):
+ * for a signed-in client the user token makes the record id enough, and the
+ * placeholder 0 in the hash position is accepted with a 204. The creation hash
+ * is not needed, so a booking found later can be cancelled too, and no record
+ * token or hash is ever read or sent. A short alphanumeric text, as the path
+ * segment must be.
+ */
+export const CANCEL_HASH_SEGMENT = '0';
 
 export interface BookingForm {
   id: number;
@@ -1013,13 +1022,34 @@ export class BookingClient {
     }
   }
 
-  /** Cancels one of the client's own bookings (not implemented yet). */
+  /**
+   * Cancels one of the signed-in client's own bookings (ADR 0006, D-02):
+   * DELETE on the record id with the placeholder hash segment of
+   * CANCEL_HASH_SEGMENT and no body. Resolves on a 204 (no body) or a 200;
+   * any other 2xx is contract_drift, because whether the booking was cancelled
+   * is then not known. `call.userToken` is required. Nothing is retried with a
+   * different segment.
+   */
   async cancelBooking(
-    _bookingId: number,
-    _call: UpstreamCallOptions
+    bookingId: number,
+    call: UpstreamCallOptions
   ): Promise<void> {
-    await Promise.resolve();
-    throw new Error('not implemented');
+    assertUserToken(call.userToken);
+    assertPositiveId(bookingId, 'booking id');
+    const { route, method } = CLIENT_WRITE_ROUTES.cancel;
+    const reply = await this.http.send({
+      method,
+      route,
+      path: `/user/records/${bookingId}/${CANCEL_HASH_SEGMENT}`,
+      ...call,
+    });
+    const parsed = userRecordCancelDataSchema.safeParse(reply.data);
+    if (!parsed.success || (reply.status !== 204 && reply.status !== 200)) {
+      throw new UpstreamError('contract_drift', route, {
+        status: reply.status,
+        cause: parsed.success ? undefined : parsed.error,
+      });
+    }
   }
 
   /**

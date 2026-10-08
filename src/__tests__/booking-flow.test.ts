@@ -512,7 +512,8 @@ describe('known-business flow from a location id to a pre-selected link (ROADMAP
       tools
         .filter((tool) => tool.annotations?.readOnlyHint !== true)
         .map((tool) => tool.name)
-    ).toEqual(['me_book', 'me_reschedule_booking', 'me_cancel_booking']);
+        .sort()
+    ).toEqual(['me_book', 'me_cancel_booking', 'me_reschedule_booking']);
     for (const name of ['me_reschedule_booking', 'me_cancel_booking']) {
       const change = tools.find((tool) => tool.name === name);
       expect(change?.annotations?.destructiveHint).toBe(true);

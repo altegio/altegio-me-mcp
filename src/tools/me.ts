@@ -478,7 +478,7 @@ export const meListBookings = defineTool<
   name: 'me_list_bookings',
   title: 'List my bookings',
   description:
-    "Lists the signed-in client's own bookings, upcoming first, then past ones with the latest first, each with the business, services, team member, time, status and price, and the usual service and team member per place. Needs the client's sign-in. The records route is undocumented, so some fields can be empty.",
+    "Lists the signed-in client's own bookings, upcoming first, then past ones with the latest first, each with the business, services, team member, time, status and price, and the usual service and team member per place. Each booking's booking_id is the id me_reschedule_booking and me_cancel_booking take. Needs the client's sign-in. The records route is undocumented, so some fields can be empty.",
   kind: 'list',
   scopes: [SCOPE_READ],
   annotations: UPSTREAM_READ_HINTS,

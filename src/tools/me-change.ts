@@ -29,10 +29,11 @@ import {
   toBookingItem,
   type BookingItem,
 } from './me.js';
-import { durationText } from './me-book.js';
+import { cancellationText, durationText } from './me-book.js';
 import type { ToolDeps } from './registry.js';
 import { SCOPE_BOOK, SCOPE_READ } from './scopes.js';
 import {
+  defaultText,
   toToolError,
   waitSeconds,
   type UpstreamErrorOverrides,
@@ -41,21 +42,24 @@ import {
 import { withUntrustedBlock } from './untrusted.js';
 import { bookingStatus } from './usual.js';
 
-// me_reschedule_booking (ME-07, ADR 0006, D-02, D-03): a signed-in client moves
-// one of their own upcoming bookings in two calls. The first checks the new
-// time and returns a preview with a confirmation_token; the second, with the
-// identical arguments and that token, sends the move with the user token. Only
-// a booking among the client's own records is ever changed, and the write goes
-// to the location of that record, never to one a caller names. Nothing about
-// the client, and no comment, is sent with a move.
+// me_reschedule_booking and me_cancel_booking (ME-07, ADR 0006, D-02, D-03): a
+// signed-in client moves or cancels one of their own upcoming bookings in two
+// calls. The first call checks and returns a preview with a confirmation_token;
+// the second, with the identical arguments and that token, writes with the user
+// token. Only a booking among the client's own records is ever changed, and the
+// write goes to the location of that record, never to one a caller names.
+// Nothing about the client, and no comment, is sent with a move; the hash
+// segment of the cancel path stays inside BookingClient.cancelBooking.
 
-type Change = 'move';
+type Change = 'move' | 'cancel';
 
 const NOTHING_DONE: Record<Change, string> = {
   move: 'Nothing was moved',
+  cancel: 'Nothing was cancelled',
 };
 
 const MOVE_TOOL = 'me_reschedule_booking';
+const CANCEL_TOOL = 'me_cancel_booking';
 
 const LIST_BOOKINGS_NEXT =
   "call me_list_bookings for the booking_id of one of the client's upcoming bookings.";
@@ -73,7 +77,7 @@ function refusal(
 function notAllowedOnline(change: Change): ToolError {
   return refusal(
     change,
-    'the business does not allow moving this booking online.',
+    `the business does not allow ${change === 'move' ? 'moving' : 'cancelling'} this booking online.`,
     `${CONTACT_ACTION}.`
   );
 }
@@ -109,7 +113,8 @@ function changeableRecord(
   if (status !== 'upcoming') {
     throw refusal(change, 'this booking is in the past.', LIST_BOOKINGS_NEXT);
   }
-  if (record.moveAllowed === false) throw notAllowedOnline(change);
+  const allowed = change === 'move' ? record.moveAllowed : record.cancelAllowed;
+  if (allowed === false) throw notAllowedOnline(change);
   return record;
 }
 
@@ -527,21 +532,235 @@ export const meRescheduleBooking = defineTool<
   },
 });
 
+// me_cancel_booking
+
 const cancelInput = z.strictObject({
-  booking_id: z.number().int().positive(),
+  booking_id: z
+    .number()
+    .int()
+    .positive()
+    .describe('The booking_id of an upcoming booking from me_list_bookings.'),
   [CONFIRMATION_TOKEN_ARG]: confirmationTokenInput,
 });
 
-const cancelOutput = z.strictObject({ status: z.string() });
+type CancelInput = z.infer<typeof cancelInput>;
+
+const cancelOutput = z.strictObject({
+  status: z
+    .enum(['preview', 'cancelled'])
+    .describe(
+      'preview: nothing is cancelled yet. cancelled: the booking was cancelled.'
+    ),
+  booking_id: z
+    .number()
+    .int()
+    .describe('Id of the booking, as the booking tools take it.'),
+  booking: bookingItemSchema
+    .nullable()
+    .describe(
+      'The booking as it is now for a preview, or with the status cancelled once it was cancelled.'
+    ),
+  cancellation_rule: z
+    .string()
+    .nullable()
+    .describe(
+      "The business's online cancellation rule, or null when the business states none."
+    ),
+  confirmation_token: z
+    .string()
+    .nullable()
+    .describe(
+      'Token for the second call, valid for 10 minutes, bound to this booking and sign-in; null once cancelled.'
+    ),
+  expires_at: z
+    .string()
+    .nullable()
+    .describe(
+      'When the confirmation_token expires, ISO 8601 UTC; null once cancelled.'
+    ),
+});
+
+type CancelOutput = z.infer<typeof cancelOutput>;
+
+const NEW_CANCEL_PREVIEW_NEXT = `call ${CANCEL_TOOL} again without confirmation_token for a new preview, and confirm it with the client.`;
+
+const CANCEL_UNKNOWN_OUTCOME: UpstreamErrorText = {
+  message:
+    'The booking service did not answer, so it is not known whether the booking was cancelled.',
+  nextAction:
+    "call me_list_bookings to check the booking's status before cancelling again; do not repeat this confirmation.",
+};
+
+const CANCEL_NOT_ACCEPTED: UpstreamErrorText = {
+  message:
+    'Nothing was cancelled: the business did not accept the cancellation.',
+  nextAction: `${CONTACT_ACTION}.`,
+};
+
+/**
+ * What a failed DELETE says. A 403 is the business refusing (the cancellation
+ * window, a rule of its own), not the sign-in; a 401 keeps the sign-in text.
+ * No text quotes the upstream message or the path.
+ */
+const CANCEL_ERRORS: UpstreamErrorOverrides = {
+  unauthorized: (error) =>
+    error.status === 403
+      ? {
+          message:
+            'Nothing was cancelled: the business did not accept the cancellation online, for example because it is too close to the start.',
+          nextAction: `${CONTACT_ACTION}.`,
+        }
+      : defaultText(error),
+  not_found: {
+    message: 'Nothing was cancelled: the booking was not found.',
+    nextAction: LIST_BOOKINGS_NEXT,
+  },
+  rejected: CANCEL_NOT_ACCEPTED,
+  bad_request: CANCEL_NOT_ACCEPTED,
+  anti_fraud: CANCEL_NOT_ACCEPTED,
+  unavailable: CANCEL_UNKNOWN_OUTCOME,
+  contract_drift: CANCEL_UNKNOWN_OUTCOME,
+  rate_limited: (error) => ({
+    message: 'Nothing was cancelled: the booking service is busy right now.',
+    nextAction: `wait ${waitSeconds(error)} seconds, then call ${CANCEL_TOOL} without confirmation_token for a new preview.`,
+  }),
+};
+
+const CANCEL_READ_FAILED: UpstreamErrorText = {
+  message:
+    'Nothing was cancelled: the booking service did not answer when the booking was read.',
+  nextAction: NEW_CANCEL_PREVIEW_NEXT,
+};
+
+/** Reading the records comes before the DELETE: a failure there means nothing was cancelled, and the token is spent. */
+const CANCEL_READ_ERRORS: UpstreamErrorOverrides = {
+  unavailable: CANCEL_READ_FAILED,
+  contract_drift: CANCEL_READ_FAILED,
+  rate_limited: CANCEL_ERRORS.rate_limited,
+};
+
+/** The arguments a cancel token is bound to: the booking, never the token. */
+function cancelBoundArguments(input: CancelInput): Record<string, unknown> {
+  return { booking_id: input.booking_id };
+}
+
+/** Preview: finds the booking among the client's own and shows it with the business's cancellation rule. Nothing is written. */
+async function previewCancel(
+  input: CancelInput,
+  deps: ToolDeps,
+  ctx: ToolContext
+): Promise<CancelOutput> {
+  const userSide = userCall(ctx);
+  const records = await deps.booking.myRecords(userSide).catch((error) => {
+    throw toToolError(error);
+  });
+  const nowMs = Date.now();
+  const record = changeableRecord(records, input.booking_id, 'cancel', nowMs);
+
+  const card = await deps.booking
+    .company(record.locationId, upstreamCall(ctx))
+    .catch((error) => {
+      throw toToolError(error);
+    });
+  if (card.rules.cancelAllowed === false) throw notAllowedOnline('cancel');
+
+  const confirmations = deps.confirmations ?? DEFAULT_CONFIRMATIONS;
+  const issued = confirmations.issue(
+    CANCEL_TOOL,
+    userSide.userToken,
+    cancelBoundArguments(input)
+  );
+  return {
+    status: 'preview',
+    booking_id: record.id,
+    booking: toBookingItem(record, nowMs),
+    cancellation_rule: cancellationText(card.rules),
+    confirmation_token: issued.token,
+    expires_at: new Date(issued.expiresAt).toISOString(),
+  };
+}
+
+/** Confirm: redeems the token, re-reads the records and sends one DELETE with the user token. */
+async function confirmCancel(
+  input: CancelInput,
+  token: string,
+  deps: ToolDeps,
+  ctx: ToolContext
+): Promise<CancelOutput> {
+  const userSide = userCall(ctx);
+  const confirmations = deps.confirmations ?? DEFAULT_CONFIRMATIONS;
+  const verdict = confirmations.redeem(
+    token,
+    CANCEL_TOOL,
+    userSide.userToken,
+    cancelBoundArguments(input)
+  );
+  if (verdict !== 'ok') {
+    throw verdictRefusal('cancel', verdict, NEW_CANCEL_PREVIEW_NEXT);
+  }
+
+  // Read again, so a booking cancelled since the preview is not cancelled twice.
+  const records = await deps.booking.myRecords(userSide).catch((error) => {
+    throw toToolError(error, CANCEL_READ_ERRORS, { quoteUpstream: false });
+  });
+  const nowMs = Date.now();
+  const record = changeableRecord(records, input.booking_id, 'cancel', nowMs);
+  try {
+    await deps.booking.cancelBooking(record.id, userSide);
+  } catch (error) {
+    throw toToolError(error, CANCEL_ERRORS, { quoteUpstream: false });
+  }
+  return {
+    status: 'cancelled',
+    booking_id: record.id,
+    booking: { ...toBookingItem(record, nowMs), status: 'cancelled' },
+    cancellation_rule: null,
+    confirmation_token: null,
+    expires_at: null,
+  };
+}
+
+function renderCancelPreview(out: CancelOutput): string {
+  const { booking } = out;
+  if (booking === null) return 'No preview was produced.';
+  const lines = [
+    'Preview, nothing is cancelled yet:',
+    `Booking ${booking.booking_id} at location ${booking.location_id}, ${booking.datetime}, would be cancelled.`,
+  ];
+  if (out.cancellation_rule !== null) lines.push(out.cancellation_rule);
+  lines.push(
+    `Next: show this to the user; only after the user agrees, call ${CANCEL_TOOL} again with the same booking_id and confirmation_token ${out.confirmation_token ?? ''} (valid until ${out.expires_at ?? ''} UTC).`
+  );
+  return withUntrustedBlock(lines.join('\n'), {
+    Booking: bookingBlockValue(booking),
+  });
+}
+
+function renderCancelled(out: CancelOutput): string {
+  const { booking } = out;
+  const lines = [
+    `Cancelled: booking ${out.booking_id}${
+      booking === null
+        ? ''
+        : ` at location ${booking.location_id}, ${booking.datetime}`
+    }.`,
+    'Next: me_list_bookings lists the bookings with their current status.',
+  ];
+  return withUntrustedBlock(
+    lines.join('\n'),
+    booking === null ? {} : { Booking: bookingBlockValue(booking) }
+  );
+}
 
 export const meCancelBooking = defineTool<
   typeof cancelInput,
   typeof cancelOutput,
   ToolDeps
 >({
-  name: 'me_cancel_booking',
+  name: CANCEL_TOOL,
   title: 'Cancel one of my bookings',
-  description: 'Cancels one of the signed-in client bookings.',
+  description:
+    "Cancels one of the signed-in client's upcoming bookings, in two calls. The first call shows the booking and the business's cancellation rule and returns a confirmation_token valid for 10 minutes; nothing is cancelled. After the client agrees, the second call with the same booking_id and that token cancels the booking. The booking_id comes from me_list_bookings. Needs the client's sign-in.",
   annotations: {
     readOnlyHint: false,
     destructiveHint: true,
@@ -556,8 +775,12 @@ export const meCancelBooking = defineTool<
   ],
   input: cancelInput,
   output: cancelOutput,
-  render: () => 'not implemented',
-  handler: () => {
-    throw new ToolError('not implemented', 'none');
+  render: (out) =>
+    out.status === 'preview' ? renderCancelPreview(out) : renderCancelled(out),
+  handler: async ({ input, deps, ctx }) => {
+    const token = input[CONFIRMATION_TOKEN_ARG];
+    return token === undefined
+      ? previewCancel(input, deps, ctx)
+      : confirmCancel(input, token, deps, ctx);
   },
 });

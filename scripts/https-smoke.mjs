@@ -178,6 +178,7 @@ try {
     'business_list_team_members',
     'business_list_time_slots',
     'me_book',
+    'me_cancel_booking',
     'me_list_bookings',
     'me_list_places',
     'me_reschedule_booking',

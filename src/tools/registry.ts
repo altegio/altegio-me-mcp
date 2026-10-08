@@ -11,7 +11,7 @@ import type { Confirmations } from './confirmation.js';
 import type { DefinedTool } from './factory.js';
 import { meListBookings, meListPlaces } from './me.js';
 import { meBook } from './me-book.js';
-import { meRescheduleBooking } from './me-change.js';
+import { meCancelBooking, meRescheduleBooking } from './me-change.js';
 
 /** What every production tool receives: one booking client built from config. */
 export interface ToolDeps {
@@ -38,4 +38,5 @@ export const productionTools: readonly DefinedTool<ToolDeps>[] = Object.freeze([
   bookCheck,
   meBook,
   meRescheduleBooking,
+  meCancelBooking,
 ]);
