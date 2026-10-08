@@ -28,7 +28,8 @@ const REJECTED_REQUEST: UpstreamErrorText = {
   nextAction: 'check the parameters and call the tool again.',
 };
 
-function waitSeconds(error: UpstreamError): number {
+/** The wait a rate-limited answer advised, rounded up; the default when it advised none. */
+export function waitSeconds(error: UpstreamError): number {
   const advised = error.retryAfterSeconds;
   if (advised === null || !Number.isFinite(advised) || advised <= 0) {
     return DEFAULT_RETRY_AFTER_SECONDS;
@@ -36,7 +37,7 @@ function waitSeconds(error: UpstreamError): number {
   return Math.ceil(advised);
 }
 
-function defaultText(error: UpstreamError): UpstreamErrorText {
+export function defaultText(error: UpstreamError): UpstreamErrorText {
   switch (error.kind) {
     case 'not_found':
       return {
@@ -89,7 +90,22 @@ function defaultText(error: UpstreamError): UpstreamErrorText {
         message: 'The booking service returned data in an unexpected format.',
         nextAction: TEMPORARILY_UNAVAILABLE,
       };
+    case 'anti_fraud':
+      return {
+        message: 'The booking service could not confirm this request.',
+        nextAction:
+          "tell the user to complete the booking in the business's booking widget.",
+      };
   }
+}
+
+export interface ToToolErrorOptions {
+  /**
+   * Whether the upstream message is quoted in the error as data (default). A
+   * write call turns it off: a create rejection can quote the phone or name
+   * that was sent.
+   */
+  quoteUpstream?: boolean;
 }
 
 /**
@@ -99,7 +115,8 @@ function defaultText(error: UpstreamError): UpstreamErrorText {
  */
 export function toToolError(
   error: unknown,
-  overrides: UpstreamErrorOverrides = {}
+  overrides: UpstreamErrorOverrides = {},
+  options: ToToolErrorOptions = {}
 ): Error {
   if (!(error instanceof UpstreamError)) {
     return error instanceof Error ? error : new Error('Non-error value thrown');
@@ -112,7 +129,7 @@ export function toToolError(
         ? override(error)
         : override;
   return new ToolError(text.message, text.nextAction, {
-    upstream: error.upstreamMessage,
+    upstream: options.quoteUpstream === false ? null : error.upstreamMessage,
     cause: error,
   });
 }

@@ -5,10 +5,12 @@ import {
   USER_ROUTES,
   type BusinessRules,
 } from '../booking/client.js';
+import { buildBookingLink } from '../booking/deep-link.js';
 import { UpstreamError } from '../booking/errors.js';
 import {
   BOOK_CHECK_STEP_MS,
   CHECK_ERRORS,
+  CONFIRMATION_STATEMENT,
   SERVICE_NOT_AVAILABLE,
   requireBookingWidget,
   selectedServices,
@@ -42,7 +44,13 @@ import {
 } from './me.js';
 import type { ToolDeps } from './registry.js';
 import { SCOPE_BOOK, SCOPE_READ } from './scopes.js';
-import { toToolError } from './upstream-errors.js';
+import {
+  defaultText,
+  toToolError,
+  waitSeconds,
+  type UpstreamErrorOverrides,
+  type UpstreamErrorText,
+} from './upstream-errors.js';
 import { sanitizeUntrusted, withUntrustedBlock } from './untrusted.js';
 
 // me_book (ME-06, ADR 0006, D-02, D-03): a signed-in client books at one of
@@ -109,11 +117,13 @@ const previewSchema = z.strictObject({
     ),
 });
 
+const FALLBACK_REASONS = ['not_confirmed', 'required_field'] as const;
+
 const bookOutput = z.strictObject({
   status: z
-    .enum(['preview', 'booked'])
+    .enum(['preview', 'booked', 'fallback'])
     .describe(
-      'preview: the slot was checked and nothing is booked. booked: the booking was created.'
+      "preview: the slot was checked and nothing is booked. booked: the booking was created. fallback: the business could not confirm the booking from here, nothing was booked, and the client completes it with the pre-filled link in the business's booking widget."
     ),
   location_id: z.number().int().describe('Location id of the business.'),
   preview: previewSchema
@@ -145,6 +155,29 @@ const bookOutput = z.strictObject({
     .describe(
       'The new booking as me_list_bookings shows it; null for a preview, or when the bookings could not be read back just now.'
     ),
+  fallback: z
+    .strictObject({
+      reason: z
+        .enum(FALLBACK_REASONS)
+        .describe(
+          "not_confirmed: the business's booking service could not confirm the booking from here. required_field: the business needs a detail the client's Altegio profile does not have."
+        ),
+      link: z
+        .strictObject({
+          url: z.string().describe("Link to the business's booking widget."),
+          kind: z
+            .enum(['preselected', 'booking_form'])
+            .describe(
+              'preselected: the widget opens with the services, team member and time already selected. booking_form: the widget opens without the selection.'
+            ),
+        })
+        .nullable()
+        .describe(
+          'The booking widget link, or null when it could not be built.'
+        ),
+    })
+    .nullable()
+    .describe('Set only when status is fallback.'),
 });
 
 type BookOutput = z.infer<typeof bookOutput>;
@@ -289,11 +322,166 @@ async function preview(
     expires_at: new Date(issued.expiresAt).toISOString(),
     booking_id: null,
     booking: null,
+    fallback: null,
   };
 }
 
 const NEW_PREVIEW_NEXT =
   'call me_book again without confirmation_token for a new preview, and confirm it with the client.';
+
+// Errors of the create call (D-02). The numeric code decides, never the upstream
+// text, and no write error quotes the upstream message: a create rejection can
+// repeat the phone or name that was sent. A used token cannot be redeemed
+// again, so every advice that retries starts from a new preview.
+
+const NEW_PREVIEW_AFTER_TIME =
+  'choose another time with business_list_time_slots, then call me_book without confirmation_token for a new preview.';
+const BOOK_CHECK_LINK_NEXT =
+  "call book_check with the same selection for the business's pre-filled booking link.";
+
+/** BookingErrorCodesDict: 431 phone, 432 code, 433 time, 434 blacklisted, 435 name, 436 team member, 437 overlap. */
+const TAKEN_CODE = 433;
+const BLACKLISTED_CODE = 434;
+const NO_TEAM_MEMBER_CODE = 436;
+const OVERLAP_CODE = 437;
+const PROFILE_CODES: readonly number[] = [431, 435];
+const WIDGET_CODE_CODE = 432;
+
+function writeRejectedText(error: UpstreamError): UpstreamErrorText {
+  const has = (code: number): boolean => error.codes.includes(code);
+  if (has(TAKEN_CODE)) {
+    return {
+      message: 'Nothing was booked: this time was taken meanwhile.',
+      nextAction: NEW_PREVIEW_AFTER_TIME,
+    };
+  }
+  if (has(NO_TEAM_MEMBER_CODE)) {
+    return {
+      message: 'Nothing was booked: no team member is available at this time.',
+      nextAction:
+        'choose a team member with business_list_team_members or another time with business_list_time_slots, then call me_book without confirmation_token for a new preview.',
+    };
+  }
+  if (has(OVERLAP_CODE)) {
+    return {
+      message:
+        'Nothing was booked: the selected times overlap another booking.',
+      nextAction: NEW_PREVIEW_AFTER_TIME,
+    };
+  }
+  if (PROFILE_CODES.some(has)) {
+    return {
+      message:
+        "Nothing was booked: the business could not use the name or phone in the client's Altegio profile.",
+      nextAction: `tell the user to check the name and phone in their Altegio profile, or ${BOOK_CHECK_LINK_NEXT}`,
+    };
+  }
+  if (has(WIDGET_CODE_CODE)) {
+    return {
+      message:
+        'Nothing was booked: this business confirms bookings with a code that only its booking widget can request.',
+      nextAction: BOOK_CHECK_LINK_NEXT,
+    };
+  }
+  return {
+    message: 'Nothing was booked: the business did not accept this booking.',
+    nextAction: 'call me_book without confirmation_token for a new preview.',
+  };
+}
+
+const UNKNOWN_OUTCOME: UpstreamErrorText = {
+  message:
+    'The booking service did not answer, so it is not known whether the booking was made.',
+  nextAction:
+    'call me_list_bookings to check before booking again; do not repeat this confirmation.',
+};
+
+/**
+ * What a failed create says (D-02, T-04.1-08): a code the API gave, the
+ * blacklist (434 comes as HTTP 403), an outcome that is not known (a timeout, a
+ * 5xx or an unexpected answer may hide a booking that exists), and busy.
+ */
+export const WRITE_ERRORS: UpstreamErrorOverrides = {
+  rejected: writeRejectedText,
+  bad_request: writeRejectedText,
+  unauthorized: (error) =>
+    error.codes.includes(BLACKLISTED_CODE)
+      ? {
+          message:
+            'Nothing was booked: this business does not accept online bookings from this client.',
+          nextAction:
+            'tell the user to contact the business directly, using the contact details from business_get.',
+        }
+      : defaultText(error),
+  unavailable: UNKNOWN_OUTCOME,
+  contract_drift: UNKNOWN_OUTCOME,
+  rate_limited: (error) => ({
+    message: 'Nothing was booked: the booking service is busy right now.',
+    nextAction: `wait ${waitSeconds(error)} seconds, then call me_book without confirmation_token for a new preview.`,
+  }),
+};
+
+/** A failed create as an in-band error that quotes nothing the business wrote back. */
+export function toWriteToolError(error: unknown): Error {
+  return toToolError(error, WRITE_ERRORS, { quoteUpstream: false });
+}
+
+const PROFILE_READ_FAILED: UpstreamErrorText = {
+  message:
+    "Nothing was booked: the booking service did not answer when the client's profile was read.",
+  nextAction: NEW_PREVIEW_NEXT,
+};
+
+/** The profile read comes before the create: a failure there means nothing was booked, and the token is spent. */
+const PROFILE_ERRORS: UpstreamErrorOverrides = {
+  unavailable: PROFILE_READ_FAILED,
+  contract_drift: PROFILE_READ_FAILED,
+  rate_limited: (error) => ({
+    message: 'Nothing was booked: the booking service is busy right now.',
+    nextAction: `wait ${waitSeconds(error)} seconds, then call me_book without confirmation_token for a new preview.`,
+  }),
+};
+
+/**
+ * The create did not book and the business's own booking widget is the way on:
+ * the anti-fraud paths, and a business that requires a detail the profile lacks.
+ * The pre-filled link is built from the card, as book_check builds it.
+ */
+async function fallbackResult(
+  input: BookInput,
+  deps: ToolDeps,
+  ctx: ToolContext,
+  reason: (typeof FALLBACK_REASONS)[number]
+): Promise<BookOutput> {
+  let card;
+  try {
+    card = await deps.booking.company(input.location_id, upstreamCall(ctx));
+  } catch {
+    throw new ToolError(
+      "Nothing was booked, and the business's booking link could not be prepared just now.",
+      BOOK_CHECK_LINK_NEXT
+    );
+  }
+  const link = buildBookingLink({
+    locationId: input.location_id,
+    formUrl: card.bookingFormUrl,
+    teamMemberId: input.team_member_id,
+    serviceIds: input.service_ids,
+    slotDatetime: input.datetime,
+    businessUtcOffsetHours: card.utcOffsetHours,
+    anyTeamMemberAllowed: card.anyTeamMemberAllowed,
+  });
+  return {
+    status: 'fallback',
+    location_id: input.location_id,
+    preview: null,
+    confirmation_token: null,
+    expires_at: null,
+    booking_id: null,
+    booking: null,
+    fallback: { reason, link: { url: link.url, kind: link.kind } },
+  };
+}
 
 /** Confirm: redeems the token, reads the profile, creates the booking and reads it back. */
 async function confirm(
@@ -322,7 +510,7 @@ async function confirm(
   }
 
   const profile = await deps.booking.myProfile(userSide).catch((error) => {
-    throw toToolError(error);
+    throw toToolError(error, PROFILE_ERRORS, { quoteUpstream: false });
   });
   if (profile === null) {
     throw new ToolError(
@@ -331,8 +519,9 @@ async function confirm(
     );
   }
 
-  const created = await deps.booking
-    .createBooking(
+  let created;
+  try {
+    created = await deps.booking.createBooking(
       input.location_id,
       {
         serviceIds: input.service_ids,
@@ -341,10 +530,24 @@ async function confirm(
       },
       profile,
       userSide
-    )
-    .catch((error) => {
-      throw toToolError(error);
-    });
+    );
+  } catch (error) {
+    if (error instanceof UpstreamError) {
+      if (error.kind === 'anti_fraud') {
+        return fallbackResult(input, deps, ctx, 'not_confirmed');
+      }
+      // A business that requires a field the profile lacks (the e-mail) answers
+      // 422 with no code; the widget collects it.
+      if (
+        error.kind === 'rejected' &&
+        error.codes.length === 0 &&
+        error.requiredFields.length > 0
+      ) {
+        return fallbackResult(input, deps, ctx, 'required_field');
+      }
+    }
+    throw toWriteToolError(error);
+  }
 
   // Read the new booking back as me_list_bookings shows it; a failed or empty
   // re-read keeps the booking, which exists upstream either way.
@@ -364,6 +567,7 @@ async function confirm(
     expires_at: null,
     booking_id: created.bookingId,
     booking,
+    fallback: null,
   };
 }
 
@@ -398,6 +602,24 @@ function renderPreview(out: BookOutput): string {
   }
   if (who !== null) fields[`team member ${who.id}`] = who.name;
   return withUntrustedBlock(lines.join('\n'), fields);
+}
+
+function renderFallback(out: BookOutput): string {
+  const { fallback } = out;
+  const lines = [
+    fallback?.reason === 'required_field'
+      ? "Not booked: the business needs more details for this booking than the client's Altegio profile has."
+      : 'Not booked: the business could not confirm this booking from here.',
+  ];
+  if (fallback?.link != null) {
+    lines.push(
+      fallback.link.kind === 'preselected'
+        ? `Booking link with the services, team member and time already selected: ${fallback.link.url}`
+        : `Booking link to the business's booking form, without the selection: ${fallback.link.url}`
+    );
+  }
+  lines.push(CONFIRMATION_STATEMENT);
+  return lines.join('\n');
 }
 
 function renderBooked(out: BookOutput): string {
@@ -444,7 +666,11 @@ export const meBook = defineTool<typeof bookInput, typeof bookOutput, ToolDeps>(
     input: bookInput,
     output: bookOutput,
     render: (out) =>
-      out.status === 'preview' ? renderPreview(out) : renderBooked(out),
+      out.status === 'preview'
+        ? renderPreview(out)
+        : out.status === 'fallback'
+          ? renderFallback(out)
+          : renderBooked(out),
     handler: async ({ input, deps, ctx }) => {
       const token = input[CONFIRMATION_TOKEN_ARG];
       return token === undefined

@@ -934,6 +934,7 @@ export class BookingClient {
     });
     const parsed = bookRecordCreateDataSchema.safeParse(reply.data);
     if (!parsed.success || (reply.status !== 201 && reply.status !== 200)) {
+      // Not the documented answer, so whether a booking exists is not known.
       throw new UpstreamError('contract_drift', route, {
         status: reply.status,
         cause: parsed.success ? undefined : parsed.error,
@@ -947,8 +948,9 @@ export class BookingClient {
       !Number.isSafeInteger(bookingId) ||
       bookingId <= 0
     ) {
-      // A 201 that names no booking created nothing.
-      throw new UpstreamError('contract_drift', route, {
+      // A 201 that names no booking created nothing (the fake 201): the
+      // anti-fraud path, handed off to the business's booking widget.
+      throw new UpstreamError('anti_fraud', route, {
         status: reply.status,
       });
     }
