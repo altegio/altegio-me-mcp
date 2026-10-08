@@ -139,3 +139,49 @@ the test client; the businesses are public places.
   one in 2099, and one past at 726120). Bait values for the non-echo tests: phone `+15550000001`
   (places and `company`), `Fixture Client` and `fixture.client@example.invalid` (in the first
   record's `comment`), and `fixture-hash-0001` (in `token` and `record_token` of the first record).
+
+## Local end-to-end run
+
+Run once on the owner's machine with the owner's own user token, through the direct
+`X-Altegio-User-Token` header (the proxy's headless shape) with `CALLER_AUTH=optional`. This is
+ROADMAP criterion 2 of Phase 4 on real data. The claude.ai OAuth run waits for I8 (Phase 6
+acceptance). No token, phone, name or code is in this record, and the link is described, not quoted.
+
+- **When:** 2026-10-08 07:20 UTC (14:20 UTC+7).
+- **Commit:** e45ab9b (branch `phase-04-own-places`, plan 04-04).
+- **Command:** `ALTEGIO_E2E=1 ALTEGIO_E2E_USER=1 node --env-file=.env ./node_modules/jest/bin/jest.js --testPathPatterns=me-flow.live --runInBand`
+  (`src/__tests__/me-flow.live.test.ts`; the real app in process, the production request gate,
+  one sequential call per step).
+
+| Step | Tool | Result |
+| --- | --- | --- |
+| 1 | `me_list_places` | 3 places; the first with online booking and a usual is location 731063 |
+| 2 | `me_list_bookings` | 12 bookings, no error |
+| 3 | `business_list_dates` with the usual | a free date: 2026-10-11 |
+| 4 | `business_list_time_slots` for that date | a free slot: 2026-10-11T17:15:00+07:00 |
+| 5 | `book_check` | status `verified`, link kind `preselected` |
+
+- **The usual of place 731063:** services 12391130 and 12378557, team member 2178363.
+- **The link:** the business's own booking form on an `alteg.io` host, `/company/731063`, with
+  `?o=m2178363s12391130s12378557d2611101715`: the team member, both services in order and the slot
+  time (day before month, 11 Oct 2026, 17:15). It holds ids and a time only.
+- **Upstream calls:** 9 of at most 12. No response text and no log line held either token (the
+  test asserts it).
+- **Test correction after the run.** 6 of the 7 tests passed. The failing one, the `book_check`
+  link check, was a bug in the assertion: it expected `m<staff>s<first service>d`, while the usual
+  has two services and the link correctly names both. The assertion now expects `m<staff>`, every
+  service id in order, then `d` (commit 27ed672; the fixture flow in `me-flow.test.ts` got the same
+  form first). The suite was not rerun, since it reads the owner's `.env`; the recorded link
+  satisfies the corrected check (checked against the saved run output). The product behaviour was
+  not changed.
+- **Container smoke:** `docker build -t altegio-me-mcp:phase-04 .` and
+  `bash scripts/smoke.sh altegio-me-mcp:phase-04` printed `PASS smoke: ... mcp_call_lines=7
+  refusal_lines=1 user=node stop=0s exit=0`, and the HTTPS fixture printed `PASS: signed HTTPS
+  initialize and eight-tool catalog, stateless responses`. A signed client identity without
+  `mcp:me:read` got HTTP 200 and an in-band refusal of `me_list_places` naming the sign-in, and its
+  canary user token is in no log line.
+- **What this does not show:** the proxy's phone and SMS sign-in and the OAuth step (I8); a booking
+  (none was made; the owner closed the widget before the contact step).
+
+Owner review: completed 2026-10-08, pre-selection confirmed (the widget opened with the selection
+pre-filled).
