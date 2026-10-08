@@ -73,6 +73,18 @@ export const USER_ROUTES = Object.freeze({
   } as const),
 });
 
+/**
+ * The client's writes (ADR 0006): the only non-read routes the server calls,
+ * each made with the signed-in client's user token next to the partner token.
+ * This file is the only source file that names the create route.
+ */
+export const CLIENT_WRITE_ROUTES = Object.freeze({
+  create: Object.freeze({
+    method: 'POST',
+    route: '/book_record/{location_id}',
+  } as const),
+});
+
 export interface BookingForm {
   id: number;
   title: string | null;

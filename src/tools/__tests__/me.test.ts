@@ -57,6 +57,7 @@ function textOf(invocation: ToolInvocation): string {
 }
 
 type BookingItem = {
+  booking_id: number;
   location_id: number;
   business: string | null;
   currency: string | null;
@@ -128,6 +129,7 @@ describe('me_list_bookings', () => {
       ['2025-03-10T10:00:00+0300', 'visited'],
     ]);
     expect(out.items[0]).toEqual({
+      booking_id: 5,
       location_id: 722227,
       business: 'Fixture Barber',
       currency: '€',
@@ -213,6 +215,16 @@ describe('me_list_bookings', () => {
       expect(text.slice(0, open)).not.toContain(authored);
       expect(text.slice(open, close)).toContain(authored);
     }
+  });
+
+  it('names the booking id of every item, in the data and in the numbered lines', async () => {
+    const { booking } = setup(loadFixture('user_records', 'default'));
+    const result = await meListBookings.invoke({}, { booking }, CLIENT_CTX);
+    const out = result.result.structuredContent as BookingsOut;
+    expect(out.items.map((item) => item.booking_id)).toEqual([5, 4, 3, 2, 1]);
+    const text = textOf(result);
+    expect(text).toContain('1. booking 5, location 722227,');
+    expect(text).toContain('5. booking 1, location 722227,');
   });
 
   it('says that no bookings were found for an empty list', async () => {

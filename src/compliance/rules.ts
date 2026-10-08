@@ -110,13 +110,14 @@ function invisibleClass(flags: string): RegExp {
 const HAS_INVISIBLE = invisibleClass('u');
 const ALL_INVISIBLE = invisibleClass('gu');
 
-// Routes this server never calls (ADR-0001-D2, and D-01 of Phase 4): the write
-// route, the sign-in code request, the sign-in itself and the network-wide
-// places prefix of the booking API (the sign-in stays out of every code path).
+// Routes this server never calls (ADR-0001-D2, and D-01 of Phase 4): the sign-in
+// code request, the sign-in itself and the network-wide places prefix of the
+// booking API (the sign-in stays out of every code path). The create route was
+// on this list until the client write path (ADR 0006); it is now a client write
+// route, and Task 2 of plan 04.1-02 confines its literal to src/booking/client.ts.
 // Built from parts so that neither this file nor a grep for the routes finds
 // them here.
 const FORBIDDEN_ROUTES: readonly string[] = [
-  ['book', 'record'].join('_'),
   ['book', 'code'].join('_'),
   ['', 'user', 'auth'].join('/'),
   ['', 'booking', 'yplaces'].join('/'),
