@@ -3,8 +3,12 @@ import {
   CallToolRequestSchema,
   type CallToolResult,
   ErrorCode,
+  GetPromptRequestSchema,
+  ListPromptsRequestSchema,
   ListToolsRequestSchema,
   McpError,
+  type GetPromptResult,
+  type ListPromptsResult,
   type ListToolsResult,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { CallRecord } from '../observability/call-log.js';
@@ -14,6 +18,7 @@ import { createToolContext, TOOL_DEADLINE_MS } from '../tools/context.js';
 import type { DefinedTool, ToolSpec } from '../tools/factory.js';
 import { missingScopes, scopeRefusalText } from '../tools/scopes.js';
 import { SERVER_INSTRUCTIONS } from './instructions.js';
+import { SERVER_PROMPTS } from './prompts.js';
 
 export interface CreateMcpServerOptions<D> {
   name: string;
@@ -52,12 +57,45 @@ export function createMcpServer<D>(options: CreateMcpServerOptions<D>): Server {
   ];
   const server = new Server(
     { name, version },
-    { capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS }
+    {
+      capabilities: { tools: {}, prompts: {} },
+      instructions: SERVER_INSTRUCTIONS,
+    }
   );
 
   server.setRequestHandler(ListToolsRequestSchema, (): ListToolsResult => ({
     tools: [...specs] as unknown as ListToolsResult['tools'],
   }));
+
+  server.setRequestHandler(ListPromptsRequestSchema, (): ListPromptsResult => ({
+    prompts: SERVER_PROMPTS.map(({ name, title, description }) => ({
+      name,
+      title,
+      description,
+    })),
+  }));
+
+  server.setRequestHandler(
+    GetPromptRequestSchema,
+    (request): GetPromptResult => {
+      const prompt = SERVER_PROMPTS.find(
+        (entry) => entry.name === request.params.name
+      );
+      if (prompt === undefined) {
+        record.outcome = 'protocol_error';
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          'Unknown prompt. Next: call prompts/list and use one of the listed names.'
+        );
+      }
+      return {
+        description: prompt.description,
+        messages: [
+          { role: 'user', content: { type: 'text', text: prompt.text } },
+        ],
+      };
+    }
+  );
 
   server.setRequestHandler(
     CallToolRequestSchema,

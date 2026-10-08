@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
 import type { ToolMeta, ToolSpec } from '../tools/factory.js';
-import { SCOPE_BOOK, SCOPE_DISCOVER } from '../tools/scopes.js';
+import { SCOPE_BOOK, SCOPE_DISCOVER, SCOPE_READ } from '../tools/scopes.js';
 import {
   INVISIBLE_RANGES,
   UNTRUSTED_CLOSE,
@@ -110,12 +110,16 @@ function invisibleClass(flags: string): RegExp {
 const HAS_INVISIBLE = invisibleClass('u');
 const ALL_INVISIBLE = invisibleClass('gu');
 
-// Routes v1 never calls (ADR-0001-D2). Built from parts so that neither this
-// file nor a grep for the routes finds them here.
+// Routes this server never calls (ADR-0001-D2, and D-01 of Phase 4): the write
+// route, the sign-in code request, the sign-in itself and the network-wide
+// places prefix of the booking API (the sign-in stays out of every code path).
+// Built from parts so that neither this file nor a grep for the routes finds
+// them here.
 const FORBIDDEN_ROUTES: readonly string[] = [
   ['book', 'record'].join('_'),
   ['book', 'code'].join('_'),
   ['', 'user', 'auth'].join('/'),
+  ['', 'booking', 'yplaces'].join('/'),
 ];
 const SKIPPED_DIRECTORIES: ReadonlySet<string> = new Set([
   '__tests__',
@@ -429,13 +433,24 @@ export function checkTool(
     add('R13', 'inputSchema.additionalProperties must be false');
   }
 
-  // R14 access tier (ADR 0004): no tool runs without an admitted caller, and a
-  // tool that writes acts for one signed-in client, so it needs that tier.
+  // R14 access tier (ADR 0004, ADR 0005): no tool runs without an admitted
+  // caller, a tool that reads a signed-in client's own data needs the read
+  // tier, and a tool that writes acts for one signed-in client, so it needs
+  // the book tier.
   const scopes: readonly string[] = Array.isArray(meta.scopes)
     ? meta.scopes
     : [];
   if (!scopes.includes(SCOPE_DISCOVER)) {
     add('R14', `scopes must include ${SCOPE_DISCOVER}`);
+  }
+  if (
+    meta.upstream.some((call) => call.route.startsWith('/user/')) &&
+    !scopes.includes(SCOPE_READ)
+  ) {
+    add(
+      'R14',
+      `a tool that reads a signed-in client's data must require ${SCOPE_READ}`
+    );
   }
   if (annotations.readOnlyHint !== true && !scopes.includes(SCOPE_BOOK)) {
     add('R14', `a tool that writes must require ${SCOPE_BOOK}`);
