@@ -195,8 +195,8 @@ by ADR 0005, own places first). Three scopes:
 - `mcp:me:discover` is the base tier. Every admitted caller holds it (a partner token, a client
   sign-in, or no token while `CALLER_AUTH=optional`), and the six known-business tools need only it.
 - `mcp:me:read` is the signed-in client's own places and bookings. Only a client sign-in grants it,
-  and `me_list_places` requires it. An anonymous or partner caller who calls that tool gets an
-  in-band error that names the client sign-in.
+  and `me_list_places` and `me_list_bookings` require it. An anonymous or partner caller who calls
+  one of them gets an in-band error that names the client sign-in.
 - `mcp:me:book` is declared for later writes and granted to nobody yet, whatever a scope header says.
 
 `tools/list` shows the same tools to everyone. A client sign-in reaches the server as a signed

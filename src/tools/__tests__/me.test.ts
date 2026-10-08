@@ -231,8 +231,11 @@ describe('me_list_bookings', () => {
       expect(text).not.toContain(bait);
     }
     const keys = keysAtAnyDepth(result.result.structuredContent);
+    // Service and team member ids are part of the shape; the record's own id
+    // is not, so a booking item has no key `id` of its own.
+    const out = result.result.structuredContent as BookingsOut;
+    for (const item of out.items) expect(Object.keys(item)).not.toContain('id');
     for (const forbidden of [
-      'id',
       'hash',
       'token',
       'record_id',

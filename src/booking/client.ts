@@ -15,10 +15,12 @@ import {
   teamMembersDataSchema,
   timeSlotsDataSchema,
   userPlacesDataSchema,
+  userRecordsDataSchema,
   type CompanyData,
   type ServicesData,
   type TeamMembersData,
   type UserPlacesData,
+  type UserRecordsData,
 } from './schemas.js';
 
 // Typed client of the public Altegio booking API (D-01). The route table is
@@ -383,6 +385,84 @@ function toOwnPlace(place: UserPlacesData[number]): OwnPlace {
   };
 }
 
+/** The value when it is an object; null for [] (PHP's empty map), null or absent. */
+function objectOrNull<T>(
+  value: T
+): Exclude<T, readonly unknown[] | null | undefined> | null {
+  return value === null || value === undefined || Array.isArray(value)
+    ? null
+    : (value as Exclude<T, readonly unknown[] | null | undefined>);
+}
+
+type UserRecord = UserRecordsData[number];
+
+/**
+ * The price of one service line: cost times amount. The recorded `discount`
+ * has no documented unit, so a discounted line has no price rather than a
+ * guessed one.
+ */
+function lineItemPrice(
+  service: NonNullable<UserRecord['services']>[number]
+): number | null {
+  const cost = service.cost;
+  if (typeof cost !== 'number') return null;
+  if (typeof service.discount === 'number' && service.discount !== 0) {
+    return null;
+  }
+  const amount = typeof service.amount === 'number' ? service.amount : 1;
+  return cost * amount;
+}
+
+function sumPrices(prices: readonly (number | null)[]): number | null {
+  if (prices.length === 0) return null;
+  let total = 0;
+  for (const price of prices) {
+    if (price === null) return null;
+    total += price;
+  }
+  return total;
+}
+
+/**
+ * A record as an OwnRecord, or null when it names no place or no moment: such
+ * a record can be neither shown under a place nor ordered. Only the keys the
+ * recorded contract names are read; the id, token and comment are not.
+ */
+function toOwnRecord(record: UserRecord): OwnRecord | null {
+  const company = objectOrNull(record.company);
+  const datetime = nonEmpty(record.datetime);
+  if (company === null || datetime === null) return null;
+  const locationId = company.id;
+  if (typeof locationId !== 'number' || locationId <= 0) return null;
+
+  const staff = objectOrNull(record.staff);
+  const teamMemberId =
+    staff !== null && typeof staff.id === 'number' && staff.id > 0
+      ? staff.id
+      : null;
+  const prices = (record.services ?? []).map(lineItemPrice);
+  return {
+    locationId,
+    businessName: nonEmpty(company.public_title) ?? nonEmpty(company.title),
+    city: nonEmpty(company.city),
+    currency: nonEmpty(company.currency_short_title),
+    services: (record.services ?? []).map((service, index) => ({
+      id: service.id,
+      title: nonEmpty(service.title),
+      price: prices[index] ?? null,
+    })),
+    teamMember:
+      teamMemberId === null
+        ? null
+        : { id: teamMemberId, name: nonEmpty(staff?.name) },
+    datetime,
+    cancelled: truthy(record.deleted),
+    attendance:
+      typeof record.attendance === 'number' ? record.attendance : null,
+    price: sumPrices(prices),
+  };
+}
+
 function toCatalog(data: ServicesData): ServiceCatalog {
   const services: BookableService[] = [];
   for (const service of data.services) {
@@ -687,9 +767,19 @@ export class BookingClient {
    * The signed-in client's own records (ME-03, ME-04), in upstream order
    * (oldest first). `call.userToken` is required, as for myPlaces.
    */
-  myRecords(call: UpstreamCallOptions): Promise<OwnRecord[]> {
+  async myRecords(call: UpstreamCallOptions): Promise<OwnRecord[]> {
     assertUserToken(call.userToken);
-    return Promise.reject(new Error('not implemented'));
+    const { route, method } = USER_ROUTES.records;
+    const data = await this.read(
+      { method, route, path: route, ...call },
+      userRecordsDataSchema
+    );
+    const records: OwnRecord[] = [];
+    for (const entry of data) {
+      const record = toOwnRecord(entry);
+      if (record !== null) records.push(record);
+    }
+    return records;
   }
 
   /**

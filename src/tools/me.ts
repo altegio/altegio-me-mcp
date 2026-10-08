@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { USER_ROUTES, type OwnPlace } from '../booking/client.js';
+import {
+  USER_ROUTES,
+  type OwnPlace,
+  type OwnRecord,
+} from '../booking/client.js';
 import { userCall } from './context.js';
 import { defineTool } from './factory.js';
 import {
@@ -16,7 +20,17 @@ import {
 import type { ToolDeps } from './registry.js';
 import { SCOPE_READ } from './scopes.js';
 import { toToolError } from './upstream-errors.js';
-import { sanitizeUntrusted, withUntrustedBlock } from './untrusted.js';
+import {
+  UNTRUSTED_NOTE,
+  sanitizeUntrusted,
+  withUntrustedBlock,
+} from './untrusted.js';
+import {
+  bookingStatus,
+  orderBookings,
+  usualByLocation,
+  type Usual,
+} from './usual.js';
 
 // Tools for the signed-in client's own data (ADR 0005, D-02). They read the
 // client's places and, in a later plan, bookings through the user token the
@@ -121,27 +135,250 @@ export const meListPlaces = defineTool<
   },
 });
 
-// me_list_bookings (ME-03): declared so its tests compile; behaviour follows.
+// me_list_bookings (ME-03, D-02): the client's own records, ordered, with the
+// usual service and team member per place (D-03). A record's id and hash, and
+// any client name, phone or e-mail, are never read, so none can be returned
+// (ME-05); the strict schemas below make that a property of the output.
 
-const bookingsOutput = z.strictObject({
-  items: z.array(z.never()),
-  pagination: z.strictObject({}),
+const BOOKING_STATUSES = [
+  'upcoming',
+  'visited',
+  'no_show',
+  'cancelled',
+  'past',
+] as const;
+
+const bookingItemSchema = z.strictObject({
+  location_id: z
+    .number()
+    .int()
+    .describe('Location id of the business, as the business tools take it.'),
+  business: untrustedText('Business name.'),
+  services: z
+    .array(
+      z.strictObject({
+        id: z.number().int().describe('Service id.'),
+        title: untrustedText('Service title.'),
+        price: z
+          .number()
+          .nullable()
+          .describe('Price of the service line, or null when not known.'),
+      })
+    )
+    .describe('The booked services; empty when the record lists none.'),
+  team_member: z
+    .strictObject({
+      id: z.number().int().describe('Team member id.'),
+      name: untrustedText('Team member name.'),
+    })
+    .nullable()
+    .describe('The team member, or null when the record has none.'),
+  datetime: z
+    .string()
+    .describe(
+      "Start of the booking as the booking service recorded it: ISO 8601 with the business's UTC offset, for example 2026-10-12T14:00:00+0300."
+    ),
+  status: z
+    .enum(BOOKING_STATUSES)
+    .describe(
+      'upcoming: still ahead. visited or no_show: past, by the recorded attendance (inferred, not documented). cancelled: cancelled by either side. past: past with no attendance recorded.'
+    ),
+  price: z
+    .number()
+    .nullable()
+    .describe(
+      'Sum of the service prices, or null when any is not known or the record has no service.'
+    ),
+  currency: untrustedText('Currency sign of the business.'),
 });
 
+type BookingItem = z.infer<typeof bookingItemSchema>;
+
+const usualItemSchema = z.strictObject({
+  location_id: z
+    .number()
+    .int()
+    .describe('Location id of the business, as the business tools take it.'),
+  business: untrustedText('Business name.'),
+  service_ids: z
+    .array(z.number().int())
+    .describe('Service ids of the last kept visit, for business_list_dates.'),
+  service_titles: z
+    .array(z.string().nullable())
+    .describe(`Titles of those services. ${UNTRUSTED_NOTE}`),
+  team_member_id: z
+    .number()
+    .int()
+    .describe('Team member of the last kept visit; 0 means any team member.'),
+  team_member_name: untrustedText('Team member name.'),
+  last_booked: z.string().describe('Date of that visit, YYYY-MM-DD.'),
+});
+
+type UsualItem = z.infer<typeof usualItemSchema>;
+
+const bookingsOutput = listOutputSchema(bookingItemSchema).extend({
+  usual: z
+    .array(usualItemSchema)
+    .describe(
+      'The usual service and team member of every place with an earlier kept visit, most recent first; it covers all places, not only this page.'
+    ),
+});
+
+type BookingsOutput = z.infer<typeof bookingsOutput>;
+
+const bookingsInput = z.strictObject(pageInputShape());
+
+function toBookingItem(record: OwnRecord, nowMs: number): BookingItem {
+  return {
+    location_id: record.locationId,
+    business: sanitizeUntrusted(record.businessName, {
+      maxChars: NAME_MAX_CHARS,
+    }),
+    services: record.services.map((service) => ({
+      id: service.id,
+      title: sanitizeUntrusted(service.title, { maxChars: NAME_MAX_CHARS }),
+      price: service.price,
+    })),
+    team_member:
+      record.teamMember === null
+        ? null
+        : {
+            id: record.teamMember.id,
+            name: sanitizeUntrusted(record.teamMember.name, {
+              maxChars: NAME_MAX_CHARS,
+            }),
+          },
+    datetime: record.datetime,
+    status: bookingStatus(record, nowMs),
+    price: record.price,
+    currency: sanitizeUntrusted(record.currency, { maxChars: 20 }),
+  };
+}
+
+function toUsualItem(locationId: number, usual: Usual): UsualItem {
+  return {
+    location_id: locationId,
+    business: sanitizeUntrusted(usual.businessName, {
+      maxChars: NAME_MAX_CHARS,
+    }),
+    service_ids: usual.serviceIds,
+    service_titles: usual.serviceTitles.map((title) =>
+      sanitizeUntrusted(title, { maxChars: NAME_MAX_CHARS })
+    ),
+    team_member_id: usual.teamMemberId,
+    team_member_name: sanitizeUntrusted(usual.teamMemberName, {
+      maxChars: NAME_MAX_CHARS,
+    }),
+    last_booked: usual.date,
+  };
+}
+
+/** The usual of every place, the most recently visited first. */
+function usualItems(usual: ReadonlyMap<number, Usual>): UsualItem[] {
+  return [...usual]
+    .sort(([idA, a], [idB, b]) => b.date.localeCompare(a.date) || idA - idB)
+    .map(([locationId, entry]) => toUsualItem(locationId, entry));
+}
+
+function teamMemberPhrase(id: number, name: string | null): string {
+  return id === 0
+    ? 'any team member (team_member_id 0)'
+    : `${name ?? 'a team member'} (team_member_id ${id})`;
+}
+
+function servicesPhrase(
+  ids: readonly number[],
+  titles: readonly (string | null)[]
+): string {
+  return ids
+    .map((id, index) => `${titles[index] ?? 'a service'} (service_id ${id})`)
+    .join(', ');
+}
+
+function bookingBlockValue(item: BookingItem): string {
+  const price =
+    item.price === null ? '' : `, price ${item.price} ${item.currency ?? ''}`;
+  const member =
+    item.team_member === null
+      ? 'any team member'
+      : (item.team_member.name ?? 'a team member');
+  return `${item.business ?? 'a business'}: ${
+    item.services.length === 0
+      ? 'no service listed'
+      : item.services.map((service) => service.title ?? 'a service').join(', ')
+  } with ${member}${price}`.trimEnd();
+}
+
+function renderBookings(out: BookingsOutput): string {
+  const { items, pagination } = out;
+  if (pagination.total === 0) {
+    return 'No bookings were found for this sign-in.';
+  }
+  const first = (pagination.page - 1) * pagination.page_size;
+  const numbered = items.map((item, index) => ({
+    item,
+    number: first + index + 1,
+  }));
+  const line = ({ item, number }: (typeof numbered)[number]): string =>
+    `${number}. location ${item.location_id}, ${item.datetime}, ${item.status}.`;
+  const upcoming = numbered.filter(({ item }) => item.status === 'upcoming');
+  const past = numbered.filter(({ item }) => item.status !== 'upcoming');
+
+  const lines = [
+    `Your bookings, page ${pagination.page}: ${pagination.returned} returned of ${pagination.total ?? 'unknown'} in total.`,
+  ];
+  if (upcoming.length > 0) lines.push('Upcoming:', ...upcoming.map(line));
+  if (past.length > 0) lines.push('Past:', ...past.map(line));
+  if (out.usual.length > 0) {
+    lines.push(
+      `A usual service and team member is listed for ${out.usual.length} of these places (Usual lines below).`,
+      'Next: to book a usual again, pass its location_id, service_ids and team_member_id to business_list_dates.'
+    );
+  }
+  if (pagination.next_page !== null) {
+    lines.push(`More: request page ${pagination.next_page}.`);
+  }
+
+  const fields: Record<string, unknown> = {};
+  for (const entry of numbered) {
+    fields[`Booking ${entry.number}`] = bookingBlockValue(entry.item);
+  }
+  for (const usual of out.usual) {
+    fields[`Usual at location ${usual.location_id}`] =
+      `${usual.business ?? 'a business'}: ${servicesPhrase(usual.service_ids, usual.service_titles)} with ${teamMemberPhrase(usual.team_member_id, usual.team_member_name)}, last booked ${usual.last_booked}`;
+  }
+  return withUntrustedBlock(lines.join('\n'), fields);
+}
+
 export const meListBookings = defineTool<
-  typeof placesInput,
+  typeof bookingsInput,
   typeof bookingsOutput,
   ToolDeps
 >({
   name: 'me_list_bookings',
   title: 'List my bookings',
-  description: "Lists the signed-in client's own bookings.",
+  description:
+    "Lists the signed-in client's own bookings, upcoming first, then past ones with the latest first, each with the business, services, team member, time, status and price, and the usual service and team member per place. Needs the client's sign-in. The records route is undocumented, so some fields can be empty.",
   kind: 'list',
   scopes: [SCOPE_READ],
   annotations: UPSTREAM_READ_HINTS,
   upstream: [USER_ROUTES.records],
-  input: placesInput,
+  input: bookingsInput,
   output: bookingsOutput,
-  render: () => '',
-  handler: () => Promise.reject(new Error('not implemented')),
+  render: renderBookings,
+  handler: async ({ input, deps, ctx }) => {
+    try {
+      const records = await deps.booking.myRecords(userCall(ctx));
+      const now = Date.now();
+      const items = orderBookings(records, now).map((record) =>
+        toBookingItem(record, now)
+      );
+      return {
+        ...paginateArray(items, input),
+        usual: usualItems(usualByLocation(records, now)),
+      };
+    } catch (error) {
+      throw toToolError(error);
+    }
+  },
 });
