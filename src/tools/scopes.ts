@@ -64,8 +64,11 @@ export function scopeRefusalText(
   tool: string,
   missing: readonly Scope[]
 ): string {
+  if (missing.includes(SCOPE_BOOK) && missing.includes(SCOPE_READ)) {
+    return `${tool} books for the signed-in client, and this connection has no client sign-in. Next: tell the user to connect this server with their Altegio sign-in, which happens on the sign-in page and never in the chat, or call book_check for the business's pre-filled booking link; do not retry.`;
+  }
   if (missing.includes(SCOPE_BOOK)) {
-    return `${tool} acts for a signed-in client, and this connection has no client sign-in. Next: tell the user this step is done in the business's booking widget; do not retry.`;
+    return `${tool} books for the signed-in client, and this connection's sign-in does not include booking. Next: tell the user to connect again with booking allowed, or call book_check for the business's pre-filled booking link; do not retry.`;
   }
   if (missing.includes(SCOPE_READ)) {
     return `${tool} reads the signed-in client's own places and bookings, and this connection has no client sign-in. Next: tell the user to connect this server with their Altegio sign-in, which happens on the sign-in page and never in the chat; do not retry.`;

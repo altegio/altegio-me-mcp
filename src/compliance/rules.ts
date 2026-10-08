@@ -120,16 +120,21 @@ const ALL_INVISIBLE = invisibleClass('gu');
 
 // Routes this server never calls (ADR-0001-D2, and D-01 of Phase 4): the sign-in
 // code request, the sign-in itself and the network-wide places prefix of the
-// booking API (the sign-in stays out of every code path). The create route was
-// on this list until the client write path (ADR 0006); it is now a client write
-// route, and Task 2 of plan 04.1-02 confines its literal to src/booking/client.ts.
-// Built from parts so that neither this file nor a grep for the routes finds
-// them here.
+// booking API (the sign-in stays out of every code path). Built from parts so
+// that neither this file nor a grep for the routes finds them here.
 const FORBIDDEN_ROUTES: readonly string[] = [
   ['book', 'code'].join('_'),
   ['', 'user', 'auth'].join('/'),
   ['', 'booking', 'yplaces'].join('/'),
 ];
+
+// The create route was on that list until the client write path (ADR 0006,
+// SEC-02 retired for it). It is now a client write route, and its literal stays
+// confined to the one file that calls it.
+const CLIENT_WRITE_ROUTE_LITERALS: readonly string[] = [
+  ['book', 'record'].join('_'),
+];
+const CLIENT_WRITE_ROUTE_FILE = join('booking', 'client.ts');
 const SKIPPED_DIRECTORIES: ReadonlySet<string> = new Set([
   '__tests__',
   'compliance',
@@ -529,17 +534,31 @@ function sourceFiles(directory: string): string[] {
   return files;
 }
 
-/** R12: no source file refers to the write or sign-in routes (SEC-02). */
+/**
+ * R12: no source file refers to the sign-in routes, and none but
+ * src/booking/client.ts names a client write route (SEC-02, ADR 0006).
+ */
 export function scanForbiddenRoutes(rootDir: string): Violation[] {
   const out: Violation[] = [];
   for (const file of sourceFiles(rootDir)) {
     const text = readFileSync(file, 'utf8');
+    const name = relative(rootDir, file);
     const found = FORBIDDEN_ROUTES.filter((route) => text.includes(route));
     if (found.length > 0) {
       out.push({
         rule: 'R12',
-        tool: relative(rootDir, file),
+        tool: name,
         message: `refers to a route v1 never calls: ${found.join(', ')}`,
+      });
+    }
+    if (
+      name !== CLIENT_WRITE_ROUTE_FILE &&
+      CLIENT_WRITE_ROUTE_LITERALS.some((route) => text.includes(route))
+    ) {
+      out.push({
+        rule: 'R12',
+        tool: name,
+        message: 'names a client write route outside src/booking/client.ts',
       });
     }
   }

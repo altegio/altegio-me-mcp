@@ -36,6 +36,7 @@ export const CONFIG_KEYS = [
   'CLIENT_USER_TOKEN_HEADER',
   'CLIENT_SCOPE_HEADER',
   'CLIENT_CALLER_KIND',
+  'CONFIRMATION_SECRET',
   'COMMIT_SHA',
   'TRUSTED_PROXY_HOPS',
   'SHARED_EGRESS_CIDRS',
@@ -93,6 +94,7 @@ const signedHeaderName = (fallback: string) =>
     .default(fallback);
 
 const COMMIT_SHA_FORMAT = /^[0-9a-f]{7,40}$/;
+const CONFIRMATION_SECRET_FORMAT = /^[\u0021-\u007e]{32,512}$/;
 
 const httpUrl = (): z.ZodURL => z.url({ protocol: /^https?$/ });
 
@@ -187,6 +189,14 @@ const ConfigSchema = z
       .regex(CALLER_KIND_FORMAT)
       .refine((kind) => kind !== CALLER_KIND_PARTNER)
       .default(CALLER_KIND_CLIENT),
+    // The key of the confirmation tokens of the write tools (ADR 0006, D-03).
+    // Unset gives each process its own random key, so a confirmation is valid
+    // only on the instance that issued it; set it to share them across
+    // instances. Printable ASCII without spaces, so it survives an env file.
+    CONFIRMATION_SECRET: z
+      .string()
+      .regex(CONFIRMATION_SECRET_FORMAT)
+      .optional(),
     COMMIT_SHA: z.string().regex(COMMIT_SHA_FORMAT).optional(),
     // How many proxies sit between the caller and us, counted from the right of
     // X-Forwarded-For. 1 is the platform proxy; 0 is a deployment with none.
@@ -367,6 +377,11 @@ const MESSAGES: Readonly<
     missing: 'is required (see .env.example)',
     invalid:
       'must be 1 to 32 characters (a lower-case letter, then lower-case letters, digits, _ or -) and must not be partner',
+  },
+  CONFIRMATION_SECRET: {
+    missing: 'is required (see .env.example)',
+    invalid:
+      'must be 32 to 512 printable ASCII characters without spaces (it is the key of the confirmation tokens)',
   },
   COMMIT_SHA: {
     missing: 'is required (see .env.example)',

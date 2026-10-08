@@ -314,7 +314,9 @@ async function confirm(
     throw new ToolError(
       verdict === 'expired'
         ? 'Nothing was booked: this confirmation_token has expired.'
-        : 'Nothing was booked: this confirmation_token is not valid for this selection and sign-in.',
+        : verdict === 'used'
+          ? 'Nothing was booked: this confirmation_token was already used.'
+          : 'Nothing was booked: this confirmation_token is not valid for this selection and sign-in.',
       NEW_PREVIEW_NEXT
     );
   }

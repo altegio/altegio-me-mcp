@@ -17,6 +17,13 @@ import { z } from 'zod';
 // a random key of this process (a token then lives on the instance that issued
 // it). A token that does not verify is never ignored: the caller refuses the
 // call in band and sends nothing upstream.
+//
+// A token works once. The used set lives in the instance, is pruned of expired
+// entries on every issue and redeem, and so stays small. Its limit is stated:
+// it is per process, so with several instances sharing one CONFIRMATION_SECRET
+// the same token can be redeemed once per instance within its 10 minutes. The
+// booking API stops what that would do, because a second booking at the same
+// time is refused with its 433 or 437.
 
 /** The name of the argument every write tool takes. */
 export const CONFIRMATION_TOKEN_ARG = 'confirmation_token';
@@ -122,8 +129,17 @@ export function createConfirmations(
       )
       .digest();
 
+  // Redeemed tokens and when each expires, so the set can be pruned.
+  const used = new Map<string, number>();
+  const prune = (nowMs: number): void => {
+    for (const [token, expiresAt] of used) {
+      if (expiresAt < nowMs) used.delete(token);
+    }
+  };
+
   return {
     issue(toolName, userToken, args, nowMs = clock()) {
+      prune(nowMs);
       const expiresAt = nowMs + CONFIRMATION_TTL_MS;
       const signature = mac(expiresAt, toolName, userToken, args);
       return {
@@ -132,6 +148,7 @@ export function createConfirmations(
       };
     },
     redeem(token, toolName, userToken, args, nowMs = clock()) {
+      prune(nowMs);
       const match = TOKEN_PATTERN.exec(token);
       if (match === null) return 'invalid';
       const expiresAt = Number(match[1]);
@@ -150,9 +167,12 @@ export function createConfirmations(
       ) {
         return 'invalid';
       }
-      return expiresAt < nowMs ? 'expired' : 'ok';
+      if (expiresAt < nowMs) return 'expired';
+      if (used.has(token)) return 'used';
+      used.set(token, expiresAt);
+      return 'ok';
     },
-    usedCount: () => 0,
+    usedCount: () => used.size,
   };
 }
 

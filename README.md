@@ -146,8 +146,9 @@ values) when one is missing or invalid.
 | `MCP_PROXY_BACKEND_KEY_FILE` | Absolute path of a mounted file that holds the proxy key; wins over `MCP_PROXY_BACKEND_KEY` and is re-read lazily every 60 s, so a rotation needs no restart | none | with `PROXY_AUTH=required`, this or `MCP_PROXY_BACKEND_KEY` |
 | `CALLER_AUTH` | `required` or `optional`. With `required`, every `POST /mcp` needs the caller's own Altegio partner token: behind the proxy (`PROXY_AUTH=required`) only in the proxy's signed `x-mcp-auth-altegio-partner-token` header, without it as `Authorization: Bearer <token>` or `X-Altegio-Partner-Token`. The token is checked with Altegio (cached by hash: valid 5 min, invalid 30 s) and signs that caller's upstream calls. `optional` serves a caller without a token with `ALTEGIO_API_TOKEN`, logs one `config_warning` at startup, and exists for the proxy rollout and local runs; a token that is sent is still checked. `.env.example` sets `optional` | `required` | no |
 | `CLIENT_USER_TOKEN_HEADER` | Name of the signed header that carries the client's Altegio user token behind the proxy. It must start with `x-mcp-auth-` (the proxy signature covers only those headers) and is lower-cased. Change it only if the platform's I8 header names differ. `.env.example` leaves it empty | `x-mcp-auth-altegio-user-token` | no |
-| `CLIENT_SCOPE_HEADER` | Name of the signed header that carries the client's space-separated scope list; same rules as `CLIENT_USER_TOKEN_HEADER`. Only `mcp:me:read` in it is honoured, and `mcp:me:book` is granted to nobody. `.env.example` leaves it empty | `x-mcp-auth-scope` | no |
+| `CLIENT_SCOPE_HEADER` | Name of the signed header that carries the client's space-separated scope list; same rules as `CLIENT_USER_TOKEN_HEADER`. `mcp:me:read` and `mcp:me:book` in it are honoured (a client holds both only when the list names both). `.env.example` leaves it empty | `x-mcp-auth-scope` | no |
 | `CLIENT_CALLER_KIND` | Value of `x-mcp-auth-kind` that marks a client sign-in; it must not be `partner`. `.env.example` leaves it empty | `client` | no |
+| `CONFIRMATION_SECRET` | Key of the confirmation tokens of the write tools, 32 to 512 printable characters without spaces. Unset, each process uses its own random key, so a confirmation is valid only on the instance that issued it; set it to share confirmations across instances. A token works once per instance. `.env.example` leaves it empty | none | no |
 | `COMMIT_SHA` | Commit of the deployed build, 7 to 40 lowercase hex characters; reported as `commit` by `GET /health` | none (`commit` is `null`) | no |
 | `TRUSTED_PROXY_HOPS` | Proxies between the caller and the server, counted from the right of `X-Forwarded-For`. It picks the client address when the proxy does not sign `x-mcp-auth-client-ip`, and with `PROXY_AUTH=off`. `0` means no proxy. The leftmost entries and the TCP peer are never used | `1` | no |
 | `SHARED_EGRESS_CIDRS` | Comma-separated IPv4 or IPv6 CIDRs whose addresses share one request budget and are not limited per address, because many users sit behind them. The default is Anthropic's outbound range used by claude.ai | `160.79.104.0/21` | no |
@@ -201,7 +202,7 @@ by ADR 0005, own places first). Three scopes:
 - `mcp:me:read` is the signed-in client's own places and bookings. Only a client sign-in grants it,
   and `me_list_places` and `me_list_bookings` require it. An anonymous or partner caller who calls
   one of them gets an in-band error that names the client sign-in.
-- `mcp:me:book` is declared for later writes and granted to nobody yet, whatever a scope header says.
+- `mcp:me:book` is the signed-in client's writes at their own places (ADR 0006). A client sign-in grants it, always with the direct header and behind the proxy when the signed scope list names it, and nobody else holds it.
 
 `tools/list` shows the same tools to everyone.
 
@@ -212,8 +213,8 @@ by ADR 0005, own places first). Three scopes:
 ones. Behind the proxy, `CALLER_AUTH=required` admits such a signed client; a direct user token is
 refused there. The server never sees a phone number or an SMS code and never calls the sign-in
 routes. With `mcp:me:read` in the scope list the client can run `me_list_places` and
-`me_list_bookings`; the six known-business tools accept the client too; no caller holds
-`mcp:me:book`. Without the sign-in, the two tools answer in band and name it. The user token goes
+`me_list_bookings`; the six known-business tools accept the client too; with `mcp:me:book` as
+well the client can run `me_book`. Without the sign-in, the two tools answer in band and name it. The user token goes
 to Altegio only on the two signed-in routes, `GET /user/companies/yplaces` and
 `GET /user/records`, next to the partner token (the one the proxy sends with the client, else the
 server's), and never appears in a result or a log. Both routes are undocumented: the contract
