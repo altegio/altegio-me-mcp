@@ -10,6 +10,7 @@ import {
 } from './http.js';
 import {
   bookRecordCreateDataSchema,
+  type BookRecordCreateData,
   bookRecordMoveDataSchema,
   bookingUserDataSchema,
   companyDataSchema,
@@ -338,6 +339,64 @@ function assertTeamMemberOrAny(value: number): void {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new TypeError('team member id must be a safe integer of at least 0');
   }
+}
+
+/** One numbered appointment of a check or create body, every id and the datetime verified. */
+function appointmentEntry(
+  id: number,
+  selection: CheckSelection
+): AppointmentEntry {
+  const serviceIds = checkedServiceIds(selection.serviceIds);
+  if (serviceIds.length === 0) {
+    throw new TypeError('at least one service id is required');
+  }
+  assertTeamMemberOrAny(selection.teamMemberId);
+  if (parseSlotDatetime(selection.datetime) === null) {
+    throw new TypeError('datetime must be an ISO 8601 slot datetime');
+  }
+  return {
+    id,
+    services: [...serviceIds],
+    staff_id: selection.teamMemberId,
+    datetime: selection.datetime,
+  };
+}
+
+interface AppointmentEntry {
+  id: number;
+  services: number[];
+  staff_id: number;
+  datetime: string;
+}
+
+/**
+ * The two entries of a pair (CASE-02, D-01): both team members named (above
+ * 0, never "any", because the API would choose them and could choose the same
+ * one twice), different from each other, at one datetime. Anything else
+ * throws before a request is made.
+ */
+function pairEntries(
+  first: CheckSelection,
+  second: CheckSelection
+): AppointmentEntry[] {
+  const entries = [appointmentEntry(1, first), appointmentEntry(2, second)];
+  for (const entry of entries) {
+    assertPositiveId(entry.staff_id, 'team member id');
+  }
+  if (first.teamMemberId === second.teamMemberId) {
+    throw new TypeError('a pair needs two different team members');
+  }
+  if (first.datetime !== second.datetime) {
+    throw new TypeError('a pair needs one datetime for both appointments');
+  }
+  return entries;
+}
+
+/** A record id the answer names: a positive safe integer, else null. */
+function namedRecordId(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : null;
 }
 
 /**
@@ -847,29 +906,36 @@ export class BookingClient {
     call?: UpstreamCallOptions
   ): Promise<void> {
     assertLocationId(locationId);
-    const serviceIds = checkedServiceIds(selection.serviceIds);
-    if (serviceIds.length === 0) {
-      throw new TypeError('at least one service id is required');
-    }
-    assertTeamMemberOrAny(selection.teamMemberId);
-    if (parseSlotDatetime(selection.datetime) === null) {
-      throw new TypeError('datetime must be an ISO 8601 slot datetime');
-    }
+    await this.sendCheck(locationId, [appointmentEntry(1, selection)], call);
+  }
+
+  /**
+   * Checks two appointments of one client in one request (CASE-02, D-01): the
+   * same route and the same body as check with two numbered entries. Both
+   * team members must be named, different, at one datetime; otherwise a
+   * TypeError is thrown and nothing is sent. Resolves only on 201.
+   */
+  async checkPair(
+    locationId: number,
+    first: CheckSelection,
+    second: CheckSelection,
+    call?: UpstreamCallOptions
+  ): Promise<void> {
+    assertLocationId(locationId);
+    await this.sendCheck(locationId, pairEntries(first, second), call);
+  }
+
+  private async sendCheck(
+    locationId: number,
+    appointments: AppointmentEntry[],
+    call?: UpstreamCallOptions
+  ): Promise<void> {
     const { route, method } = BOOKING_ROUTES.check;
     const reply = await this.http.send({
       method,
       route,
       path: `/book_check/${locationId}`,
-      body: {
-        appointments: [
-          {
-            id: 1,
-            services: [...serviceIds],
-            staff_id: selection.teamMemberId,
-            datetime: selection.datetime,
-          },
-        ],
-      },
+      body: { appointments },
       ...call,
     });
     if (reply.status !== 201) {
@@ -877,27 +943,6 @@ export class BookingClient {
         status: reply.status,
       });
     }
-  }
-
-  /** Checks two appointments of one client in one request (CASE-02, D-01). */
-  checkPair(
-    _locationId: number,
-    _first: CheckSelection,
-    _second: CheckSelection,
-    _call?: UpstreamCallOptions
-  ): Promise<void> {
-    return Promise.reject(new Error('not implemented'));
-  }
-
-  /** Creates two appointments for the signed-in client in one request (CASE-02, D-01). */
-  createPairBooking(
-    _locationId: number,
-    _first: CheckSelection,
-    _second: CheckSelection,
-    _profile: ClientProfile,
-    _call: UpstreamCallOptions
-  ): Promise<CreatedPair> {
-    return Promise.reject(new Error('not implemented'));
   }
 
   /**
@@ -969,14 +1014,77 @@ export class BookingClient {
   ): Promise<CreatedBooking> {
     assertUserToken(call.userToken);
     assertLocationId(locationId);
-    const serviceIds = checkedServiceIds(selection.serviceIds);
-    if (serviceIds.length === 0) {
-      throw new TypeError('at least one service id is required');
+    const entry = appointmentEntry(1, selection);
+    const { data, status } = await this.sendCreate(
+      locationId,
+      [entry],
+      profile,
+      call
+    );
+    const named = data.find((candidate) => candidate.id === 1) ?? data[0];
+    const bookingId = namedRecordId(named?.record_id);
+    if (bookingId === null) {
+      // A 201 that names no booking created nothing (the fake 201): the
+      // anti-fraud path, handed off to the business's booking widget.
+      throw new UpstreamError('anti_fraud', CLIENT_WRITE_ROUTES.create.route, {
+        status,
+      });
     }
-    assertTeamMemberOrAny(selection.teamMemberId);
-    if (parseSlotDatetime(selection.datetime) === null) {
-      throw new TypeError('datetime must be an ISO 8601 slot datetime');
+    return { bookingId };
+  }
+
+  /**
+   * Creates two appointments for the signed-in client in one request (CASE-02,
+   * D-01): the same body as createBooking with two numbered entries, both under
+   * the client's name. The pair rule of checkPair applies and a TypeError is
+   * thrown before anything is sent. Resolves with the booking id of each
+   * appointment by its number, null for one the answer does not name; an
+   * answer that names neither is the anti-fraud path.
+   */
+  async createPairBooking(
+    locationId: number,
+    first: CheckSelection,
+    second: CheckSelection,
+    profile: ClientProfile,
+    call: UpstreamCallOptions
+  ): Promise<CreatedPair> {
+    assertUserToken(call.userToken);
+    assertLocationId(locationId);
+    const { data, status } = await this.sendCreate(
+      locationId,
+      pairEntries(first, second),
+      profile,
+      call
+    );
+    // By appointment number; by position only when the answer numbers nothing.
+    const unnumbered = data.every((candidate) => candidate.id == null);
+    const idOf = (number: number): number | null =>
+      namedRecordId(
+        (
+          data.find((candidate) => candidate.id === number) ??
+          (unnumbered ? data[number - 1] : undefined)
+        )?.record_id
+      );
+    const bookingIds = [idOf(1), idOf(2)] as const;
+    if (bookingIds[0] === null && bookingIds[1] === null) {
+      throw new UpstreamError('anti_fraud', CLIENT_WRITE_ROUTES.create.route, {
+        status,
+      });
     }
+    return { bookingIds };
+  }
+
+  /**
+   * One create request: the profile and the numbered appointments. Any answer
+   * that is not the documented 200 or 201 shape is contract_drift, because
+   * whether a booking exists is not known then.
+   */
+  private async sendCreate(
+    locationId: number,
+    appointments: AppointmentEntry[],
+    profile: ClientProfile,
+    call: UpstreamCallOptions
+  ): Promise<{ data: BookRecordCreateData; status: number }> {
     const { route, method } = CLIENT_WRITE_ROUTES.create;
     const reply = await this.http.send({
       method,
@@ -986,40 +1094,18 @@ export class BookingClient {
         phone: profile.phone,
         fullname: profile.fullname,
         ...(profile.email === null ? {} : { email: profile.email }),
-        appointments: [
-          {
-            id: 1,
-            services: [...serviceIds],
-            staff_id: selection.teamMemberId,
-            datetime: selection.datetime,
-          },
-        ],
+        appointments,
       },
       ...call,
     });
     const parsed = bookRecordCreateDataSchema.safeParse(reply.data);
     if (!parsed.success || (reply.status !== 201 && reply.status !== 200)) {
-      // Not the documented answer, so whether a booking exists is not known.
       throw new UpstreamError('contract_drift', route, {
         status: reply.status,
         cause: parsed.success ? undefined : parsed.error,
       });
     }
-    const entry =
-      parsed.data.find((candidate) => candidate.id === 1) ?? parsed.data[0];
-    const bookingId = entry?.record_id;
-    if (
-      typeof bookingId !== 'number' ||
-      !Number.isSafeInteger(bookingId) ||
-      bookingId <= 0
-    ) {
-      // A 201 that names no booking created nothing (the fake 201): the
-      // anti-fraud path, handed off to the business's booking widget.
-      throw new UpstreamError('anti_fraud', route, {
-        status: reply.status,
-      });
-    }
-    return { bookingId };
+    return { data: parsed.data, status: reply.status };
   }
 
   /**

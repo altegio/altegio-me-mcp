@@ -5,6 +5,7 @@ import {
   USER_ROUTES,
   type BusinessCard,
   type BusinessRules,
+  type CheckSelection,
 } from '../booking/client.js';
 import {
   bookableFormUrl,
@@ -66,6 +67,13 @@ import { sanitizeUntrusted, withUntrustedBlock } from './untrusted.js';
 // come from the client's Altegio profile and never from a tool input, and
 // never back out of the server.
 //
+// Two people side by side (CASE-02, D-01): an optional second_appointment, with
+// its own services and a different, named team member, books two appointments
+// at the same start in one preview, one confirmation and one create. Both
+// bookings are under the client's name; nothing about the second person is
+// taken or sent. The same token rules apply: it is bound to the whole selection,
+// the second appointment included.
+//
 // What the chat cannot do ends at the business's own booking widget (ME-08,
 // D-04): a place the client has no record at, a service that needs online
 // prepayment (or whose prepayment is not known), a membership-only service and
@@ -73,6 +81,24 @@ import { sanitizeUntrusted, withUntrustedBlock } from './untrusted.js';
 // pre-filled link, in band and with no token.
 
 const TOOL_NAME = 'me_book';
+
+const secondAppointmentInput = z
+  .strictObject({
+    service_ids: uniqueServiceIds(
+      1,
+      'Services of the second appointment, 1 to 10 unique service ids.'
+    ),
+    team_member_id: z
+      .number()
+      .int()
+      .min(0)
+      .describe(
+        'Team member of the second appointment: an id above 0, other than the first appointment team member.'
+      ),
+  })
+  .describe(
+    'A second appointment at the same datetime, with its own services and a different, named team member, booked for the same client; both appointments are previewed and confirmed together.'
+  );
 
 const bookInput = z.strictObject({
   location_id: locationIdInput,
@@ -82,6 +108,7 @@ const bookInput = z.strictObject({
   ),
   team_member_id: teamMemberOrAnyInput,
   datetime: slotDatetimeInput,
+  second_appointment: secondAppointmentInput.optional(),
   [CONFIRMATION_TOKEN_ARG]: confirmationTokenInput,
 });
 
@@ -100,18 +127,36 @@ const previewServiceSchema = z.strictObject({
     .describe('Price range as the business set it, or null for no set price.'),
 });
 
+const previewTeamMemberSchema = z
+  .strictObject({
+    id: z.number().int().describe('Team member id.'),
+    name: untrustedText('Team member name, or null when not loaded.'),
+  })
+  .nullable();
+
 const previewSchema = z.strictObject({
   business: untrustedText('Business name.'),
   services: z
     .array(previewServiceSchema)
     .describe('The chosen services, in the order the client gave them.'),
-  team_member: z
+  team_member: previewTeamMemberSchema.describe(
+    'The chosen team member, or null for any team member.'
+  ),
+  second_appointment: z
     .strictObject({
-      id: z.number().int().describe('Team member id.'),
-      name: untrustedText('Team member name, or null when not loaded.'),
+      services: z
+        .array(previewServiceSchema)
+        .describe(
+          'The services of the second appointment, in the order the client gave them.'
+        ),
+      team_member: previewTeamMemberSchema.describe(
+        'The team member of the second appointment.'
+      ),
     })
     .nullable()
-    .describe('The chosen team member, or null for any team member.'),
+    .describe(
+      'The second appointment of a pair, booked at the same date and time; null for a single booking.'
+    ),
   date: z
     .string()
     .describe("Date of the slot, YYYY-MM-DD, in the business's local time."),
@@ -180,6 +225,18 @@ const bookOutput = z.strictObject({
     .describe(
       'The new booking as me_list_bookings shows it; null for a preview, or when the bookings could not be read back just now.'
     ),
+  second_booking_id: z
+    .number()
+    .int()
+    .nullable()
+    .describe(
+      'Id of the second booking of a pair; null for a single booking and for a preview.'
+    ),
+  second_booking: bookingItemSchema
+    .nullable()
+    .describe(
+      'The second booking of a pair as me_list_bookings shows it; null for a single booking, for a preview, or when the bookings could not be read back just now.'
+    ),
   fallback: z
     .strictObject({
       reason: z
@@ -214,7 +271,58 @@ function boundArguments(input: BookInput): Record<string, unknown> {
     service_ids: input.service_ids,
     team_member_id: input.team_member_id,
     datetime: input.datetime,
+    // Explicit, null for a single booking: a single token and a pair token
+    // never verify for each other (T-05-05).
+    second_appointment: input.second_appointment ?? null,
   };
+}
+
+/** One appointment of a request: its services and its team member. */
+interface Appointment {
+  serviceIds: readonly number[];
+  teamMemberId: number;
+}
+
+function firstAppointment(input: BookInput): Appointment {
+  return { serviceIds: input.service_ids, teamMemberId: input.team_member_id };
+}
+
+function secondAppointment(input: BookInput): Appointment | null {
+  const second = input.second_appointment;
+  return second === undefined
+    ? null
+    : { serviceIds: second.service_ids, teamMemberId: second.team_member_id };
+}
+
+function selectionOf(
+  appointment: Appointment,
+  datetime: string
+): CheckSelection {
+  return {
+    serviceIds: appointment.serviceIds,
+    teamMemberId: appointment.teamMemberId,
+    datetime,
+  };
+}
+
+/**
+ * Two appointments need two different named team members: team member 0 means
+ * "any", which the API would resolve itself, possibly to the same team member
+ * twice (D-01, T-05-04). Refused before any upstream call.
+ */
+function assertPairRule(input: BookInput): void {
+  const second = input.second_appointment;
+  if (second === undefined) return;
+  if (
+    input.team_member_id === 0 ||
+    second.team_member_id === 0 ||
+    input.team_member_id === second.team_member_id
+  ) {
+    throw new ToolError(
+      'Nothing was booked: two appointments need two different named team members.',
+      'choose two different team members with business_list_team_members, then call me_book again without confirmation_token.'
+    );
+  }
 }
 
 export function durationText(seconds: number): string {
@@ -266,6 +374,8 @@ function fallbackOutput(
     expires_at: null,
     booking_id: null,
     booking: null,
+    second_booking_id: null,
+    second_booking: null,
     fallback: { reason, link },
   };
 }
@@ -316,10 +426,13 @@ async function preview(
       : widgetInactiveFallback(input, card);
   }
 
+  const first = firstAppointment(input);
+  const second = secondAppointment(input);
+  const appointments = second === null ? [first] : [first, second];
   const [cardResult, catalogResult, membersResult] = await Promise.allSettled([
     deps.booking.company(input.location_id, call),
     deps.booking.services(input.location_id, {}, call),
-    input.team_member_id > 0
+    appointments.some((appointment) => appointment.teamMemberId > 0)
       ? deps.booking.teamMembers(input.location_id, {}, call)
       : Promise.resolve(null),
   ]);
@@ -333,12 +446,18 @@ async function preview(
   const currency = sanitizeUntrusted(card.currency, {
     maxChars: LABEL_MAX_CHARS,
   });
-  const chosen = selectedServices(
-    input.service_ids,
+  const firstChosen = selectedServices(
+    first.serviceIds,
     catalogResult.value,
     currency
   );
-  if (!chosen.complete) {
+  const secondChosen =
+    second === null
+      ? null
+      : selectedServices(second.serviceIds, catalogResult.value, currency);
+  const chosen =
+    secondChosen === null ? [firstChosen] : [firstChosen, secondChosen];
+  if (chosen.some((entry) => !entry.complete)) {
     throw new ToolError(
       `Nothing was booked: ${SERVICE_NOT_AVAILABLE.message}`,
       SERVICE_NOT_AVAILABLE.nextAction
@@ -347,9 +466,11 @@ async function preview(
   // Online prepayment is taken only by the widget; a service whose prepayment
   // is required, or not known, must not be booked here (T-04.1-12).
   if (
-    chosen.services.some(
-      (service) =>
-        service.prepayment === 'required' || service.prepayment === 'unknown'
+    chosen.some((entry) =>
+      entry.services.some(
+        (service) =>
+          service.prepayment === 'required' || service.prepayment === 'unknown'
+      )
     )
   ) {
     return fallbackOutput(input, 'prepayment', selectionLink(input, card));
@@ -359,28 +480,41 @@ async function preview(
       .filter((service) => service.membershipOnly)
       .map((service) => service.id)
   );
-  if (input.service_ids.some((id) => membershipOnly.has(id))) {
+  if (
+    appointments.some((appointment) =>
+      appointment.serviceIds.some((id) => membershipOnly.has(id))
+    )
+  ) {
     return fallbackOutput(input, 'membership', selectionLink(input, card));
   }
-  const member = selectedTeamMember(
-    input.team_member_id,
-    membersResult.status === 'fulfilled' ? membersResult.value : null
-  );
+  const teamMembers =
+    membersResult.status === 'fulfilled' ? membersResult.value : null;
+  const firstMember = selectedTeamMember(first.teamMemberId, teamMembers);
+  const secondMember =
+    second === null
+      ? null
+      : selectedTeamMember(second.teamMemberId, teamMembers);
 
   try {
-    await deps.booking.check(
-      input.location_id,
-      {
-        serviceIds: input.service_ids,
-        teamMemberId: input.team_member_id,
-        datetime: input.datetime,
-      },
-      {
-        ...call,
-        // The check has its own budget inside the call deadline.
-        signal: AbortSignal.any([ctx.signal, ctx.timeout(BOOK_CHECK_STEP_MS)]),
-      }
-    );
+    // The check has its own budget inside the call deadline.
+    const checkCall = {
+      ...call,
+      signal: AbortSignal.any([ctx.signal, ctx.timeout(BOOK_CHECK_STEP_MS)]),
+    };
+    if (second === null) {
+      await deps.booking.check(
+        input.location_id,
+        selectionOf(first, input.datetime),
+        checkCall
+      );
+    } else {
+      await deps.booking.checkPair(
+        input.location_id,
+        selectionOf(first, input.datetime),
+        selectionOf(second, input.datetime),
+        checkCall
+      );
+    }
   } catch (error) {
     if (
       error instanceof UpstreamError &&
@@ -402,30 +536,41 @@ async function preview(
     boundArguments(input)
   );
   const slot = slotFields(input.datetime);
+  const serviceItems = (entry: typeof firstChosen) =>
+    entry.services.map((service) => ({
+      id: service.id,
+      title: service.title,
+      price: service.price,
+    }));
   return {
     status: 'preview',
     location_id: input.location_id,
     preview: {
       business: sanitizeUntrusted(card.name, { maxChars: NAME_MAX_CHARS }),
-      services: chosen.services.map((service) => ({
-        id: service.id,
-        title: service.title,
-        price: service.price,
-      })),
-      team_member: member.teamMember,
+      services: serviceItems(firstChosen),
+      team_member: firstMember.teamMember,
+      second_appointment:
+        secondChosen === null || secondMember === null
+          ? null
+          : {
+              services: serviceItems(secondChosen),
+              team_member: secondMember.teamMember,
+            },
       ...slot,
       time_zone: sanitizeUntrusted(card.timeZoneName, {
         maxChars: LABEL_MAX_CHARS,
       }),
       cancellation: cancellationText(card.rules),
-      optional_prepayment: chosen.services.some(
-        (service) => service.prepayment === 'optional'
+      optional_prepayment: chosen.some((entry) =>
+        entry.services.some((service) => service.prepayment === 'optional')
       ),
     },
     confirmation_token: issued.token,
     expires_at: new Date(issued.expiresAt).toISOString(),
     booking_id: null,
     booking: null,
+    second_booking_id: null,
+    second_booking: null,
     fallback: null,
   };
 }
@@ -569,7 +714,7 @@ async function fallbackResult(
   return fallbackOutput(input, reason, selectionLink(input, card));
 }
 
-/** Confirm: redeems the token, reads the profile, creates the booking and reads it back. */
+/** Confirm: redeems the token, reads the profile, creates the booking(s) and reads them back. */
 async function confirm(
   input: BookInput,
   token: string,
@@ -605,18 +750,28 @@ async function confirm(
     );
   }
 
-  let created;
+  const first = firstAppointment(input);
+  const second = secondAppointment(input);
+  let bookingIds: readonly [number | null, number | null];
   try {
-    created = await deps.booking.createBooking(
-      input.location_id,
-      {
-        serviceIds: input.service_ids,
-        teamMemberId: input.team_member_id,
-        datetime: input.datetime,
-      },
-      profile,
-      userSide
-    );
+    if (second === null) {
+      const created = await deps.booking.createBooking(
+        input.location_id,
+        selectionOf(first, input.datetime),
+        profile,
+        userSide
+      );
+      bookingIds = [created.bookingId, null];
+    } else {
+      const created = await deps.booking.createPairBooking(
+        input.location_id,
+        selectionOf(first, input.datetime),
+        selectionOf(second, input.datetime),
+        profile,
+        userSide
+      );
+      bookingIds = created.bookingIds;
+    }
   } catch (error) {
     if (error instanceof UpstreamError) {
       if (error.kind === 'anti_fraud') {
@@ -634,16 +789,29 @@ async function confirm(
     }
     throw toWriteToolError(error);
   }
+  const [firstId, secondId] = bookingIds;
+  if (firstId === null || (second !== null && secondId === null)) {
+    // The answer names one of the two bookings only; what exists is not known
+    // from here, and me_list_bookings shows it.
+    throw new ToolError(UNKNOWN_OUTCOME.message, UNKNOWN_OUTCOME.nextAction);
+  }
 
-  // Read the new booking back as me_list_bookings shows it; a failed or empty
-  // re-read keeps the booking, which exists upstream either way.
+  // Read the new bookings back as me_list_bookings shows them; a failed or
+  // empty re-read keeps the bookings, which exist upstream either way.
   let booking: BookingItem | null = null;
+  let secondBooking: BookingItem | null = null;
   try {
     const records = await deps.booking.myRecords(userSide);
-    const record = records.find((entry) => entry.id === created.bookingId);
-    if (record !== undefined) booking = toBookingItem(record, Date.now());
+    const now = Date.now();
+    const record = records.find((entry) => entry.id === firstId);
+    if (record !== undefined) booking = toBookingItem(record, now);
+    const secondRecord = records.find((entry) => entry.id === secondId);
+    if (secondRecord !== undefined) {
+      secondBooking = toBookingItem(secondRecord, now);
+    }
   } catch {
     booking = null;
+    secondBooking = null;
   }
   return {
     status: 'booked',
@@ -651,47 +819,89 @@ async function confirm(
     preview: null,
     confirmation_token: null,
     expires_at: null,
-    booking_id: created.bookingId,
+    booking_id: firstId,
     booking,
+    second_booking_id: secondId,
+    second_booking: secondBooking,
     fallback: null,
   };
+}
+
+type PreviewService = z.infer<typeof previewServiceSchema>;
+
+function renderAppointment(
+  label: string,
+  services: PreviewService[],
+  who: { id: number } | null
+): string[] {
+  return [
+    label,
+    ...services.map(
+      (service) => `- service ${service.id}: ${priceText(service.price)}.`
+    ),
+    `Team member: ${who === null ? teamMemberText(0) : teamMemberText(who.id)}.`,
+  ];
 }
 
 function renderPreview(out: BookOutput): string {
   const shown = out.preview;
   if (shown === null) return 'No preview was produced.';
   const who = shown.team_member;
+  const pair = shown.second_appointment;
   const lines = [
     'Preview, nothing is booked yet:',
     `Location ${out.location_id}, ${shown.date} at ${shown.time} (UTC${shown.utc_offset}, the business's local time).`,
-    'Services, in the order chosen:',
-    ...shown.services.map(
-      (service) => `- service ${service.id}: ${priceText(service.price)}.`
-    ),
-    `Team member: ${who === null ? teamMemberText(0) : teamMemberText(who.id)}.`,
-    'Prices are in the currency of the business.',
   ];
+  if (pair === null) {
+    lines.push('Services, in the order chosen:');
+    lines.push(
+      ...shown.services.map(
+        (service) => `- service ${service.id}: ${priceText(service.price)}.`
+      )
+    );
+    lines.push(
+      `Team member: ${who === null ? teamMemberText(0) : teamMemberText(who.id)}.`
+    );
+  } else {
+    lines.push(
+      ...renderAppointment('First appointment:', shown.services, who),
+      ...renderAppointment(
+        'Second appointment:',
+        pair.services,
+        pair.team_member
+      )
+    );
+  }
+  lines.push('Prices are in the currency of the business.');
   if (shown.optional_prepayment) {
     lines.push(
       'The business also offers optional online prepayment in its booking widget; this booking is made without it.'
     );
   }
+  if (pair !== null) {
+    lines.push(
+      "Both bookings are under the client's name; nothing about the second person is sent."
+    );
+  }
   if (shown.cancellation !== null) lines.push(shown.cancellation);
   lines.push(
-    `Next: show this to the user; only after the user agrees, call me_book again with the same location_id, service_ids, team_member_id and datetime and confirmation_token ${out.confirmation_token ?? ''} (valid until ${out.expires_at ?? ''} UTC).`
+    `Next: show this to the user; only after the user agrees, call me_book again with the same location_id, service_ids, team_member_id, datetime${pair === null ? '' : ', second_appointment'} and confirmation_token ${out.confirmation_token ?? ''} (valid until ${out.expires_at ?? ''} UTC).`
   );
 
   const fields: Record<string, unknown> = {
     Business: shown.business,
     'Time zone': shown.time_zone,
   };
-  const currency = shown.services.find((service) => service.price !== null)
-    ?.price?.currency;
+  const everyService = [...shown.services, ...(pair?.services ?? [])];
+  const currency = everyService.find((service) => service.price !== null)?.price
+    ?.currency;
   if (currency !== undefined) fields.Currency = currency;
-  for (const service of shown.services) {
+  for (const service of everyService) {
     fields[`service ${service.id}`] = service.title;
   }
-  if (who !== null) fields[`team member ${who.id}`] = who.name;
+  for (const member of [who, pair?.team_member ?? null]) {
+    if (member !== null) fields[`team member ${member.id}`] = member.name;
+  }
   return withUntrustedBlock(lines.join('\n'), fields);
 }
 
@@ -733,22 +943,33 @@ function renderFallback(out: BookOutput): string {
 }
 
 function renderBooked(out: BookOutput): string {
-  const { booking } = out;
+  const { booking, second_booking: secondBooking } = out;
+  const pair = out.second_booking_id !== null;
   const lines = [
-    `Booked: booking ${out.booking_id ?? ''} at location ${out.location_id}${
-      booking === null ? '' : `, ${booking.datetime}`
-    }.`,
+    pair
+      ? `Booked: two appointments at location ${out.location_id}${
+          booking === null ? '' : `, ${booking.datetime}`
+        }: booking ${out.booking_id ?? ''} and booking ${out.second_booking_id ?? ''}. Both are under the client's name.`
+      : `Booked: booking ${out.booking_id ?? ''} at location ${out.location_id}${
+          booking === null ? '' : `, ${booking.datetime}`
+        }.`,
   ];
-  if (booking === null) {
+  if (booking === null || (pair && secondBooking === null)) {
     lines.push(
-      'The booking could not be read back just now; me_list_bookings shows it.'
+      `The ${pair ? 'bookings' : 'booking'} could not be read back just now; me_list_bookings shows ${pair ? 'them' : 'it'}.`
     );
   }
-  lines.push('Next: me_list_bookings lists it.');
-  return withUntrustedBlock(
-    lines.join('\n'),
-    booking === null ? {} : { Booking: bookingBlockValue(booking) }
+  lines.push(
+    pair
+      ? 'Next: me_list_bookings lists both; each one is moved or cancelled on its own with me_reschedule_booking or me_cancel_booking.'
+      : 'Next: me_list_bookings lists it.'
   );
+  const blocks: Record<string, unknown> = {};
+  if (booking !== null) blocks.Booking = bookingBlockValue(booking);
+  if (secondBooking !== null) {
+    blocks['Second booking'] = bookingBlockValue(secondBooking);
+  }
+  return withUntrustedBlock(lines.join('\n'), blocks);
 }
 
 export const meBook = defineTool<typeof bookInput, typeof bookOutput, ToolDeps>(
@@ -756,7 +977,7 @@ export const meBook = defineTool<typeof bookInput, typeof bookOutput, ToolDeps>(
     name: TOOL_NAME,
     title: 'Book at one of my places',
     description:
-      "Books for the signed-in client at one of their own places, in two calls. The first call checks the time with the business and returns a preview and a confirmation_token valid for 10 minutes; nothing is booked. After the client agrees, the second call with the same selection and that token creates the booking and returns it. The client's name and phone come from their Altegio profile. Where the chat cannot complete a booking, namely online prepayment, a membership-only service, an inactive booking widget or a place without an earlier booking, the answer states the reason and carries the pre-filled booking widget link. Needs the client's sign-in.",
+      "Books for the signed-in client at one of their own places, in two calls. The first call checks the time with the business and returns a preview and a confirmation_token valid for 10 minutes; nothing is booked. After the client agrees, the second call with the same selection and that token creates the booking and returns it. The client's name and phone come from their Altegio profile. Where the chat cannot complete a booking, namely online prepayment, a membership-only service, an inactive booking widget or a place without an earlier booking, the answer states the reason and carries the pre-filled booking widget link. With the optional second_appointment (a different named team member, the same start) it books two people side by side in one preview and one confirmation, both under the client's name. Needs the client's sign-in.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -782,6 +1003,7 @@ export const meBook = defineTool<typeof bookInput, typeof bookOutput, ToolDeps>(
           ? renderFallback(out)
           : renderBooked(out),
     handler: async ({ input, deps, ctx }) => {
+      assertPairRule(input);
       const token = input[CONFIRMATION_TOKEN_ARG];
       return token === undefined
         ? preview(input, deps, ctx)
