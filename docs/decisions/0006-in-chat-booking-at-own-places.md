@@ -48,7 +48,12 @@ records what happened (WRITE-07, B3 stay open questions if it fails).
 
 **D5. Cases that follow (Phase 5) build on these tools.** Slot hold is "book now, cancel by a
 deadline"; two people side by side is two `me_book` calls; freed-slot monitoring ends in
-`me_book`.
+`me_book`. *Amended 2026-10-09 (owner decision after the Phase 5 research): two people side by
+side is one `me_book` call with a second appointment — the API creates both appointments of the
+signed-in client in one request, atomically, with two different team members; both carry the
+client's own name. Slot hold ships only after I8 and a host run that proves an unattended
+confirmation; otherwise it is a reminder. Freed-slot monitoring is prompt text on the host's
+scheduled tasks with no server state.*
 
 ## Consequences
 
