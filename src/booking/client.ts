@@ -223,6 +223,15 @@ export interface CreatedBooking {
   bookingId: number;
 }
 
+/**
+ * What a two-appointment create returns: the booking id of each appointment,
+ * in the order sent, null for one the answer does not name. The creation hash
+ * is never read.
+ */
+export interface CreatedPair {
+  bookingIds: readonly [number | null, number | null];
+}
+
 export interface ServiceCategory {
   id: number;
   title: string;
@@ -868,6 +877,27 @@ export class BookingClient {
         status: reply.status,
       });
     }
+  }
+
+  /** Checks two appointments of one client in one request (CASE-02, D-01). */
+  checkPair(
+    _locationId: number,
+    _first: CheckSelection,
+    _second: CheckSelection,
+    _call?: UpstreamCallOptions
+  ): Promise<void> {
+    return Promise.reject(new Error('not implemented'));
+  }
+
+  /** Creates two appointments for the signed-in client in one request (CASE-02, D-01). */
+  createPairBooking(
+    _locationId: number,
+    _first: CheckSelection,
+    _second: CheckSelection,
+    _profile: ClientProfile,
+    _call: UpstreamCallOptions
+  ): Promise<CreatedPair> {
+    return Promise.reject(new Error('not implemented'));
   }
 
   /**

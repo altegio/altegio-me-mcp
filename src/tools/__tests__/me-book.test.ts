@@ -30,6 +30,15 @@ const SELECTION = {
   datetime: '2099-01-12T11:00:00+03:00',
 };
 
+const SECOND_TEAM_MEMBER = 2098146;
+const PAIR = {
+  ...SELECTION,
+  second_appointment: {
+    service_ids: [10303531],
+    team_member_id: SECOND_TEAM_MEMBER,
+  },
+};
+
 // The contract fixtures quote these in meta.message of every create error.
 const BAIT = [
   '+15550000001',
@@ -45,6 +54,7 @@ interface Setup {
 function setup(
   options: {
     create?: FakeReply;
+    check?: FakeReply;
     profile?: FakeReply;
     company?: FakeReply;
     services?: FakeReply;
@@ -87,7 +97,7 @@ function setup(
     {
       method: 'POST',
       path: `/book_check/${LOCATION}`,
-      reply: loadFixture('book_check', 'created_empty'),
+      reply: options.check ?? loadFixture('book_check', 'created_empty'),
     },
     {
       method: 'POST',
@@ -643,5 +653,72 @@ describe('me_book fallbacks: the confirm path keeps its own', () => {
     expect(textOf(confirm)).toContain(
       'Not booked: the business could not confirm this booking from here.'
     );
+  });
+});
+
+describe('me_book pair rule: two different named team members, before any upstream call (D-01, T-05-04)', () => {
+  const REFUSAL =
+    'Nothing was booked: two appointments need two different named team members.';
+
+  it.each([
+    ['team member 0 in the first appointment', { ...PAIR, team_member_id: 0 }],
+    [
+      'team member 0 in the second appointment',
+      {
+        ...PAIR,
+        second_appointment: { ...PAIR.second_appointment, team_member_id: 0 },
+      },
+    ],
+    [
+      'the same team member twice',
+      {
+        ...PAIR,
+        second_appointment: {
+          ...PAIR.second_appointment,
+          team_member_id: SELECTION.team_member_id,
+        },
+      },
+    ],
+  ])(
+    'refuses %s, with a next action and zero upstream calls',
+    async (_label, args) => {
+      const made = setup();
+      const result = await made.invoke(args);
+      expect(result.result.isError).toBe(true);
+      const text = textOf(result);
+      expect(text).toContain(REFUSAL);
+      expect(text).toContain('Next: choose two different team members');
+      expect(text).toContain('business_list_team_members');
+      expect(made.upstream.calls).toEqual([]);
+    }
+  );
+
+  it('refuses the same pair on the confirm call too, even with a token', async () => {
+    const made = setup();
+    const result = await made.invoke({
+      ...PAIR,
+      team_member_id: 0,
+      confirmation_token: '1.x',
+    });
+    expect(result.result.isError).toBe(true);
+    expect(textOf(result)).toContain(REFUSAL);
+    expect(made.upstream.calls).toEqual([]);
+  });
+
+  it('takes no detail of the second person: a name, phone, e-mail or comment is a schema error', async () => {
+    const made = setup();
+    for (const extra of [
+      { fullname: 'x' },
+      { phone: '+15550000009' },
+      { email: 'x@example.invalid' },
+      { comment: 'x' },
+    ]) {
+      const result = await made.invoke({
+        ...PAIR,
+        second_appointment: { ...PAIR.second_appointment, ...extra },
+      });
+      expect(result.result.isError).toBe(true);
+    }
+    expect(made.upstream.calls).toEqual([]);
   });
 });
