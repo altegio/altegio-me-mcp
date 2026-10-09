@@ -308,3 +308,31 @@ describe('docs/research/cases.md (CASE-01)', () => {
     expect(probe).toMatch(/^Status: (passed|refused|not run)/m);
   });
 });
+
+describe('docs/research/cases.md host runs (CASE-03, D-03)', () => {
+  const runs = casesSection('## Host runs');
+
+  it('records the run time, or says the run did not happen', () => {
+    expect(runs).toMatch(
+      /^(Run: \d{4}-\d{2}-\d{2} \d{2}:\d{2}|Status: not run)/m
+    );
+  });
+
+  it('names the host and the write tools the run called', () => {
+    expect(runs).toMatch(/^Host: \S/m);
+    expect(runs).toMatch(/^Write tools called: (none|\S)/m);
+  });
+
+  it('states the outcome of the scheduled task and, when it did not reach the server, the retest condition', () => {
+    expect(runs).toMatch(/^Status: (passed|blocked|not run)/m);
+    if (/^Status: (blocked|not run)/m.test(runs)) {
+      expect(runs).toMatch(/^Retest when: \S/m);
+    }
+  });
+
+  it('holds no token, phone number or e-mail address', () => {
+    expect(runs).not.toMatch(/Bearer\s+\S/i);
+    expect(runs).not.toMatch(/@[a-z0-9-]+\.[a-z]{2,}/i);
+    expect(runs).not.toMatch(/\+\d{7,}/);
+  });
+});
