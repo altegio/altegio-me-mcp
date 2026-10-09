@@ -5,11 +5,12 @@ import { McpError } from '@modelcontextprotocol/sdk/types.js';
 import { textViolations } from '../../compliance/rules.js';
 import { createCallRecord } from '../../observability/call-log.js';
 import { createMcpServer } from '../create-server.js';
-import { SERVER_PROMPTS } from '../prompts.js';
+import { SERVER_PROMPTS, type ServerPrompt } from '../prompts.js';
 
-// The one MCP prompt of the server (D-03): "sign in, pick a place, book your
-// usual", served over prompts/list and prompts/get. It walks the own-places
-// flow and asks for nothing about the sign-in.
+// The MCP prompts of the server, one per case: "sign in, pick a place, book
+// your usual" (D-03) and "two people side by side" (CASE-02, CASE-05), served
+// over prompts/list and prompts/get. They walk the own-places flow and ask for
+// nothing about the sign-in.
 
 // A phone, SMS, code, OTP, e-mail or password request has no place in it.
 const SIGN_IN_WORDS = /phone|sms|\bcode\b|otp|e-?mail|password/i;
@@ -39,15 +40,20 @@ async function withClient<T>(run: (client: Client) => Promise<T>): Promise<T> {
   }
 }
 
+function promptNamed(name: string): ServerPrompt | undefined {
+  return SERVER_PROMPTS.find((prompt) => prompt.name === name);
+}
+
 describe('SERVER_PROMPTS', () => {
-  it('holds exactly book_my_usual', () => {
+  it('holds exactly book_my_usual and book_side_by_side', () => {
     expect(SERVER_PROMPTS.map((prompt) => prompt.name)).toEqual([
       'book_my_usual',
+      'book_side_by_side',
     ]);
   });
 
   it('names the whole own-places flow', () => {
-    const [prompt] = SERVER_PROMPTS;
+    const prompt = promptNamed('book_my_usual');
     for (const tool of [
       'me_list_places',
       'me_list_bookings',
@@ -60,7 +66,7 @@ describe('SERVER_PROMPTS', () => {
   });
 
   it('ends with a me_book preview and a booking after the user says yes, and the pre-filled link for a business that needs its widget', () => {
-    const [prompt] = SERVER_PROMPTS;
+    const prompt = promptNamed('book_my_usual');
     const text = prompt?.text ?? '';
     expect(text).toContain('me_book');
     expect(text).toMatch(/only after I say yes/i);
@@ -69,6 +75,30 @@ describe('SERVER_PROMPTS', () => {
       text.indexOf('business_list_time_slots')
     );
     expect(prompt?.description).toMatch(/books/i);
+  });
+
+  it('book_side_by_side books two appointments at one start with two different team members through one me_book call', () => {
+    const prompt = promptNamed('book_side_by_side');
+    const text = prompt?.text ?? '';
+    for (const name of [
+      'me_list_places',
+      'business_list_team_members',
+      'business_list_time_slots',
+      'me_book',
+      'second_appointment',
+    ]) {
+      expect(text).toContain(name);
+    }
+    expect(text).toMatch(/only after I say yes/i);
+    expect(text).toMatch(/same time/i);
+    expect(text).toMatch(/two different team members/i);
+    expect(text).toMatch(/both bookings (will be )?under my name/i);
+    expect(text).toMatch(/nothing about the other person is needed/i);
+    expect(text.indexOf('me_book')).toBeGreaterThan(
+      text.indexOf('business_list_time_slots')
+    );
+    expect(prompt?.title).toBeTruthy();
+    expect(prompt?.description).toBeTruthy();
   });
 
   it('asks for nothing about the sign-in and passes the description deny-list', () => {
@@ -90,14 +120,30 @@ describe('prompts over MCP', () => {
     });
   });
 
-  it('lists exactly one prompt, book_my_usual, with a title and a description', async () => {
+  it('lists the two prompts, each with a title and a description and no arguments', async () => {
     await withClient(async (client) => {
       const { prompts } = await client.listPrompts();
-      expect(prompts).toHaveLength(1);
-      expect(prompts[0]?.name).toBe('book_my_usual');
-      expect(prompts[0]?.title).toBeTruthy();
-      expect(prompts[0]?.description).toBeTruthy();
-      expect(prompts[0]?.arguments ?? []).toEqual([]);
+      expect(prompts.map((prompt) => prompt.name)).toEqual([
+        'book_my_usual',
+        'book_side_by_side',
+      ]);
+      for (const prompt of prompts) {
+        expect(prompt.title).toBeTruthy();
+        expect(prompt.description).toBeTruthy();
+        expect(prompt.arguments ?? []).toEqual([]);
+      }
+    });
+  });
+
+  it('gets one user message with the text of book_side_by_side', async () => {
+    await withClient(async (client) => {
+      const result = await client.getPrompt({ name: 'book_side_by_side' });
+      expect(result.messages).toHaveLength(1);
+      const [message] = result.messages;
+      expect(message?.role).toBe('user');
+      const text = message?.content.type === 'text' ? message.content.text : '';
+      expect(text).toBe(promptNamed('book_side_by_side')?.text);
+      expect(text).toContain('second_appointment');
     });
   });
 
@@ -109,7 +155,7 @@ describe('prompts over MCP', () => {
       expect(message?.role).toBe('user');
       expect(message?.content.type).toBe('text');
       const text = message?.content.type === 'text' ? message.content.text : '';
-      expect(text).toBe(SERVER_PROMPTS[0]?.text);
+      expect(text).toBe(promptNamed('book_my_usual')?.text);
       for (const tool of [
         'me_list_places',
         'me_list_bookings',

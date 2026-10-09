@@ -52,6 +52,12 @@ describe('SERVER_INSTRUCTIONS', () => {
     expect(SERVER_INSTRUCTIONS).toMatch(/after the client agreed/i);
   });
 
+  it('describes two people side by side as one me_book call with a second_appointment', () => {
+    expect(SERVER_INSTRUCTIONS).toContain('second_appointment');
+    expect(SERVER_INSTRUCTIONS).toContain('side by side');
+    expect(SERVER_INSTRUCTIONS).toMatch(/under the client's name/);
+  });
+
   it('keeps the pre-filled widget link for what the chat cannot do', () => {
     expect(SERVER_INSTRUCTIONS).toContain('pre-filled');
     for (const case_ of [
