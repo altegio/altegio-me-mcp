@@ -1,10 +1,12 @@
 // Server prompts: one per case, each a path a client can offer its user:
 // "sign in, pick a place, book your usual" (D-03), two people side by side
 // (CASE-02, CASE-05) and watching for a free time as a scheduled task of the
-// client's AI host (CASE-03, D-03). Written in the user's voice, the way a
-// client shows a prompt, and taking no arguments. It names tools and asks for
-// nothing about the sign-in, which happens on the connector's own sign-in page
-// and never in the chat; compliance checks the text like a tool description.
+// client's AI host (CASE-03, D-03), and holding a slot as a booking plus a
+// one-time reminder before the business's cancellation limit (CASE-04, D-04).
+// Written in the user's voice, the way a client shows a prompt, and taking no
+// arguments. It names tools and asks for nothing about the sign-in, which
+// happens on the connector's own sign-in page and never in the chat;
+// compliance checks the text like a tool description.
 
 export interface ServerPrompt {
   name: string;
@@ -52,6 +54,20 @@ export const SERVER_PROMPTS: readonly ServerPrompt[] = Object.freeze([
       'A run books nothing.',
       'When I come back and pick a time, show me the booking with me_book and book it only after I say yes; if this connection cannot book, check the time with book_check and give me the pre-filled booking link.',
       'I stop the watch by pausing or deleting the task.',
+    ].join(' '),
+  }),
+  Object.freeze({
+    name: 'hold_a_slot',
+    title: 'Hold a time at a place I already go to',
+    description:
+      'Books the time I name at one of my places and helps me set up a one-time scheduled task in this app that reminds me before the business stops allowing online cancellation and asks whether I keep it or cancel it; the task changes nothing on its own.',
+    text: [
+      'At one of my places from me_list_places, hold the time I name: show me the booking with me_book and book it only after I say yes.',
+      'If the preview says the business does not allow online cancellation, or shows no latest online cancellation time, tell me a hold is not possible there.',
+      'Otherwise, after the booking, help me set up a one-time scheduled task in this app for one day before the latest online cancellation time in the preview (a few hours before it when that time is less than a day away, and no task when it has passed) that reminds me of the booking and asks whether I want to keep it or cancel it.',
+      'The task changes nothing on its own.',
+      'If I answer cancel, show me the cancellation with me_cancel_booking and cancel only after I say yes.',
+      'I keep one hold per place at a time, and a service that needs online prepayment is not held.',
     ].join(' '),
   }),
 ]);

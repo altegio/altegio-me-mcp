@@ -1,0 +1,14 @@
+# CASE-04, reminder variant: success is a preview plus a proposed one-time reminder before
+# the cancellation limit, and nothing cancelled. Runs in Phase 6 against /me with the test client.
+prompt: >
+  I would like to hold my usual place for a Saturday evening about two weeks
+  from now, and I will decide by the Thursday before whether to keep it. Show
+  me what would be booked first, and set up a reminder for me before the
+  business stops allowing cancellation.
+server: /me
+max_turns: 8
+success_regexes:
+  - 'remind'
+  - 'cancel'
+expected_tools: [me_list_places, me_book]
+forbidden_tools: [me_cancel_booking, me_reschedule_booking]
