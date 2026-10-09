@@ -145,4 +145,16 @@ describe('evals/tasks', () => {
       expect(toolList(task, 'expected_tools')).toContain('business_list_dates');
     }
   });
+
+  it('forbids me_cancel_booking and me_reschedule_booking in the slot hold task, which stops at a preview and a reminder (T-05-13)', () => {
+    const task = TASKS.find((entry) => entry.file === 'me-hold-a-slot.yaml');
+    expect(task).toBeDefined();
+    if (task !== undefined) {
+      const forbidden = toolList(task, 'forbidden_tools');
+      for (const name of ['me_cancel_booking', 'me_reschedule_booking']) {
+        expect(forbidden).toContain(name);
+      }
+      expect(toolList(task, 'expected_tools')).toContain('me_book');
+    }
+  });
 });
