@@ -15,7 +15,7 @@ Eval tasks for each shipped case are written in Phase 5 and run in Phase 6 (D-05
 | --- | --- | --- | --- | --- |
 | Two people side by side | GO-WITH-SCOPE | Two appointments at one start with two different, named team members, both under the signed-in client; nothing about the second person is sent | One `me_book` call with an optional second appointment, one preview, one confirmation, one `POST /book_record` with `appointments[2]` (D-01) | 05-02 |
 | Freed-slot monitoring | GO | A host scheduled task checks `business_list_dates` and `business_list_time_slots` for one team member and reports free slots; it never books | Prompt text on the host's scheduled tasks (Claude Cowork, Claude Code routines; ChatGPT unverified); nothing stored on the server; the client books with `me_book` when back (D-03) | 05-03 |
-| Slot hold | CONDITIONAL | The reminder variant: a host task asks "keep or cancel?" a day before the business's online cancellation limit; the unattended release waits on I8 and one host run that shows an unattended confirmation | `me_book` now, a one-off host task later; `me_cancel_booking` stays two-step (D-04) | 05-04, last |
+| Slot hold | CONDITIONAL | The reminder variant: a host task asks "keep or cancel?" a day before the business's online cancellation limit; the unattended release waits on I8 and one host run that shows an unattended confirmation | `me_book` now, a one-off host task later; `me_cancel_booking` stays two-step (D-04) | 05-04, the reminder variant (`cancel_until` in the preview, `hold_a_slot`) |
 
 ## Two people side by side
 
@@ -209,6 +209,26 @@ releases the hold through `me_cancel_booking`, unless the client deleted the tas
 - **Risks.** An unattended stall keeps the booking (fails safe for the client, holds the business's
   slot); repeated holds are a fairness and blacklist risk, so one hold per place at a time;
   prepaid services go to the widget.
+
+### What ships and what waits
+
+The reminder variant ships in 05-04: `me_book`'s preview carries `cancel_until` (the start minus the
+business's cancellation limit, in the business's offset, null where online cancellation is not
+allowed or the limit is not stated), and the `hold_a_slot` prompt books after the client's yes,
+then sets up a one-time host task one day before that time that only reminds and asks "keep or
+cancel?". The cancel happens only on the client's answer in the chat, through the two steps of
+`me_cancel_booking`; a scheduled run is never taken as consent.
+
+The unattended release, a host one-off run that previews and confirms `me_cancel_booking` by
+itself, waits on two things:
+
+1. I8 live on the proxy, so that a claude.ai or Claude Desktop connector reaches `/me` (or a Claude
+   Code routine over `claude mcp add --header`).
+2. One host run that shows an unattended preview-then-confirm cancel at 726120, recorded under
+   "Host runs".
+
+After that run the owner decides whether the release becomes a prompt change. Nothing of it is
+built: there is no cancel-by-itself prompt, no server state and no scheduler.
 
 ## Anti-fraud
 
