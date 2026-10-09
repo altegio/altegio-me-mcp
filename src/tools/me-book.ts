@@ -191,9 +191,9 @@ type FallbackReason = (typeof FALLBACK_REASONS)[number];
 
 const bookOutput = z.strictObject({
   status: z
-    .enum(['preview', 'booked', 'fallback'])
+    .enum(['preview', 'booked', 'partially_booked', 'fallback'])
     .describe(
-      "preview: the slot was checked and nothing is booked. booked: the booking was created. fallback: the booking cannot be made from here, nothing was booked, and the client completes it with the pre-filled link in the business's booking widget, or through the business's contacts when there is no link."
+      "preview: the slot was checked and nothing is booked. booked: the booking was created, or both bookings of a pair. partially_booked: one of the two appointments of a pair was booked and the other was not; booking_id or second_booking_id names the one that was. fallback: the booking cannot be made from here, nothing was booked, and the client completes it with the pre-filled link in the business's booking widget, or through the business's contacts when there is no link."
     ),
   location_id: z.number().int().describe('Location id of the business.'),
   preview: previewSchema
@@ -256,6 +256,19 @@ const bookOutput = z.strictObject({
         .nullable()
         .describe(
           'The booking widget link, or null when the business has no usable booking form.'
+        ),
+      second_link: z
+        .strictObject({
+          url: z.string().describe("Link to the business's booking widget."),
+          kind: z
+            .enum(['preselected', 'booking_form'])
+            .describe(
+              'preselected: the widget opens with the services, team member and time already selected. booking_form: the widget opens without the selection.'
+            ),
+        })
+        .nullable()
+        .describe(
+          'For a pair, the pre-filled link for the second appointment (the link field is for the first); null for a single booking and when the widget takes no bookings.'
         ),
     })
     .nullable()
@@ -348,12 +361,16 @@ export function cancellationText(rules: BusinessRules): string | null {
 type FallbackLink = { url: string; kind: 'preselected' | 'booking_form' };
 
 /** The pre-filled widget link for the selection, built from the card as book_check builds it. */
-function selectionLink(input: BookInput, card: BusinessCard): FallbackLink {
+function selectionLink(
+  input: BookInput,
+  card: BusinessCard,
+  appointment: Appointment = firstAppointment(input)
+): FallbackLink {
   const link = buildBookingLink({
     locationId: input.location_id,
     formUrl: card.bookingFormUrl,
-    teamMemberId: input.team_member_id,
-    serviceIds: input.service_ids,
+    teamMemberId: appointment.teamMemberId,
+    serviceIds: appointment.serviceIds,
     slotDatetime: input.datetime,
     businessUtcOffsetHours: card.utcOffsetHours,
     anyTeamMemberAllowed: card.anyTeamMemberAllowed,
@@ -361,10 +378,23 @@ function selectionLink(input: BookInput, card: BusinessCard): FallbackLink {
   return { url: link.url, kind: link.kind };
 }
 
+/** The link of the first appointment and, for a pair, the link of the second. */
+function selectionLinks(
+  input: BookInput,
+  card: BusinessCard
+): [FallbackLink, FallbackLink | null] {
+  const second = secondAppointment(input);
+  return [
+    selectionLink(input, card),
+    second === null ? null : selectionLink(input, card, second),
+  ];
+}
+
 function fallbackOutput(
   input: BookInput,
   reason: FallbackReason,
-  link: FallbackLink | null
+  link: FallbackLink | null,
+  secondLink: FallbackLink | null = null
 ): BookOutput {
   return {
     status: 'fallback',
@@ -376,7 +406,7 @@ function fallbackOutput(
     booking: null,
     second_booking_id: null,
     second_booking: null,
-    fallback: { reason, link },
+    fallback: { reason, link, second_link: secondLink },
   };
 }
 
@@ -422,7 +452,7 @@ async function preview(
         throw toToolError(error);
       });
     return canTakeOnlineBookings(card)
-      ? fallbackOutput(input, 'not_own_place', selectionLink(input, card))
+      ? fallbackOutput(input, 'not_own_place', ...selectionLinks(input, card))
       : widgetInactiveFallback(input, card);
   }
 
@@ -473,7 +503,7 @@ async function preview(
       )
     )
   ) {
-    return fallbackOutput(input, 'prepayment', selectionLink(input, card));
+    return fallbackOutput(input, 'prepayment', ...selectionLinks(input, card));
   }
   const membershipOnly = new Set(
     catalogResult.value.services
@@ -485,7 +515,7 @@ async function preview(
       appointment.serviceIds.some((id) => membershipOnly.has(id))
     )
   ) {
-    return fallbackOutput(input, 'membership', selectionLink(input, card));
+    return fallbackOutput(input, 'membership', ...selectionLinks(input, card));
   }
   const teamMembers =
     membersResult.status === 'fulfilled' ? membersResult.value : null;
@@ -526,7 +556,10 @@ async function preview(
         'call me_book again in a few seconds without confirmation_token.'
       );
     }
-    throw toToolError(error, CHECK_ERRORS);
+    throw toToolError(
+      error,
+      second === null ? CHECK_ERRORS : PAIR_CHECK_ERRORS
+    );
   }
 
   const confirmations = deps.confirmations ?? DEFAULT_CONFIRMATIONS;
@@ -638,6 +671,63 @@ function writeRejectedText(error: UpstreamError): UpstreamErrorText {
   };
 }
 
+// Errors of a pair (CASE-02, D-01). The probe of plan 05-01 recorded that one
+// team member twice is refused as HTTP 422 with a message and no error code, so
+// the pair texts key on the codes 433, 436 and 437 and, for an answer with no
+// code at all, on the "not enough time" message, which is only matched and never
+// repeated.
+
+const TAKEN_PAIR_TEXT: UpstreamErrorText = {
+  message: 'Nothing was booked: one of the two times is no longer free.',
+  nextAction:
+    'choose another time with business_list_time_slots for both team members, then call me_book without confirmation_token for a new preview.',
+};
+const NOT_AVAILABLE_PAIR_TEXT: UpstreamErrorText = {
+  message:
+    'Nothing was booked: a chosen team member is not available at this time.',
+  nextAction:
+    'choose other team members with business_list_team_members or another time with business_list_time_slots, then call me_book without confirmation_token for a new preview.',
+};
+const SAME_MEMBER_PAIR_TEXT: UpstreamErrorText = {
+  message:
+    'Nothing was booked: one team member cannot take both appointments at this time.',
+  nextAction:
+    'choose two different team members with business_list_team_members or another time with business_list_time_slots, then call me_book without confirmation_token for a new preview.',
+};
+const NOT_ENOUGH_TIME_MESSAGE = /not have enough time/i;
+
+/** The pair text for a rejection that names the time, a team member or the overlap; null for any other. */
+function pairRejectedText(error: UpstreamError): UpstreamErrorText | null {
+  if (error.codes.includes(TAKEN_CODE)) return TAKEN_PAIR_TEXT;
+  if (error.codes.includes(NO_TEAM_MEMBER_CODE)) return NOT_AVAILABLE_PAIR_TEXT;
+  if (
+    error.codes.includes(OVERLAP_CODE) ||
+    (error.codes.length === 0 &&
+      NOT_ENOUGH_TIME_MESSAGE.test(error.upstreamMessage ?? ''))
+  ) {
+    return SAME_MEMBER_PAIR_TEXT;
+  }
+  return null;
+}
+
+function textOf(
+  entry: UpstreamErrorText | ((error: UpstreamError) => UpstreamErrorText),
+  error: UpstreamError
+): UpstreamErrorText {
+  return typeof entry === 'function' ? entry(error) : entry;
+}
+
+/** The check-error texts for a pair: the time, the team member and the overlap are said for two appointments. */
+export const PAIR_CHECK_ERRORS: UpstreamErrorOverrides = {
+  ...CHECK_ERRORS,
+  rejected: (error) =>
+    pairRejectedText(error) ??
+    textOf(CHECK_ERRORS.rejected ?? defaultText, error),
+  bad_request: (error) =>
+    pairRejectedText(error) ??
+    textOf(CHECK_ERRORS.bad_request ?? defaultText, error),
+};
+
 const UNKNOWN_OUTCOME: UpstreamErrorText = {
   message:
     'The booking service did not answer, so it is not known whether the booking was made.',
@@ -670,9 +760,18 @@ export const WRITE_ERRORS: UpstreamErrorOverrides = {
   }),
 };
 
+/** The create-error texts for a pair: the pair texts for 433, 436 and 437, today's for every other answer. */
+const PAIR_WRITE_ERRORS: UpstreamErrorOverrides = {
+  ...WRITE_ERRORS,
+  rejected: (error) => pairRejectedText(error) ?? writeRejectedText(error),
+  bad_request: (error) => pairRejectedText(error) ?? writeRejectedText(error),
+};
+
 /** A failed create as an in-band error that quotes nothing the business wrote back. */
-export function toWriteToolError(error: unknown): Error {
-  return toToolError(error, WRITE_ERRORS, { quoteUpstream: false });
+export function toWriteToolError(error: unknown, pair = false): Error {
+  return toToolError(error, pair ? PAIR_WRITE_ERRORS : WRITE_ERRORS, {
+    quoteUpstream: false,
+  });
 }
 
 const PROFILE_READ_FAILED: UpstreamErrorText = {
@@ -711,7 +810,7 @@ async function fallbackResult(
       BOOK_CHECK_LINK_NEXT
     );
   }
-  return fallbackOutput(input, reason, selectionLink(input, card));
+  return fallbackOutput(input, reason, ...selectionLinks(input, card));
 }
 
 /** Confirm: redeems the token, reads the profile, creates the booking(s) and reads them back. */
@@ -787,14 +886,16 @@ async function confirm(
         return fallbackResult(input, deps, ctx, 'required_field');
       }
     }
-    throw toWriteToolError(error);
+    throw toWriteToolError(error, second !== null);
   }
   const [firstId, secondId] = bookingIds;
-  if (firstId === null || (second !== null && secondId === null)) {
-    // The answer names one of the two bookings only; what exists is not known
-    // from here, and me_list_bookings shows it.
+  if (firstId === null && secondId === null) {
+    // The client throws anti_fraud for this; kept as the safe reading.
     throw new ToolError(UNKNOWN_OUTCOME.message, UNKNOWN_OUTCOME.nextAction);
   }
+  // A pair whose answer names one booking only: the booked one is named, and
+  // the client decides (T-05-08).
+  const partial = second !== null && (firstId === null || secondId === null);
 
   // Read the new bookings back as me_list_bookings shows them; a failed or
   // empty re-read keeps the bookings, which exist upstream either way.
@@ -814,7 +915,7 @@ async function confirm(
     secondBooking = null;
   }
   return {
-    status: 'booked',
+    status: partial ? 'partially_booked' : 'booked',
     location_id: input.location_id,
     preview: null,
     confirmation_token: null,
@@ -920,6 +1021,16 @@ const FALLBACK_TEXT: Record<FallbackReason, string> = {
     "Not booked: the business needs more details for this booking than the client's Altegio profile has.",
 };
 
+function linkLine(
+  label: string | null,
+  link: { url: string; kind: 'preselected' | 'booking_form' }
+): string {
+  const forWhat = label === null ? '' : ` for the ${label}`;
+  return link.kind === 'preselected'
+    ? `Booking link${forWhat} with the services, team member and time already selected: ${link.url}`
+    : `Booking link${forWhat} to the business's booking form, without the selection: ${link.url}`;
+}
+
 function renderFallback(out: BookOutput): string {
   const { fallback } = out;
   const lines = [
@@ -928,11 +1039,16 @@ function renderFallback(out: BookOutput): string {
       : FALLBACK_TEXT[fallback.reason],
   ];
   if (fallback?.link != null) {
-    lines.push(
-      fallback.link.kind === 'preselected'
-        ? `Booking link with the services, team member and time already selected: ${fallback.link.url}`
-        : `Booking link to the business's booking form, without the selection: ${fallback.link.url}`
-    );
+    const pair = fallback.second_link != null;
+    if (pair) {
+      lines.push(
+        "The business's booking widget books one appointment at a time, so there is one link for each appointment."
+      );
+    }
+    lines.push(linkLine(pair ? 'first appointment' : null, fallback.link));
+    if (fallback.second_link != null) {
+      lines.push(linkLine('second appointment', fallback.second_link));
+    }
     lines.push(CONFIRMATION_STATEMENT);
   } else {
     lines.push(
@@ -972,6 +1088,19 @@ function renderBooked(out: BookOutput): string {
   return withUntrustedBlock(lines.join('\n'), blocks);
 }
 
+function renderPartial(out: BookOutput): string {
+  const bookedId = out.booking_id ?? out.second_booking_id;
+  const item = out.booking_id === null ? out.second_booking : out.booking;
+  const lines = [
+    `Only one of the two appointments was booked: booking ${bookedId ?? ''}.`,
+    `Next: tell the user that only one of the two appointments was booked, then either book the other appointment with me_book on its own after a new preview or cancel booking ${bookedId ?? ''} with me_cancel_booking.`,
+  ];
+  return withUntrustedBlock(
+    lines.join('\n'),
+    item === null ? {} : { Booking: bookingBlockValue(item) }
+  );
+}
+
 export const meBook = defineTool<typeof bookInput, typeof bookOutput, ToolDeps>(
   {
     name: TOOL_NAME,
@@ -1001,7 +1130,9 @@ export const meBook = defineTool<typeof bookInput, typeof bookOutput, ToolDeps>(
         ? renderPreview(out)
         : out.status === 'fallback'
           ? renderFallback(out)
-          : renderBooked(out),
+          : out.status === 'partially_booked'
+            ? renderPartial(out)
+            : renderBooked(out),
     handler: async ({ input, deps, ctx }) => {
       assertPairRule(input);
       const token = input[CONFIRMATION_TOKEN_ARG];

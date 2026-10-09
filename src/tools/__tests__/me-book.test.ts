@@ -755,7 +755,7 @@ describe('me_book pair check: the answer of the booking service', () => {
       expect(text).toContain(sentence);
       expect(text).toContain('Next:');
       expect(text).toContain('business_list_');
-      expect(text).not.toContain('confirmation_token ');
+      expect(result.result.structuredContent).toBeUndefined();
       expect(
         made.upstream.calls.some((call) =>
           call.url.pathname.includes('book_record')
