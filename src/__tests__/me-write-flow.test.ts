@@ -773,6 +773,26 @@ describe('me_book with second_appointment, second call: the pair booking', () =>
     expect(listText).toContain(`${SECOND_RECORD_ID}`);
   });
 
+  it('names the booked one and the next action when the answer names only the first appointment', async () => {
+    const { harness, token } = await previewPair({
+      create: 'created_pair_partial',
+    });
+    const { body, text } = await callBook(harness, {
+      ...PAIR,
+      confirmation_token: token,
+    });
+    expect(body.result?.isError).not.toBe(true);
+    const out = body.result?.structuredContent;
+    expect(out?.status).toBe('partially_booked');
+    expect(out?.booking_id).toBe(NEW_RECORD_ID);
+    expect(out?.second_booking_id).toBeNull();
+    expect(out?.booking).toMatchObject({ booking_id: NEW_RECORD_ID });
+    expect(text).toContain(
+      `Only one of the two appointments was booked: booking ${NEW_RECORD_ID}.`
+    );
+    expect(text).toContain('me_cancel_booking');
+  });
+
   it('leaks neither the sign-in, the profile nor a record hash into any response or log line', async () => {
     const { harness, token } = await previewPair();
     const second = await callBook(harness, {
@@ -822,6 +842,27 @@ function signedClient(scope: string): Record<string, string> {
 }
 
 describe('me_book for callers that are not a signed-in client with the book scope', () => {
+  it('refuses a pair from an anonymous caller and from a partner caller, with InsufficientScope and no upstream call', async () => {
+    const anonymous = await start();
+    const { body } = await callBook(anonymous.harness, PAIR, {});
+    expect(body.result?.isError).toBe(true);
+    expect(anonymous.upstream.calls).toEqual([]);
+    const lines = await waitForLogs(anonymous.harness, 1);
+    expect(lines[0]).toMatchObject({
+      tool: 'me_book',
+      error_type: 'InsufficientScope',
+    });
+
+    const partner = await start({}, REQUIRED);
+    const refused = await callBook(partner.harness, PAIR, {
+      authorization: `Bearer ${PARTNER_TOKEN}`,
+    });
+    expect(refused.body.result?.isError).toBe(true);
+    expect(partner.upstream.calls).toEqual([]);
+    const partnerLines = await waitForLogs(partner.harness, 1);
+    expect(partnerLines[0]).toMatchObject({ error_type: 'InsufficientScope' });
+  });
+
   it('refuses an anonymous caller in band, naming the sign-in and book_check, with no upstream call', async () => {
     const { harness, upstream } = await start();
     const { body } = await callBook(harness, SELECTION, {});
