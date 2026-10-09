@@ -116,7 +116,72 @@ cost is the same either way (one `book_dates` call plus k `book_times` calls per
 
 ## Host runs
 
-No host run recorded yet; plan 05-03 records one.
+Two runs on 2026-10-09: the pair tool run through the real app, which passed, and the host
+scheduled task, which could not reach the server. Neither record holds a token, phone, name or
+e-mail; the owner's words and a git-ignored evidence file carry the detail.
+
+### Pair tool run (plan 05-02 code, run at the 05-03 checkpoint)
+
+Run: 2026-10-09 15:51 UTC (22:51 UTC+7)
+Commit: 863fb4d
+Status: passed
+
+- **Command (the owner's shell, the executor never opens the env file):**
+  `ALTEGIO_E2E=1 ALTEGIO_E2E_USER=1 ALTEGIO_E2E_WRITE=1 ALTEGIO_E2E_PAIR=1 node --env-file=.env ./node_modules/jest/bin/jest.js --testPathPatterns=me-pair.live --runInBand`
+  (`src/__tests__/me-pair.live.test.ts`, branch `phase-05-cases`). The real app in process,
+  `CALLER_AUTH=optional`, the production request gate and the direct user-token header, against
+  the real Altegio API, from the owner's machine, not from Cloud Run.
+- **Where:** location 726120, service 13884511, team members 3110938 and 3110937, slot
+  2026-10-11T12:00:00+02:00.
+- **Steps, all as expected:** `me_list_bookings`, `business_list_services`,
+  `business_list_team_members`, `business_list_dates` for both team members,
+  `business_list_time_slots` for both on 2026-10-11, `me_book` preview (`preview`), `me_book`
+  with the token (`booked`, bookings 676436066 and 676436067), `me_list_bookings`,
+  `me_cancel_booking` for each (preview, then `cancelled`), `me_list_bookings`.
+- **Counts:** 26 upstream calls, no skipped step, no failure, no fallback reason, no refusal.
+- **Cleanup:** none needed; both bookings were seen cancelled in the closing read, so no
+  `PAIR_CLEANUP` line was printed.
+- **Evidence:** the owner's reply and `loadtest-output/me-pair-run.json` (git-ignored) agree; the
+  file holds ids, statuses, counts and booleans only.
+- **What it shows:** `me_book` with `second_appointment` books two appointments under the client's
+  name in one preview and one confirmation, and each is cancelled on its own, through the real
+  app. It closes the open live run of 05-02.
+- **What it does not show:** the Cloud Run egress and its anti-fraud behaviour (WRITE-07, B3),
+  other businesses and their settings, two "any" entries (A2), and how the business displays the
+  two records.
+
+### Host scheduled task (Claude Desktop, Cowork)
+
+Host: Claude Desktop, Cowork scheduled task "Мастер свободные слоты", created and run once with
+"Run now" on 2026-10-09 (start time not noted by the owner)
+Plan and schedule: the owner's paid plan (not recorded); the host asked for the missing values and
+settled on one run now over a rolling 7 days, any of the 7 team members
+Approval mode: none asked
+Status: blocked, no tool of this server was reached
+Write tools called: none
+Tools seen in the logs for the window: logs not read (the platform's log read needs a new gcloud
+sign-in that a non-interactive run cannot give); the owner's description stands
+Report matched a direct read: not applicable, the run reported no times
+
+- **What the owner saw.** The task ran, parsed the watch text and asked for what the text left open
+  (which team member, the date range, the frequency), then reported that the booking connector's
+  tools were not available in that session.
+- **Root cause.** Since ADR 0004 (2026-10-06) `/me` needs a partner token, and claude.ai and Claude
+  Desktop custom connectors cannot send headers, so the connector added on 2026-10-06 can no longer
+  reach the server. The host run waits for the proxy's client OAuth (altegio-mcp-platform PR #255,
+  open item I8).
+- **What worked.** The scheduling mechanics: the task was created, run on demand, read the prompt
+  text and asked for the missing ids and window. Claude Code with `claude mcp add --header` would
+  reach the server today; it was not used.
+- **What it does not show:** a run that reads free times on a host, how a daily or hourly
+  repeat behaves, the approval mode of an unattended run (A4), booking from a report (needs I8 on
+  claude.ai), and ChatGPT (not tried, A5).
+
+Retest when: the proxy's client OAuth (I8, PR #255) lets the claude.ai or Claude Desktop connector
+reach `/me`, or in Claude Code with a routine over `claude mcp add --header`; then one "Run now" of
+`watch_for_a_free_slot` text with ids, a window and the schedule, and a check that the logs show
+`business_list_dates` and `business_list_time_slots` and no `me_book`, `me_reschedule_booking` or
+`me_cancel_booking`.
 
 ## Slot hold
 
@@ -164,7 +229,7 @@ releases the hold through `me_cancel_booking`, unless the client deleted the tas
 | A1 | No business setting refuses one client two simultaneous online records | Settled at 726120: the create answered 201 with two record ids and both records were listed. Other businesses are not covered |
 | A2 | Two "any" (0) entries can resolve to one team member and be refused | Open, inferred from code, not run; the scope refuses 0 for a pair either way |
 | A3 | Partner of account 2630 is not a widget-type partner | Open; the probe saw no 412, from the owner's network only |
-| A4 | A Cowork scheduled task can call a custom connector's write tools unattended | Open; the host run is plan 05-03 and 05-04 |
+| A4 | A Cowork scheduled task can call a custom connector's write tools unattended | Open; the 05-03 host run was blocked before any tool call (see Host runs), so it shows nothing about it; retest after I8 |
 | A5 | ChatGPT scheduled tasks can call custom MCP apps | Open; the docs must not claim it |
 | A6 | A client-cancelled record leaves no visible penalty beyond history | Open; both records showed `deleted` after the cancel, the business's view was not checked |
 
