@@ -51,13 +51,62 @@ preview with a confirmation token, then the write. The client's name, phone and 
 their Altegio profile and never from the chat. The widget link stays for partner and anonymous
 callers, services with online prepayment, memberships, inactive widgets and places without
 earlier visits. The sign-in itself (phone + SMS on the platform proxy's page, OAuth 2.1) is the
-proxy's: until it ships, the client tier runs locally with a direct user-token header. Next: the
-cases the Altegio.me app lacks (two people side by side, a freed slot at a favourite team member,
-a held slot). A searchable catalog of all businesses is parked.
+proxy's: until it ships, the client tier runs locally with a direct user-token header. On top of
+these tools run the cases the Altegio.me app lacks, see [Cases](#cases). A searchable catalog of
+all businesses is parked.
 
 **Distribution.** Claude Connectors Directory listing and promo inside the Altegio.me app; later
 ChatGPT, the MCP Registry, and outreach to Perplexity, Mistral, xAI and Google. See
 [`docs/research/ai-platforms-distribution.md`](docs/research/ai-platforms-distribution.md).
+
+## Cases
+
+Cases the Altegio.me app lacks run on the tools above, with no tool of their own. Each case has a
+server prompt that a client can offer its user, an example dialogue and an eval task; the prompts
+are listed over `prompts/list`, and the decisions behind each case are in
+[`docs/research/cases.md`](docs/research/cases.md).
+
+### Two people side by side
+
+A signed-in client books two appointments at one of their places, at the same start, with two
+different named team members, for example a parent and a child. It is one `me_book` call with an
+optional `second_appointment` (its own services and a team member): one preview that lists both
+appointments, one confirmation token over both, and one create with two appointments, so either
+both exist or neither does. The prompt is `book_side_by_side`.
+
+What it does not do:
+
+- Both bookings are under the client's name. Nothing about the second person (name, phone,
+  e-mail, a comment) is taken or sent; the client tells the business who the second one is for.
+- One place, one start time and exactly two appointments. Both team members must be named and
+  different; "any team member" is refused for a pair, because the booking service could pick the
+  same team member twice.
+- Online prepayment, a membership-only service, an inactive widget and a place without an
+  earlier visit end at the business's booking widget, which books one appointment at a time, so
+  the answer carries one pre-filled link for each appointment.
+- If the booking service names only one of the two bookings, the answer says
+  `partially_booked` with the booked id and what to do next.
+- Each booking is moved or cancelled on its own with `me_reschedule_booking` or
+  `me_cancel_booking`.
+
+> **Client:** Book me and my son at BaBarber on Saturday, me with Anna, him with Oleg, same time.
+>
+> **Assistant:** (`me_list_places`, `business_list_time_slots` for each) Anna and Oleg are both
+> free at 11:00 and 14:30 on Sat 17 Oct. 11:00?
+>
+> **Client:** 11:00.
+>
+> **Assistant:** (`me_book` preview) BaBarber, Sat 17 Oct 11:00 (+07:00). First appointment:
+> men's haircut with Anna, 600. Second appointment: kids' haircut with Oleg, 400. Both bookings
+> are under your name; nothing about the second person is sent. Online cancellation is allowed
+> until 2 hours before the start. Book both?
+>
+> **Client:** Yes.
+>
+> **Assistant:** (`me_book` with the confirmation token) Booked: two appointments, booking 6762101
+> and booking 6762102. Both are under your name.
+
+The eval task for this case is [`evals/tasks/me-two-people-side-by-side.yaml`](evals/tasks/me-two-people-side-by-side.yaml).
 
 ## Architecture
 
