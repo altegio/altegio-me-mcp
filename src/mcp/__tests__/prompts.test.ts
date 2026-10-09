@@ -9,7 +9,8 @@ import { SERVER_PROMPTS, type ServerPrompt } from '../prompts.js';
 
 // The MCP prompts of the server, one per case: "sign in, pick a place, book
 // your usual" (D-03), "two people side by side" (CASE-02, CASE-05) and "watch
-// for a free time" (CASE-03, D-03, a scheduled task of the host), served
+// for a free time" (CASE-03, D-03, a scheduled task of the host) and "hold a
+// slot" (CASE-04, D-04, a booking plus a one-time reminder), served
 // over prompts/list and prompts/get. They walk the own-places flow and ask for
 // nothing about the sign-in.
 
@@ -46,12 +47,46 @@ function promptNamed(name: string): ServerPrompt | undefined {
 }
 
 describe('SERVER_PROMPTS', () => {
-  it('holds exactly book_my_usual, book_side_by_side and watch_for_a_free_slot', () => {
+  it('holds exactly book_my_usual, book_side_by_side, watch_for_a_free_slot and hold_a_slot', () => {
     expect(SERVER_PROMPTS.map((prompt) => prompt.name)).toEqual([
       'book_my_usual',
       'book_side_by_side',
       'watch_for_a_free_slot',
+      'hold_a_slot',
     ]);
+  });
+
+  it('hold_a_slot books with me_book after a yes and sets up a one-time reminder that only asks keep or cancel (D-04, T-05-13)', () => {
+    const prompt = promptNamed('hold_a_slot');
+    const text = prompt?.text ?? '';
+    expect(text).toContain('me_book');
+    expect(text).toContain('me_cancel_booking');
+    expect(text).toMatch(/only after I say yes/i);
+    expect(text).toMatch(/one-time/i);
+    expect(text).toMatch(/scheduled task/i);
+    expect(text).toMatch(/keep it or cancel it/i);
+    expect(text).toMatch(/latest online cancellation time/i);
+    expect(text).toMatch(/one day before/i);
+    expect(text).toMatch(/has passed/i);
+    expect(text).toMatch(/changes nothing on its own/i);
+    expect(text).toMatch(/cancel only after I say yes/i);
+    expect(text.indexOf('me_cancel_booking')).toBeGreaterThan(
+      text.indexOf('keep it or cancel it')
+    );
+    for (const move of ['me_reschedule_booking', 'business_list_dates']) {
+      expect(text).not.toContain(move);
+    }
+    expect(prompt?.title).toBeTruthy();
+    expect(prompt?.description).toBeTruthy();
+  });
+
+  it('hold_a_slot makes no hold without online cancellation or a known limit, holds one per place, and leaves prepaid services to the widget (T-05-14)', () => {
+    const text = promptNamed('hold_a_slot')?.text ?? '';
+    expect(text).toMatch(/does not allow online cancellation/i);
+    expect(text).toMatch(/no latest online cancellation time/i);
+    expect(text).toMatch(/hold is not possible/i);
+    expect(text).toMatch(/one hold per place/i);
+    expect(text).toMatch(/online prepayment/i);
   });
 
   it('watch_for_a_free_slot sets up a scheduled task whose runs only read, and books in the chat after a yes', () => {
@@ -154,13 +189,14 @@ describe('prompts over MCP', () => {
     });
   });
 
-  it('lists the three prompts, each with a title and a description and no arguments', async () => {
+  it('lists the four prompts, each with a title and a description and no arguments', async () => {
     await withClient(async (client) => {
       const { prompts } = await client.listPrompts();
       expect(prompts.map((prompt) => prompt.name)).toEqual([
         'book_my_usual',
         'book_side_by_side',
         'watch_for_a_free_slot',
+        'hold_a_slot',
       ]);
       for (const prompt of prompts) {
         expect(prompt.title).toBeTruthy();
