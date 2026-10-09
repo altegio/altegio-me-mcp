@@ -127,4 +127,22 @@ describe('evals/tasks', () => {
       expect(toolList(task, 'expected_tools')).toContain('me_book');
     }
   });
+
+  it('forbids all three write tools in the free-slot watch task, whose runs only read', () => {
+    const task = TASKS.find(
+      (entry) => entry.file === 'me-watch-for-a-free-slot.yaml'
+    );
+    expect(task).toBeDefined();
+    if (task !== undefined) {
+      const forbidden = toolList(task, 'forbidden_tools');
+      for (const name of [
+        'me_book',
+        'me_reschedule_booking',
+        'me_cancel_booking',
+      ]) {
+        expect(forbidden).toContain(name);
+      }
+      expect(toolList(task, 'expected_tools')).toContain('business_list_dates');
+    }
+  });
 });

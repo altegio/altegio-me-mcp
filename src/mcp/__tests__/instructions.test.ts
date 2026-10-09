@@ -58,6 +58,14 @@ describe('SERVER_INSTRUCTIONS', () => {
     expect(SERVER_INSTRUCTIONS).toMatch(/under the client's name/);
   });
 
+  it('describes watching for a free time as a scheduled task of the host that only reads and keeps nothing on the server', () => {
+    expect(SERVER_INSTRUCTIONS).toMatch(/scheduled task/i);
+    expect(SERVER_INSTRUCTIONS).toContain('business_list_dates');
+    expect(SERVER_INSTRUCTIONS).toContain('business_list_time_slots');
+    expect(SERVER_INSTRUCTIONS).toMatch(/only reads/i);
+    expect(SERVER_INSTRUCTIONS).toMatch(/server keeps nothing/i);
+  });
+
   it('keeps the pre-filled widget link for what the chat cannot do', () => {
     expect(SERVER_INSTRUCTIONS).toContain('pre-filled');
     for (const case_ of [

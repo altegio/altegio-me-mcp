@@ -8,7 +8,8 @@ import { createMcpServer } from '../create-server.js';
 import { SERVER_PROMPTS, type ServerPrompt } from '../prompts.js';
 
 // The MCP prompts of the server, one per case: "sign in, pick a place, book
-// your usual" (D-03) and "two people side by side" (CASE-02, CASE-05), served
+// your usual" (D-03), "two people side by side" (CASE-02, CASE-05) and "watch
+// for a free time" (CASE-03, D-03, a scheduled task of the host), served
 // over prompts/list and prompts/get. They walk the own-places flow and ask for
 // nothing about the sign-in.
 
@@ -45,11 +46,44 @@ function promptNamed(name: string): ServerPrompt | undefined {
 }
 
 describe('SERVER_PROMPTS', () => {
-  it('holds exactly book_my_usual and book_side_by_side', () => {
+  it('holds exactly book_my_usual, book_side_by_side and watch_for_a_free_slot', () => {
     expect(SERVER_PROMPTS.map((prompt) => prompt.name)).toEqual([
       'book_my_usual',
       'book_side_by_side',
+      'watch_for_a_free_slot',
     ]);
+  });
+
+  it('watch_for_a_free_slot sets up a scheduled task whose runs only read, and books in the chat after a yes', () => {
+    const prompt = promptNamed('watch_for_a_free_slot');
+    const text = prompt?.text ?? '';
+    for (const name of [
+      'business_list_dates',
+      'business_list_time_slots',
+      'me_list_places',
+      'me_book',
+      'book_check',
+    ]) {
+      expect(text).toContain(name);
+    }
+    expect(text).toMatch(/scheduled task/i);
+    expect(text).toMatch(/hour/i);
+    expect(text).toMatch(/only after I say yes/i);
+    expect(text).toMatch(/a run books nothing/i);
+    expect(text).toMatch(/only the ids, the dates and the times of day/i);
+    expect(text).toMatch(/62 days/);
+    expect(text).toMatch(/pausing or deleting/i);
+    expect(text.indexOf('business_list_dates')).toBeLessThan(
+      text.indexOf('business_list_time_slots')
+    );
+    expect(text.indexOf('me_book')).toBeGreaterThan(
+      text.indexOf('business_list_time_slots')
+    );
+    for (const write of ['me_reschedule_booking', 'me_cancel_booking']) {
+      expect(text).not.toContain(write);
+    }
+    expect(prompt?.title).toBeTruthy();
+    expect(prompt?.description).toBeTruthy();
   });
 
   it('names the whole own-places flow', () => {
@@ -120,12 +154,13 @@ describe('prompts over MCP', () => {
     });
   });
 
-  it('lists the two prompts, each with a title and a description and no arguments', async () => {
+  it('lists the three prompts, each with a title and a description and no arguments', async () => {
     await withClient(async (client) => {
       const { prompts } = await client.listPrompts();
       expect(prompts.map((prompt) => prompt.name)).toEqual([
         'book_my_usual',
         'book_side_by_side',
+        'watch_for_a_free_slot',
       ]);
       for (const prompt of prompts) {
         expect(prompt.title).toBeTruthy();
