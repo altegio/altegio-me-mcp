@@ -25,7 +25,8 @@ import { scrubSecrets } from '../../../observability/redact.js';
 // /user/records/{record_id}/{hash}). They are sanitised as signed-in routes:
 // the profile is a person (names, login, phone, e-mail, avatar, id, and every
 // all-digit key, under which the answer repeats the user token), a created
-// booking's record_hash is removed and its record_id becomes 1, and a moved
+// booking's record_hash is removed and its record_id becomes its position in the
+// answer (1 for a single booking, 1 and 2 for a pair), and a moved
 // booking is one record of the client with id 1. A write-side recording also
 // carries `headers`: the lower-cased names of every response header and the
 // values of x-app-security-level and of any header whose name contains
@@ -421,12 +422,16 @@ function sanitizeProfile(data: unknown): unknown {
   return result;
 }
 
-/** A create answer: each entry's record_id becomes 1 (its hash is removed by the key rules). */
+/**
+ * A create answer: each entry's record_id becomes its position (1, 2, ...), so a
+ * two-appointment answer keeps which entry is which and a one-entry answer stays 1
+ * (its hash is removed by the key rules).
+ */
 function renumberCreated(data: unknown): unknown {
   if (!Array.isArray(data)) return data;
-  return (data as unknown[]).map((entry) =>
+  return (data as unknown[]).map((entry, index) =>
     isRecord(entry) && !isEmpty(entry.record_id)
-      ? { ...entry, record_id: 1 }
+      ? { ...entry, record_id: index + 1 }
       : entry
   );
 }

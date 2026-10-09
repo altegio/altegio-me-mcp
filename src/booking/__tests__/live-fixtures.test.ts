@@ -266,15 +266,15 @@ function unsanitizedProfile(profile: Record<string, unknown>): string[] {
   });
 }
 
-/** Paths of a created booking's record ids, and of a moved booking's id, that are not 1. */
+/** Paths of a created booking's record ids (not their entry position), and of a moved booking's id (not 1). */
 function unnormalisedWriteIds(route: RecordedRoute, data: unknown): string[] {
   if (route === 'book_record_create' && Array.isArray(data)) {
     return (data as unknown[]).flatMap((entry, index) =>
       isRecord(entry) &&
       entry.record_id !== undefined &&
       entry.record_id !== null &&
-      entry.record_id !== 1
-        ? [`data[${index}].record_id is not 1`]
+      entry.record_id !== index + 1
+        ? [`data[${index}].record_id is not ${String(index + 1)}`]
         : []
     );
   }
