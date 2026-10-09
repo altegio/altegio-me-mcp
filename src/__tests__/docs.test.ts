@@ -264,3 +264,47 @@ describe('docs/research/claude-connector-run.md connector run results (OPS-08)',
     expect(review?.[1]).not.toMatch(/^pending\b/i);
   });
 });
+
+// The CASE-01 research record (plan 05-01): one go/no-go row per case with a
+// verdict, and the owner's pair probe with its date, commit and status, so the
+// verdicts and the live result cannot be dropped or left blank.
+const CASES_DOC = readFileSync(
+  join(process.cwd(), 'docs', 'research', 'cases.md'),
+  'utf8'
+);
+
+function casesSection(heading: string): string {
+  const start = CASES_DOC.indexOf(`\n${heading}\n`);
+  if (start === -1) return '';
+  const rest = CASES_DOC.slice(start + heading.length + 2);
+  const next = rest.search(/^## /m);
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
+const CASE_ROWS = [
+  'Two people side by side',
+  'Freed-slot monitoring',
+  'Slot hold',
+] as const;
+
+describe('docs/research/cases.md (CASE-01)', () => {
+  it('has the sections ## Go/no-go and ## Pair probe', () => {
+    expect(CASES_DOC).toContain('\n## Go/no-go\n');
+    expect(CASES_DOC).toContain('\n## Pair probe\n');
+  });
+
+  it.each(CASE_ROWS)('has a go/no-go row for %s with a verdict', (name) => {
+    const row = new RegExp(`^\\| ${name} \\|(.+)$`, 'm').exec(
+      casesSection('## Go/no-go')
+    );
+    expect(row).not.toBeNull();
+    expect(row?.[1]).toMatch(/\b(GO-WITH-SCOPE|GO|CONDITIONAL|NO-GO)\b/);
+  });
+
+  it('names the probe run date and time, the commit and the status', () => {
+    const probe = casesSection('## Pair probe');
+    expect(probe).toMatch(/^Run: \d{4}-\d{2}-\d{2} \d{2}:\d{2}/m);
+    expect(probe).toMatch(/^Commit: [0-9a-f]{7}/m);
+    expect(probe).toMatch(/^Status: (passed|refused|not run)/m);
+  });
+});
