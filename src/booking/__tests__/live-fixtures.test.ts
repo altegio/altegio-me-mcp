@@ -1932,12 +1932,30 @@ describe('contract fixtures of the write-side routes', () => {
       'name_435',
       'code_432',
       'required_email_422',
+      'created_pair',
+      'created_pair_partial',
     ]);
     expect(scenarios.created?.status).toBe(201);
     expect(
       bookRecordCreateDataSchema.parse(dataOf(scenarios.created))
     ).toMatchObject([{ id: 1, record_id: 990001 }]);
     expect(JSON.stringify(scenarios.created)).toContain('fixture-hash-0002');
+    // The two-appointment create (plan 05-01): one entry per appointment, and the
+    // partial answer whose second entry names no record.
+    expect(scenarios.created_pair?.status).toBe(201);
+    expect(
+      bookRecordCreateDataSchema.parse(dataOf(scenarios.created_pair))
+    ).toMatchObject([
+      { id: 1, record_id: 990001 },
+      { id: 2, record_id: 990002 },
+    ]);
+    expect(scenarios.created_pair_partial?.status).toBe(201);
+    expect(
+      bookRecordCreateDataSchema.parse(dataOf(scenarios.created_pair_partial))
+    ).toEqual([
+      { id: 1, record_id: 990001, record_hash: 'fixture-hash-0002' },
+      { id: 2 },
+    ]);
     expect(scenarios.fake_201?.status).toBe(201);
     expect(
       bookRecordCreateDataSchema.parse(dataOf(scenarios.fake_201))
@@ -1964,6 +1982,27 @@ describe('contract fixtures of the write-side routes', () => {
       expect(messageOf(scenario)).toContain(BAIT);
       expect((scenario.body as { success?: boolean }).success).toBe(false);
     }
+  });
+
+  it('book_check: the two-appointment check, the same-member refusal as observed and as documented, and a taken slot', () => {
+    const scenarios = read('book_check');
+    expect(scenarios.pair_created?.status).toBe(201);
+    // Observed live (2026-10-09, plan 05-01): 422 with a message and no error code.
+    const observed = scenarios.pair_same_member_437 as Scenario;
+    expect(observed.status).toBe(422);
+    expect(messageOf(observed)).toBe(
+      'Failed to register: the team member does not have enough time to perform the selected services.'
+    );
+    expect(
+      (observed.body as { meta?: { errors?: unknown[] } }).meta?.errors
+    ).toEqual([]);
+    // The documented shape of the same refusal carries code 437.
+    const coded = scenarios.pair_same_member_coded_437 as Scenario;
+    expect(coded.status).toBe(422);
+    expect(codeOf(coded)).toBe(437);
+    const taken = scenarios.pair_taken_433 as Scenario;
+    expect(taken.status).toBe(422);
+    expect(codeOf(taken)).toBe(433);
   });
 
   it('book_record_create: required_email_422 is the observed refusal, an errors object keyed by field', () => {

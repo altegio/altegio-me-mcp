@@ -170,5 +170,70 @@
         "message": "Service temporarily unavailable."
       }
     }
+  },
+  "pair_created": {
+    "status": 201,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": null,
+      "meta": {
+        "message": "Created"
+      }
+    }
+  },
+  "pair_same_member_437": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "Failed to register: the team member does not have enough time to perform the selected services.",
+        "errors": []
+      }
+    }
+  },
+  "pair_same_member_coded_437": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "Failed to register: the team member does not have enough time to perform the selected services.",
+        "errors": [
+          {
+            "code": 437,
+            "message": "Failed to register: the team member does not have enough time to perform the selected services."
+          }
+        ]
+      }
+    }
+  },
+  "pair_taken_433": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "The selected time is not available.",
+        "errors": [
+          {
+            "code": 433,
+            "message": "The selected time is not available."
+          }
+        ]
+      }
+    }
   }
 }
