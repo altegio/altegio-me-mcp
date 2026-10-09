@@ -81,6 +81,7 @@ interface BookOutput {
     time: string;
     utc_offset: string;
     cancellation: string | null;
+    cancel_until: string | null;
     second_appointment: {
       services: {
         id: number;
@@ -334,6 +335,10 @@ describe('me_book, first call: the preview', () => {
     });
     expect(out?.preview?.cancellation).toContain('Online cancellation');
     expect(out?.preview?.cancellation).toContain('2 hours before the start');
+    expect(out?.preview?.cancel_until).toBe('2099-01-12T09:00:00+03:00');
+    expect(text).toContain(
+      'Latest online cancellation: 2099-01-12 09:00 (UTC+03:00).'
+    );
 
     expect(out?.confirmation_token).toMatch(/^\d+\.[A-Za-z0-9_-]{43}$/);
     const expiresAt = Date.parse(out?.expires_at ?? '');

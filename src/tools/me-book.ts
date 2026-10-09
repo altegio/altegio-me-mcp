@@ -358,6 +358,14 @@ export function cancellationText(rules: BusinessRules): string | null {
     : 'Online cancellation is allowed.';
 }
 
+/** Stub for the RED step; the real rule follows in the next commit. */
+export function cancelUntil(
+  _datetime: string,
+  _rules: BusinessRules
+): string | null {
+  return null;
+}
+
 type FallbackLink = { url: string; kind: 'preselected' | 'booking_form' };
 
 /** The pre-filled widget link for the selection, built from the card as book_check builds it. */

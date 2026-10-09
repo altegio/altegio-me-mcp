@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import { BookingClient } from '../../booking/client.js';
+import { BookingClient, type BusinessRules } from '../../booking/client.js';
 import {
   fakeFetch,
   loadFixture,
@@ -9,7 +9,7 @@ import {
 import { createConfirmations } from '../confirmation.js';
 import { NO_TOOL_CONTEXT, type ToolContext } from '../context.js';
 import type { ToolInvocation } from '../factory.js';
-import { meBook } from '../me-book.js';
+import { cancelUntil, meBook } from '../me-book.js';
 
 // me_book at handler level through the real BookingClient with a fake fetch
 // (ADR 0006, D-02): what every create rejection, the anti-fraud paths and an
@@ -471,7 +471,7 @@ const WIDGET_INACTIVE_SENTENCE =
 
 interface PreviewOut extends BookOut {
   confirmation_token: string | null;
-  preview: { optional_prepayment: boolean } | null;
+  preview: { optional_prepayment: boolean; cancel_until: string | null } | null;
 }
 
 function previewOf(invocation: ToolInvocation): PreviewOut {
@@ -1081,5 +1081,132 @@ describe('me_book tokens do not cross between a single booking and a pair (T-05-
     const result = await made.invoke({ ...PAIR, confirmation_token: token });
     expect(result.result.isError).not.toBe(true);
     expect(previewOf(result).status).toBe('booked');
+  });
+});
+
+const RULES: BusinessRules = {
+  cancelAllowed: true,
+  cancelBeforeSeconds: 7200,
+  moveAllowed: true,
+  moveBeforeSeconds: 7200,
+};
+
+describe('cancelUntil: the latest time the client can still cancel online (D-04, T-05-15)', () => {
+  it('subtracts the limit from the start and keeps the offset of the slot', () => {
+    expect(cancelUntil('2026-11-02T18:00:00+07:00', RULES)).toBe(
+      '2026-11-02T16:00:00+07:00'
+    );
+  });
+
+  it('crosses the date, the month and the year with a long limit', () => {
+    const day = { ...RULES, cancelBeforeSeconds: 86_400 };
+    expect(cancelUntil('2026-11-02T18:00:00+07:00', day)).toBe(
+      '2026-11-01T18:00:00+07:00'
+    );
+    expect(cancelUntil('2026-11-01T01:30:00+07:00', RULES)).toBe(
+      '2026-10-31T23:30:00+07:00'
+    );
+    expect(cancelUntil('2027-01-01T00:30:00+03:00', RULES)).toBe(
+      '2026-12-31T22:30:00+03:00'
+    );
+  });
+
+  it('keeps a half-hour offset and a negative offset', () => {
+    expect(cancelUntil('2026-11-02T10:00:00+05:30', RULES)).toBe(
+      '2026-11-02T08:00:00+05:30'
+    );
+    expect(cancelUntil('2026-11-02T10:00:00-05:30', RULES)).toBe(
+      '2026-11-02T08:00:00-05:30'
+    );
+  });
+
+  it('handles a leap day', () => {
+    expect(cancelUntil('2028-03-01T01:00:00+03:00', RULES)).toBe(
+      '2028-02-29T23:00:00+03:00'
+    );
+  });
+
+  it('is the start itself when the business sets no limit', () => {
+    const none = { ...RULES, cancelBeforeSeconds: 0 };
+    expect(cancelUntil('2026-11-02T18:00:00+07:00', none)).toBe(
+      '2026-11-02T18:00:00+07:00'
+    );
+  });
+
+  it('is null when the limit is not stated', () => {
+    const unknown = { ...RULES, cancelBeforeSeconds: null };
+    expect(cancelUntil('2026-11-02T18:00:00+07:00', unknown)).toBeNull();
+  });
+
+  it('is null when the business does not allow online cancellation or does not say', () => {
+    for (const cancelAllowed of [false, null]) {
+      expect(
+        cancelUntil('2026-11-02T18:00:00+07:00', { ...RULES, cancelAllowed })
+      ).toBeNull();
+    }
+  });
+
+  it('is null for a datetime that is not a slot', () => {
+    expect(cancelUntil('tomorrow evening', RULES)).toBeNull();
+  });
+});
+
+function companyWithRules(
+  rules: Record<string, number | boolean | null>
+): FakeReply {
+  const fixture = loadFixture('company', 'default');
+  const body = fixture.body as { data: Record<string, unknown> };
+  return { ...fixture, body: { ...body, data: { ...body.data, ...rules } } };
+}
+
+function cancelUntilOf(invocation: ToolInvocation): string | null {
+  const out = previewOf(invocation).preview;
+  if (out === null) throw new Error('no preview');
+  return out.cancel_until;
+}
+
+describe('me_book preview: cancel_until (D-04)', () => {
+  it('names the latest online cancellation time two hours before the slot, in the slot offset', async () => {
+    const made = setup();
+    const result = await made.invoke(SELECTION);
+    expect(result.result.isError).not.toBe(true);
+    expect(cancelUntilOf(result)).toBe('2099-01-12T09:00:00+03:00');
+    expect(textOf(result)).toContain(
+      'Latest online cancellation: 2099-01-12 09:00 (UTC+03:00).'
+    );
+  });
+
+  it('crosses the date when the limit is a day', async () => {
+    const made = setup({
+      company: companyWithRules({ allow_delete_record_delay_step: 86_400 }),
+    });
+    const result = await made.invoke(SELECTION);
+    expect(cancelUntilOf(result)).toBe('2099-01-11T11:00:00+03:00');
+  });
+
+  it('is null and unnamed when the business does not allow online cancellation', async () => {
+    const made = setup({
+      company: companyWithRules({ allow_delete_record: false }),
+    });
+    const result = await made.invoke(SELECTION);
+    expect(cancelUntilOf(result)).toBeNull();
+    expect(textOf(result)).not.toContain('Latest online cancellation');
+  });
+
+  it('is null and unnamed when the card states no limit', async () => {
+    const made = setup({
+      company: companyWithRules({ allow_delete_record_delay_step: null }),
+    });
+    const result = await made.invoke(SELECTION);
+    expect(cancelUntilOf(result)).toBeNull();
+    expect(textOf(result)).not.toContain('Latest online cancellation');
+  });
+
+  it('is the same on a pair preview', async () => {
+    const made = setup({ check: loadFixture('book_check', 'pair_created') });
+    const result = await made.invoke(PAIR);
+    expect(result.result.isError).not.toBe(true);
+    expect(cancelUntilOf(result)).toBe('2099-01-12T09:00:00+03:00');
+    expect(textOf(result)).toContain('Latest online cancellation:');
   });
 });
