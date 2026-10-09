@@ -1,6 +1,9 @@
 import { describe, expect, it } from '@jest/globals';
 import {
+  commonSlots,
   createBody,
+  createdRecordIds,
+  createPairBody,
   describeError,
   emailOf,
   fullnameOf,
@@ -463,5 +466,147 @@ describe('describeError of a required field', () => {
       []
     );
     expect(result).not.toHaveProperty('kind');
+  });
+});
+
+// The pair helpers of the two-appointment probe (plan 05-01).
+
+describe('createPairBody', () => {
+  const input = {
+    phone: '+15550000001',
+    fullname: 'Fixture Client',
+    email: '',
+    first: { serviceIds: [13884511], staffId: 101 },
+    second: { serviceIds: [13884511], staffId: 102 },
+    datetime: '2026-10-20T11:00:00+02:00',
+  };
+
+  it('builds the body of one client with two appointments at one start', () => {
+    expect(createPairBody(input)).toEqual({
+      phone: '+15550000001',
+      fullname: 'Fixture Client',
+      appointments: [
+        {
+          id: 1,
+          services: [13884511],
+          staff_id: 101,
+          datetime: '2026-10-20T11:00:00+02:00',
+        },
+        {
+          id: 2,
+          services: [13884511],
+          staff_id: 102,
+          datetime: '2026-10-20T11:00:00+02:00',
+        },
+      ],
+    });
+  });
+
+  it('sends the e-mail only when there is one', () => {
+    expect(createPairBody(input)).not.toHaveProperty('email');
+    expect(createPairBody({ ...input, email: 'a@b.invalid' })).toHaveProperty(
+      'email',
+      'a@b.invalid'
+    );
+  });
+
+  it('carries nothing about a second person', () => {
+    const body = createPairBody({ ...input, email: 'a@b.invalid' });
+    for (const key of [
+      'comment',
+      'code',
+      'notify_by_sms',
+      'notify_by_email',
+      'api_id',
+      'custom_fields',
+    ]) {
+      expect(body).not.toHaveProperty(key);
+      for (const appointment of body.appointments as Record<
+        string,
+        unknown
+      >[]) {
+        expect(appointment).not.toHaveProperty(key);
+      }
+    }
+  });
+
+  it.each([
+    ['the first team member is 0', 0, 102],
+    ['the second team member is 0', 101, 0],
+    ['both are equal', 101, 101],
+  ])('refuses a pair when %s, naming the rule and no value', (_, a, b) => {
+    const attempt = (): unknown =>
+      createPairBody({
+        ...input,
+        first: { serviceIds: [13884511], staffId: a },
+        second: { serviceIds: [13884511], staffId: b },
+      });
+    expect(attempt).toThrow(TypeError);
+    expect(attempt).toThrow('a pair needs two different team members above 0');
+    expect(attempt).not.toThrow(/\+1555|Fixture/);
+  });
+});
+
+describe('commonSlots', () => {
+  it('keeps the datetimes present in both lists, in the order of the first', () => {
+    expect(commonSlots(['T1', 'T2', 'T3'], ['T3', 'T1'])).toEqual(['T1', 'T3']);
+  });
+
+  it('compares the exact strings, offset included', () => {
+    expect(
+      commonSlots(['2026-10-20T11:00:00+02:00'], ['2026-10-20T10:00:00+01:00'])
+    ).toEqual([]);
+  });
+
+  it('gives nothing when a list is empty', () => {
+    expect(commonSlots([], ['T1'])).toEqual([]);
+    expect(commonSlots(['T1'], [])).toEqual([]);
+  });
+});
+
+describe('createdRecordIds', () => {
+  it('maps appointment 1 and 2 to their record ids', () => {
+    expect(
+      createdRecordIds([
+        { id: 1, record_id: 990001 },
+        { id: 2, record_id: 990002 },
+      ])
+    ).toEqual({ first: 990001, second: 990002 });
+  });
+
+  it('gives null for an entry whose record id is 0, null or missing', () => {
+    expect(
+      createdRecordIds([
+        { id: 1, record_id: 0 },
+        { id: 2, record_id: null },
+      ])
+    ).toEqual({ first: null, second: null });
+    expect(createdRecordIds([{ id: 1, record_id: 990001 }, { id: 2 }])).toEqual(
+      { first: 990001, second: null }
+    );
+  });
+
+  it('gives null for an appointment that has no entry, and for a non-list', () => {
+    expect(createdRecordIds([{ id: 1, record_id: 990001 }])).toEqual({
+      first: 990001,
+      second: null,
+    });
+    expect(createdRecordIds(null)).toEqual({ first: null, second: null });
+    expect(createdRecordIds({ id: 1 })).toEqual({ first: null, second: null });
+  });
+
+  it('refuses an id that is not a positive safe integer', () => {
+    expect(
+      createdRecordIds([
+        { id: 1, record_id: -5 },
+        { id: 2, record_id: 1.5 },
+      ])
+    ).toEqual({ first: null, second: null });
+    expect(
+      createdRecordIds([
+        { id: 1, record_id: '990001' },
+        { id: 2, record_id: 2 ** 60 },
+      ])
+    ).toEqual({ first: null, second: null });
   });
 });

@@ -60,6 +60,44 @@ export function createBody(input: CreateInput): Record<string, unknown> {
   };
 }
 
+// Pair helpers of plan 05-01 (RED stubs; the implementation follows).
+
+/** One appointment of a pair: the services and the explicit team member. */
+export interface PairAppointment {
+  serviceIds: number[];
+  staffId: number;
+}
+
+/** The body of the pair create call. */
+export interface PairCreateInput {
+  phone: string;
+  fullname: string;
+  email: string;
+  first: PairAppointment;
+  second: PairAppointment;
+  datetime: string;
+}
+
+export function createPairBody(
+  _input: PairCreateInput
+): Record<string, unknown> {
+  throw new Error('not implemented');
+}
+
+export function commonSlots(
+  _first: readonly string[],
+  _second: readonly string[]
+): string[] {
+  return ['not implemented'];
+}
+
+export function createdRecordIds(_data: unknown): {
+  first: number | null;
+  second: number | null;
+} {
+  return { first: 0, second: 0 };
+}
+
 const REMOVED = '[removed]';
 const MAX_MESSAGE_LENGTH = 300;
 const EMAIL_PATTERN = /[\w.+-]+@[\w-]+\.[\w.]+/g;

@@ -1449,7 +1449,7 @@ describe('sanitizeRecording of the write-side routes', () => {
     });
   });
 
-  it('removes the record hash of a created booking and sets every record id to 1', () => {
+  it('removes the record hash of a created booking and numbers the record ids by position', () => {
     const result = sanitizeRecording(
       asRoute('book_record_create'),
       createData,
@@ -1457,7 +1457,7 @@ describe('sanitizeRecording of the write-side routes', () => {
     );
     expect(result).toEqual([
       { id: 1, record_id: 1, record_hash: SANITIZED_TEXT },
-      { id: 2, record_id: 1, record_hash: SANITIZED_TEXT },
+      { id: 2, record_id: 2, record_hash: SANITIZED_TEXT },
     ]);
     const lone = sanitizeRecording(
       asRoute('book_record_create'),
@@ -1465,6 +1465,14 @@ describe('sanitizeRecording of the write-side routes', () => {
       []
     );
     expect(lone).toEqual([{ id: 1 }]);
+    // A one-entry answer keeps record id 1, as the committed recording has it.
+    expect(
+      sanitizeRecording(
+        asRoute('book_record_create'),
+        [{ id: 1, record_id: 2820023, record_hash: 'h' }],
+        []
+      )
+    ).toEqual([{ id: 1, record_id: 1, record_hash: SANITIZED_TEXT }]);
   });
 
   it('sanitises a moved booking as one record of the client and sets its id to 1', () => {
@@ -1794,6 +1802,28 @@ describe('the recordings check of the write-side routes', () => {
     );
   });
 
+  it('passes a two-entry create answer whose record ids are the entry positions', () => {
+    const pair = [
+      { id: 1, record_id: 1, record_hash: SANITIZED_TEXT },
+      { id: 2, record_id: 2, record_hash: SANITIZED_TEXT },
+    ];
+    expect(
+      recordingProblems(
+        'book_record_create.json',
+        file('book_record_create', pair, { names: [], security: {} })
+      )
+    ).toEqual([]);
+    expect(
+      recordingProblems(
+        'book_record_create.json',
+        file('book_record_create', [pair[0], { ...pair[1], record_id: 1 }], {
+          names: [],
+          security: {},
+        })
+      )
+    ).toEqual(['book_record_create.json: data[1].record_id is not 2']);
+  });
+
   it('reports a created booking with a real hash or record id and a moved one with a real id', () => {
     expect(
       recordingProblems(
@@ -1805,6 +1835,7 @@ describe('the recordings check of the write-side routes', () => {
       expect.arrayContaining([
         'book_record_create.json: data[0].record_hash is not a placeholder',
         'book_record_create.json: data[0].record_id is not 1',
+        'book_record_create.json: data[1].record_id is not 2',
       ])
     );
     expect(
