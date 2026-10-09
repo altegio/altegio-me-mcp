@@ -11,6 +11,8 @@ import {
   bookableFormUrl,
   buildBookingLink,
   canTakeOnlineBookings,
+  formatUtcOffset,
+  parseSlotDatetime,
   plainBookingLink,
 } from '../booking/deep-link.js';
 import { UpstreamError } from '../booking/errors.js';
@@ -170,6 +172,12 @@ const previewSchema = z.strictObject({
     .nullable()
     .describe(
       "The business's online cancellation rule, or null when the business states none."
+    ),
+  cancel_until: z
+    .string()
+    .nullable()
+    .describe(
+      "The latest time the client can still cancel this booking online, ISO 8601 in the business's UTC offset; null when the business does not allow online cancellation or does not state the limit."
     ),
   optional_prepayment: z
     .boolean()
@@ -358,12 +366,39 @@ export function cancellationText(rules: BusinessRules): string | null {
     : 'Online cancellation is allowed.';
 }
 
-/** Stub for the RED step; the real rule follows in the next commit. */
+/**
+ * The latest time the client can still cancel this booking online (D-04): the
+ * slot's start minus the card's limit, written in the slot's own offset, so a
+ * reminder timed from it never lands after the limit. The start itself when the
+ * card allows cancellation with no limit; null when the card does not allow
+ * online cancellation, does not state the limit, or the datetime is not a slot.
+ */
 export function cancelUntil(
-  _datetime: string,
-  _rules: BusinessRules
+  datetime: string,
+  rules: BusinessRules
 ): string | null {
-  return null;
+  if (rules.cancelAllowed !== true || rules.cancelBeforeSeconds === null) {
+    return null;
+  }
+  const slot = parseSlotDatetime(datetime);
+  if (slot === null) return null;
+  // The slot's wall clock as UTC fields: the subtraction never touches the host's zone.
+  const wall = Date.UTC(
+    Number(slot.year),
+    Number(slot.month) - 1,
+    Number(slot.day),
+    Number(slot.hour),
+    Number(slot.minute),
+    Number(slot.second)
+  );
+  const limit = new Date(wall - rules.cancelBeforeSeconds * 1000);
+  const two = (value: number): string => String(value).padStart(2, '0');
+  const year = String(limit.getUTCFullYear()).padStart(4, '0');
+  return (
+    `${year}-${two(limit.getUTCMonth() + 1)}-${two(limit.getUTCDate())}` +
+    `T${two(limit.getUTCHours())}:${two(limit.getUTCMinutes())}:${two(limit.getUTCSeconds())}` +
+    formatUtcOffset(slot.offsetMinutes)
+  );
 }
 
 type FallbackLink = { url: string; kind: 'preselected' | 'booking_form' };
@@ -602,6 +637,7 @@ async function preview(
         maxChars: LABEL_MAX_CHARS,
       }),
       cancellation: cancellationText(card.rules),
+      cancel_until: cancelUntil(input.datetime, card.rules),
       optional_prepayment: chosen.some((entry) =>
         entry.services.some((service) => service.prepayment === 'optional')
       ),
@@ -993,6 +1029,11 @@ function renderPreview(out: BookOutput): string {
     );
   }
   if (shown.cancellation !== null) lines.push(shown.cancellation);
+  if (shown.cancel_until !== null) {
+    lines.push(
+      `Latest online cancellation: ${shown.cancel_until.slice(0, 10)} ${shown.cancel_until.slice(11, 16)} (UTC${shown.utc_offset}).`
+    );
+  }
   lines.push(
     `Next: show this to the user; only after the user agrees, call me_book again with the same location_id, service_ids, team_member_id, datetime${pair === null ? '' : ', second_appointment'} and confirmation_token ${out.confirmation_token ?? ''} (valid until ${out.expires_at ?? ''} UTC).`
   );
