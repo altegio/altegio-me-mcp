@@ -266,7 +266,8 @@ Booking client (src/booking) -> request gate -> Altegio public booking API (api.
 `COMMIT_SHA` of the build, or `null`), and stays open. With `PROXY_AUTH=required` (the default),
 `POST /mcp` is served only with a valid `x-mcp-proxy-auth` signature from the platform proxy; any
 other request gets HTTP 401 `proxy_auth_required` before its body is read. With `CALLER_AUTH=required`
-(the default) a request also needs a valid Altegio partner token, see [Access](#access). `GET` and `DELETE` on `/mcp`
+(the image default) a request also needs a valid Altegio partner token; production runs
+`CALLER_AUTH=optional` behind the proxy, see [Access](#access). `GET` and `DELETE` on `/mcp`
 answer 405, because the server is stateless: it never sends an `mcp-session-id`, and every
 `POST /mcp` is served by a fresh server and transport that are closed when the response ends.
 
@@ -370,9 +371,14 @@ and an `http://` `ALTEGIO_API_BASE` stops startup, so the partner token never tr
 
 ## Access
 
-Every call needs an Altegio partner token: the token of a developer account in the Altegio
-marketplace (register at https://app.alteg.io/appstore/developers/1; the token is under account
-settings). Send it on every `POST` to `https://mcp.alteg.io/me`:
+The known-business tools and `business_search` need no credential: a call without one is served
+with the server's own account-2630 token at the base tier (ADR 0004 D1 as amended 2026-10-12). A
+client's own places, bookings and writes (`me_*`) need the client's sign-in: on an interactive
+host the proxy answers the first such call with 401 and `resource_metadata`, which opens the
+phone + SMS sign-in page (altegio-mcp-platform PR #255). A headless caller presents an Altegio
+partner token instead: the token of a developer account in the Altegio marketplace (register at
+https://app.alteg.io/appstore/developers/1; the token is under account settings), on every
+`POST` to `https://mcp.alteg.io/me`:
 
 ```bash
 curl -s https://mcp.alteg.io/me \
@@ -384,9 +390,9 @@ curl -s https://mcp.alteg.io/me \
 `X-Altegio-Partner-Token: <partner token>` works too. Agent frameworks pass it as the server's
 bearer token or header, for example `authorization_token` of an MCP server in the Claude API.
 The server checks the token with Altegio and makes the caller's upstream calls with it, so
-Altegio's per-partner limits and licence terms apply to the caller. Without a token the answer is
-HTTP 401; with a token Altegio refuses, 401 `invalid_token`; when Altegio cannot be reached for
-the check, 503 with `Retry-After`.
+Altegio's per-partner limits and licence terms apply to the caller. With a token Altegio refuses,
+401 `invalid_token`; when Altegio cannot be reached for the check, 503 with `Retry-After`; a
+malformed token is 401 at the proxy.
 
 Access is tiered by scope ([ADR 0004](docs/decisions/0004-caller-authorization-tiers.md), amended
 by ADR 0005, own places first). Three scopes:
@@ -404,8 +410,8 @@ by ADR 0005, own places first). Three scopes:
 `x-mcp-auth-altegio-user-token`, with `x-mcp-auth-kind: client` and the client's scope list in
 `x-mcp-auth-scope`. The three names are settings (`CLIENT_USER_TOKEN_HEADER`,
 `CLIENT_SCOPE_HEADER`, `CLIENT_CALLER_KIND`, see the table above) in case the platform picks other
-ones. Behind the proxy, `CALLER_AUTH=required` admits such a signed client; a direct user token is
-refused there. The server never sees a phone number or an SMS code and never calls the sign-in
+ones. Behind the proxy, either `CALLER_AUTH` mode admits such a signed client; a direct user token
+is refused there. The server never sees a phone number or an SMS code and never calls the sign-in
 routes. With `mcp:me:read` in the scope list the client can run `me_list_places` and
 `me_list_bookings`; the six known-business tools accept the client too; with `mcp:me:book` as
 well the client can run `me_book`. Without the sign-in, the two tools answer in band and name it. The user token goes
@@ -662,11 +668,12 @@ admits only callers inside the project's network and the proxy comes in over pub
 the signature is the access control there. The edge limits in the table above (in flight, per
 address, shared pool) apply per client address as the proxy signs it.
 
-**Caller access.** The deployed revision runs with `CALLER_AUTH=required` (since 2026-10-06): the
-proxy's `/me` lane refuses a call without a partner token, and this server refuses a signed call
-that does not carry one, so the account-2630 token no longer serves anonymous callers (rollout in
-[ADR 0004](docs/decisions/0004-caller-authorization-tiers.md)). The platform monitor's canary sends
-the account-2630 partner token.
+**Caller access.** The deployed revision runs with `CALLER_AUTH=optional` (since 2026-10-12, after
+`required` from 2026-10-06 to 2026-10-12): the proxy's `/me` lane forwards a call without a
+credential as anonymous and this server serves it with the account-2630 token at the base tier,
+while a `me_*` call without a credential is turned into the OAuth sign-in by the proxy
+([ADR 0004](docs/decisions/0004-caller-authorization-tiers.md) D1 as amended). The platform
+monitor's canary sends the account-2630 partner token.
 
 **Secrets.** No secret is in the image, in git or in an environment variable. The partner token
 (the platform's secret `MARKETPLACE_PARTNER_TOKEN`, which holds the account-2630 token; Altegio.Pro
