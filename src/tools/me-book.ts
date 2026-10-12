@@ -61,8 +61,9 @@ import {
 } from './upstream-errors.js';
 import { sanitizeUntrusted, withUntrustedBlock } from './untrusted.js';
 
-// me_book (ME-06, ADR 0006, D-02, D-03): a signed-in client books at one of
-// their own places in two calls. The first checks the slot and returns a
+// me_book (ME-06, ADR 0006, D-02, D-03): a signed-in client books at any
+// business that takes online bookings, one of their own places or one they
+// know, in two calls. The first checks the slot and returns a
 // preview with a confirmation_token; the second, with the identical arguments
 // and that token, reads the client's profile, creates the booking with the
 // user token and returns it as me_list_bookings shows it. The name and phone
@@ -77,10 +78,11 @@ import { sanitizeUntrusted, withUntrustedBlock } from './untrusted.js';
 // the second appointment included.
 //
 // What the chat cannot do ends at the business's own booking widget (ME-08,
-// D-04): a place the client has no record at, a service that needs online
-// prepayment (or whose prepayment is not known), a membership-only service and
-// an inactive widget each return status "fallback" with the reason and the
-// pre-filled link, in band and with no token.
+// D-04): a service that needs online prepayment (or whose prepayment is not
+// known), a membership-only service and an inactive widget each return status
+// "fallback" with the reason and the pre-filled link, in band and with no
+// token. A place the client has no record at is booked like any other (ADR
+// 0006 D3 as amended 2026-10-12); the preview reads no client records.
 
 const TOOL_NAME = 'me_book';
 
@@ -187,7 +189,6 @@ const previewSchema = z.strictObject({
 });
 
 const FALLBACK_REASONS = [
-  'not_own_place',
   'prepayment',
   'membership',
   'widget_inactive',
@@ -250,7 +251,7 @@ const bookOutput = z.strictObject({
       reason: z
         .enum(FALLBACK_REASONS)
         .describe(
-          "not_own_place: the client has no earlier booking at this business. prepayment: a chosen service needs online prepayment, or its prepayment is not known. membership: a chosen service is for membership holders. widget_inactive: the business takes no online bookings right now. not_confirmed: the business's booking service could not confirm the booking from here. required_field: the business needs a detail the client's Altegio profile does not have."
+          "prepayment: a chosen service needs online prepayment, or its prepayment is not known. membership: a chosen service is for membership holders. widget_inactive: the business takes no online bookings right now. not_confirmed: the business's booking service could not confirm the booking from here. required_field: the business needs a detail the client's Altegio profile does not have."
         ),
       link: z
         .strictObject({
@@ -482,22 +483,7 @@ async function preview(
   ctx: ToolContext
 ): Promise<BookOutput> {
   const userSide = userCall(ctx);
-  const records = await deps.booking.myRecords(userSide).catch((error) => {
-    throw toToolError(error);
-  });
   const call = upstreamCall(ctx);
-
-  // A place with no record of the client's: the widget completes it (D-04).
-  if (!records.some((record) => record.locationId === input.location_id)) {
-    const card = await deps.booking
-      .company(input.location_id, call)
-      .catch((error) => {
-        throw toToolError(error);
-      });
-    return canTakeOnlineBookings(card)
-      ? fallbackOutput(input, 'not_own_place', ...selectionLinks(input, card))
-      : widgetInactiveFallback(input, card);
-  }
 
   const first = firstAppointment(input);
   const second = secondAppointment(input);
@@ -1056,8 +1042,6 @@ function renderPreview(out: BookOutput): string {
 }
 
 const FALLBACK_TEXT: Record<FallbackReason, string> = {
-  not_own_place:
-    "Not booked. This client has no earlier booking at this business, so the booking is completed in the business's booking widget.",
   prepayment:
     "Not booked. A chosen service needs online prepayment, which only the business's booking widget takes.",
   membership:
@@ -1153,9 +1137,9 @@ function renderPartial(out: BookOutput): string {
 export const meBook = defineTool<typeof bookInput, typeof bookOutput, ToolDeps>(
   {
     name: TOOL_NAME,
-    title: 'Book at one of my places',
+    title: 'Book me in',
     description:
-      "Books for the signed-in client at one of their own places, in two calls. The first call checks the time with the business and returns a preview and a confirmation_token valid for 10 minutes; nothing is booked. After the client agrees, the second call with the same selection and that token creates the booking and returns it. The client's name and phone come from their Altegio profile. Where the chat cannot complete a booking, namely online prepayment, a membership-only service, an inactive booking widget or a place without an earlier booking, the answer states the reason and carries the pre-filled booking widget link. With the optional second_appointment (a different named team member, the same start) it books two people side by side in one preview and one confirmation, both under the client's name. Needs the client's sign-in.",
+      "Books for the signed-in client at a business, one of their own places or one they know by id, in two calls. The first call checks the time with the business and returns a preview and a confirmation_token valid for 10 minutes; nothing is booked. After the client agrees, the second call with the same selection and that token creates the booking and returns it. The client's name and phone come from their Altegio profile. Where the chat cannot complete a booking, namely online prepayment, a membership-only service or an inactive booking widget, the answer states the reason and carries the pre-filled booking widget link. With the optional second_appointment (a different named team member, the same start) it books two people side by side in one preview and one confirmation, both under the client's name. Needs the client's sign-in.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
