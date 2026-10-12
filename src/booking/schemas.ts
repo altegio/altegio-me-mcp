@@ -345,3 +345,35 @@ export const userRecordCancelDataSchema = z.union([
 ]);
 
 export type UserRecordCancelData = z.infer<typeof userRecordCancelDataSchema>;
+
+/** `data` of GET /countries: the reference list, id and title only. */
+export const countriesDataSchema = z.array(
+  z.looseObject({ id: z.number().int(), title: z.string() })
+);
+
+/** `data` of GET /cities?country_id=: the cities of one country. */
+export const citiesDataSchema = z.array(
+  z.looseObject({
+    id: z.number().int(),
+    title: z.string(),
+    country_id: z.number().int().nullish(),
+  })
+);
+
+/**
+ * `data` of GET /companies?city_id=: one page of the public business list.
+ * Only the fields the search reads are typed; the rest stays untyped, as for
+ * the card.
+ */
+export const companiesDataSchema = z.array(
+  z.looseObject({
+    id: z.number().int(),
+    title: z.string(),
+    public_title: text,
+    address: text,
+    city: text,
+    business_type_id: z.number().int().nullish(),
+    /** Licence active, 0 or 1; frozen licences list with 0. */
+    active: flag.nullish(),
+  })
+);

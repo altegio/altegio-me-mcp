@@ -13,7 +13,10 @@ import {
   type BookRecordCreateData,
   bookRecordMoveDataSchema,
   bookingUserDataSchema,
+  citiesDataSchema,
+  companiesDataSchema,
   companyDataSchema,
+  countriesDataSchema,
   datesDataSchema,
   servicesDataSchema,
   teamMembersDataSchema,
@@ -60,6 +63,23 @@ export const BOOKING_ROUTES = Object.freeze({
   check: Object.freeze({
     method: 'POST',
     route: '/book_check/{location_id}',
+  } as const),
+  // The reference routes behind business_search (owner decision 2026-10-12):
+  // a client names a business and its city, never a location id. GET
+  // /companies has no text filter (docs/research/altegio-booking-api.md), so
+  // the search lists the city's businesses, at most 1000 a page, and matches
+  // the name here.
+  countries: Object.freeze({
+    method: 'GET',
+    route: '/countries',
+  } as const),
+  cities: Object.freeze({
+    method: 'GET',
+    route: '/cities',
+  } as const),
+  companies: Object.freeze({
+    method: 'GET',
+    route: '/companies',
   } as const),
 });
 
@@ -318,6 +338,12 @@ function assertPositiveId(value: number, label: string): void {
 function assertUserToken(token: string | undefined): void {
   if (token === undefined || token === '') {
     throw new TypeError('a user token is required for a signed-in route');
+  }
+}
+
+function assertPositiveInt(value: number, what: string): void {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new TypeError(`${what} must be a positive integer`);
   }
 }
 
@@ -714,6 +740,43 @@ function createFullname(data: BookingUserData): string | null {
 
 export type BookingClientOptions = BookingHttpOptions;
 
+/** A country or a city of the reference lists. The title is raw upstream text. */
+export interface ReferencePlace {
+  id: number;
+  title: string;
+}
+
+/** One business of the public list, as business_search reads it. Strings are raw business text. */
+export interface CompanySummary {
+  locationId: number;
+  /** public_title when present, else title. */
+  name: string;
+  address: string | null;
+  city: string | null;
+  businessTypeId: number | null;
+  /** False only when the list says the licence is not active (frozen). */
+  active: boolean;
+}
+
+/** Businesses a page of GET /companies holds at most; the API's maximum. */
+export const COMPANIES_PAGE_SIZE = 1000;
+
+/**
+ * Pages of one city the search reads at most. The largest city of the network
+ * holds under 2000 active businesses (analytics replica, 2026-10-12), so three
+ * pages cover every city with room, and a city past that is cut, not crawled.
+ */
+export const COMPANIES_MAX_PAGES = 3;
+
+/** How long the reference lists and a city's business list are reused in a process. */
+export const REFERENCE_TTL_MS = 24 * 60 * 60 * 1000;
+export const COMPANIES_TTL_MS = 10 * 60 * 1000;
+
+interface CacheEntry<T> {
+  at: number;
+  value: T;
+}
+
 /**
  * The call that tells whether a partner token is real (ADR 0004): the first
  * page of the public business list, one entry. It names no business, so no
@@ -731,9 +794,110 @@ export type PartnerTokenVerdict = 'valid' | 'invalid' | 'unavailable';
 
 export class BookingClient {
   private readonly http: BookingHttp;
+  private readonly now: () => number;
+  /**
+   * Reference data reused across calls of one process: the countries, the
+   * cities of a country, the businesses of a city. Not client state (the server
+   * stays stateless for clients): the same lists for everyone, dropped on
+   * expiry, never written back.
+   */
+  private readonly reference = new Map<string, CacheEntry<unknown>>();
 
   constructor(options: BookingClientOptions) {
     this.http = new BookingHttp(options);
+    this.now = options.now ?? Date.now;
+  }
+
+  private async cached<T>(
+    key: string,
+    ttlMs: number,
+    load: () => Promise<T>
+  ): Promise<T> {
+    const hit = this.reference.get(key);
+    if (hit !== undefined && this.now() - hit.at < ttlMs) {
+      return hit.value as T;
+    }
+    const value = await load();
+    this.reference.set(key, { at: this.now(), value });
+    return value;
+  }
+
+  /** The countries of the network (business_search), reused for a day. */
+  async countries(call?: UpstreamCallOptions): Promise<ReferencePlace[]> {
+    const { route, method } = BOOKING_ROUTES.countries;
+    return this.cached('countries', REFERENCE_TTL_MS, async () => {
+      const data = await this.read(
+        { method, route, path: '/countries', ...call },
+        countriesDataSchema
+      );
+      return data.map((entry) => ({ id: entry.id, title: entry.title }));
+    });
+  }
+
+  /** The cities of one country (business_search), reused for a day. */
+  async cities(
+    countryId: number,
+    call?: UpstreamCallOptions
+  ): Promise<ReferencePlace[]> {
+    assertPositiveInt(countryId, 'country id');
+    const { route, method } = BOOKING_ROUTES.cities;
+    return this.cached(`cities:${countryId}`, REFERENCE_TTL_MS, async () => {
+      const data = await this.read(
+        {
+          method,
+          route,
+          path: '/cities',
+          query: { country_id: countryId },
+          ...call,
+        },
+        citiesDataSchema
+      );
+      return data.map((entry) => ({ id: entry.id, title: entry.title }));
+    });
+  }
+
+  /**
+   * The businesses of one city (business_search), at most COMPANIES_MAX_PAGES
+   * pages of COMPANIES_PAGE_SIZE, reused for ten minutes. `cut` is true when
+   * the city had more pages than were read.
+   */
+  async companiesInCity(
+    cityId: number,
+    call?: UpstreamCallOptions
+  ): Promise<{ businesses: CompanySummary[]; cut: boolean }> {
+    assertPositiveInt(cityId, 'city id');
+    const { route, method } = BOOKING_ROUTES.companies;
+    return this.cached(`companies:${cityId}`, COMPANIES_TTL_MS, async () => {
+      const businesses: CompanySummary[] = [];
+      for (let page = 1; page <= COMPANIES_MAX_PAGES; page += 1) {
+        const data = await this.read(
+          {
+            method,
+            route,
+            path: '/companies',
+            query: { city_id: cityId, count: COMPANIES_PAGE_SIZE, page },
+            ...call,
+          },
+          companiesDataSchema
+        );
+        for (const entry of data) {
+          businesses.push({
+            locationId: entry.id,
+            name: nonEmpty(entry.public_title) ?? entry.title,
+            address: nonEmpty(entry.address),
+            city: nonEmpty(entry.city),
+            businessTypeId: entry.business_type_id ?? null,
+            active:
+              entry.active === undefined || entry.active === null
+                ? true
+                : truthy(entry.active),
+          });
+        }
+        if (data.length < COMPANIES_PAGE_SIZE)
+          return { businesses, cut: false };
+      }
+      return { businesses, cut: true };
+    });
   }
 
   /** The business card of one location (DISC-01). */

@@ -45,7 +45,13 @@ GCS snapshot, no asks to the backend for feeds, flags or search endpoints. Requi
 CAT-01..08 move to v2 and stay there until a development-team index exists. Scenarios outside
 the client's own places would use `GET /companies` as it is (its `city_id` and
 `business_type_id` filters) and are not in v1 (owner decision 2026-10-08); a client without
-history at a business gives a link or an id, as today.
+history at a business gives a link or an id, as today. *Amended 2026-10-12 (owner decision): a
+client is never asked for a location id or a link, since they have no way to know either. The
+`business_search` tool takes the business name, the city and the country, resolves the city
+from the reference routes (`GET /countries`, `GET /cities`) and lists the city's businesses with
+`GET /companies?city_id=` as it is, at most three pages of 1000, matching the name on the server;
+the lists are reused for a while per process and nothing is indexed or stored. Still no crawl, no
+own index, no asks to the backend; the catalog stays parked.*
 
 **D3. The widget stays the completion step.** *Amended 2026-10-08 by [ADR 0006](0006-in-chat-booking-at-own-places.md): at own places the booking is created, moved and cancelled in the chat; the widget remains for prepayment, membership, an inactive widget and foreign places.* Booking at an own place ends in the pre-filled
 widget link (`book_check` plus the deep link), not in an in-chat `book_record`. Writes with the
