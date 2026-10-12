@@ -58,7 +58,7 @@ function setup(
     profile?: FakeReply;
     company?: FakeReply;
     services?: FakeReply;
-    /** The card of location 731000, a place the client has no record at. */
+    /** The card of location 731000, a place the client has no record at; its catalog is the default one. */
     otherCompany?: FakeReply;
     timeoutMs?: number;
   } = {}
@@ -83,6 +83,21 @@ function setup(
       method: 'GET',
       path: '/company/731000',
       reply: options.otherCompany ?? loadFixture('company', 'default'),
+    },
+    {
+      method: 'GET',
+      path: '/book_services/731000',
+      reply: loadFixture('book_services', 'default'),
+    },
+    {
+      method: 'GET',
+      path: '/book_staff/731000',
+      reply: loadFixture('book_staff', 'default'),
+    },
+    {
+      method: 'POST',
+      path: '/book_check/731000',
+      reply: loadFixture('book_check', 'created_empty'),
     },
     {
       method: 'GET',
@@ -464,8 +479,6 @@ const PREPAYMENT_SENTENCE =
   "A chosen service needs online prepayment, which only the business's booking widget takes.";
 const MEMBERSHIP_SENTENCE =
   "A chosen service is for membership holders, which only the business's booking widget checks.";
-const NOT_OWN_PLACE_SENTENCE =
-  "This client has no earlier booking at this business, so the booking is completed in the business's booking widget.";
 const WIDGET_INACTIVE_SENTENCE =
   'This business does not take online bookings right now.';
 
@@ -499,23 +512,28 @@ function expectFallback(
   return out;
 }
 
-describe('me_book preview: the place is not one of the client own places', () => {
-  it('hands off the pre-selected link with the reason not_own_place, after reading only the records and the card', async () => {
+describe('me_book preview: a place the client has no record at', () => {
+  it('previews like at any other place, without reading the client records', async () => {
     const made = setup();
     const result = await made.invoke({ ...SELECTION, location_id: 731000 });
-    const out = expectFallback(result, 'not_own_place', NOT_OWN_PLACE_SENTENCE);
-    expect(out.fallback?.link?.kind).toBe('preselected');
-    expect(out.fallback?.link?.url).toContain('https://n1463903.alteg.io/');
-    expect(out.fallback?.link?.url).toContain('731000');
-    expect(textOf(result)).toContain(out.fallback?.link?.url ?? 'missing');
-    expect(routesOf(made)).toEqual([
-      'GET /user/records',
-      'GET /company/731000',
-    ]);
+    expect(result.result.isError).not.toBe(true);
+    const out = previewOf(result);
+    expect(out.status).toBe('preview');
+    expect(out.confirmation_token).toMatch(/^\d+\.[A-Za-z0-9_-]{43}$/);
+    expect(out.fallback).toBeNull();
+    expect(routesOf(made).sort()).toEqual(
+      [
+        'GET /company/731000',
+        'GET /book_services/731000',
+        'GET /book_staff/731000',
+        'POST /book_check/731000',
+      ].sort()
+    );
+    expect(made.upstream.unmatched).toEqual([]);
     expectNoBait(result);
   });
 
-  it('names the inactive widget instead when that business also takes no online bookings', async () => {
+  it('names the inactive widget when that business takes no online bookings', async () => {
     const made = setup({ otherCompany: loadFixture('company', 'inactive') });
     const result = await made.invoke({ ...SELECTION, location_id: 731000 });
     const out = expectFallback(
@@ -524,10 +542,8 @@ describe('me_book preview: the place is not one of the client own places', () =>
       WIDGET_INACTIVE_SENTENCE
     );
     expect(out.fallback?.link?.kind).toBe('booking_form');
-    expect(routesOf(made)).toEqual([
-      'GET /user/records',
-      'GET /company/731000',
-    ]);
+    expect(routesOf(made)).not.toContain('GET /user/records');
+    expect(routesOf(made)).toContain('GET /company/731000');
   });
 });
 
@@ -945,17 +961,16 @@ describe('me_book pair fallbacks: one link for each appointment', () => {
     expectBothLinks(confirm);
   });
 
-  it('gives not_own_place with both links, after reading only the records and the card', async () => {
+  it('previews a pair at a place the client has no record at, without reading the records', async () => {
     const made = setup();
     const result = await made.invoke({ ...PAIR, location_id: 731000 });
-    expectFallback(result, 'not_own_place', NOT_OWN_PLACE_SENTENCE);
+    expect(result.result.isError).not.toBe(true);
     const out = previewOf(result);
-    expect(out.fallback?.second_link?.url).toContain('731000');
-    expect(out.fallback?.second_link?.url).toContain(`m${SECOND_TEAM_MEMBER}`);
-    expect(routesOf(made)).toEqual([
-      'GET /user/records',
-      'GET /company/731000',
-    ]);
+    expect(out.status).toBe('preview');
+    expect(out.confirmation_token).toMatch(/^\d+\.[A-Za-z0-9_-]{43}$/);
+    expect(routesOf(made)).not.toContain('GET /user/records');
+    expect(routesOf(made)).toContain('POST /book_check/731000');
+    expect(made.upstream.unmatched).toEqual([]);
   });
 
   it('gives prepayment with both links when the second appointment has a prepayment-required service', async () => {

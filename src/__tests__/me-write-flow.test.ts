@@ -202,6 +202,21 @@ async function start(
     },
     {
       method: 'GET',
+      path: '/book_services/731000',
+      reply: loadFixture('book_services', 'default'),
+    },
+    {
+      method: 'GET',
+      path: '/book_staff/731000',
+      reply: loadFixture('book_staff', 'default'),
+    },
+    {
+      method: 'POST',
+      path: '/book_check/731000',
+      reply: loadFixture('book_check', 'created_empty'),
+    },
+    {
+      method: 'GET',
       path: `/book_services/${LOCATION}`,
       reply: loadFixture('book_services', 'default'),
     },
@@ -352,7 +367,6 @@ describe('me_book, first call: the preview', () => {
     expect(upstream.unmatched).toEqual([]);
     expect(routesOf(upstream).sort()).toEqual(
       [
-        'GET /user/records',
         `GET /company/${LOCATION}`,
         `GET /book_services/${LOCATION}`,
         `GET /book_staff/${LOCATION}`,
@@ -375,28 +389,26 @@ describe('me_book, first call: the preview', () => {
     }
   });
 
-  it('hands off the pre-filled link, with the reason, for a place the client has no record at, and issues no token', async () => {
+  it('previews at a place the client has no record at like at any other, without reading the records', async () => {
     const { harness, upstream } = await start();
     const { body, text } = await callBook(harness, {
       ...SELECTION,
       location_id: 731000,
     });
     expect(body.result?.isError).not.toBe(true);
-    const out = body.result?.structuredContent as unknown as {
-      status: string;
-      confirmation_token: string | null;
-      fallback: { reason: string; link: { url: string; kind: string } | null };
-    };
-    expect(out.status).toBe('fallback');
-    expect(out.confirmation_token).toBeNull();
-    expect(out.fallback.reason).toBe('not_own_place');
-    expect(out.fallback.link?.kind).toBe('preselected');
-    expect(text).toContain('no earlier booking at this business');
-    expect(text).toContain(out.fallback.link?.url ?? 'missing');
-    expect(routesOf(upstream)).toEqual([
-      'GET /user/records',
-      'GET /company/731000',
-    ]);
+    const out = body.result?.structuredContent;
+    expect(out?.status).toBe('preview');
+    expect(out?.confirmation_token).toMatch(/^\d+\.[A-Za-z0-9_-]{43}$/);
+    expect(text).toContain('Preview, nothing is booked yet');
+    expect(routesOf(upstream).sort()).toEqual(
+      [
+        'GET /company/731000',
+        'GET /book_services/731000',
+        'GET /book_staff/731000',
+        'POST /book_check/731000',
+      ].sort()
+    );
+    expect(upstream.unmatched).toEqual([]);
   });
 
   it('hands off the pre-filled link for a service that needs prepayment, with no slot check', async () => {
