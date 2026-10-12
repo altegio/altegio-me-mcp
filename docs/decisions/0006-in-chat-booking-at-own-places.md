@@ -39,7 +39,12 @@ that is not read-only.
 **D3. The widget stays for what the API cannot do.** A service that needs prepayment or a
 membership (B7), a business whose widget is inactive, or a place where the client has no history
 (not an own place): `me_book` says so in band and hands off the pre-filled link (BOOK-02/03,
-unchanged).
+unchanged). *Amended 2026-10-12 (owner decision): a place where the client has no history is
+booked in the chat like an own place. The API creates the booking for a signed-in client at any
+business, the client is known by their profile, and "book me at this salon I know" must end with
+a booking too. `me_book` reads no client records in the preview, and the `not_own_place` reason is
+retired; the other D3 fallbacks stand. Moving and cancelling stay limited to the client's own
+bookings.*
 
 **D4. Anti-fraud is tested live before the tools ship.** Server-side `book_record` with a client
 token from our egress may meet the anti-fraud paths (HTTP 412 with `X-App-Security-Level`, a

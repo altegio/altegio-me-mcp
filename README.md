@@ -6,10 +6,11 @@ signed-in client. Six are for a known business: business card (`business_get`), 
 (`business_list_dates`), free time slots (`business_list_time_slots`) and a slot check that hands
 off a pre-selected booking widget link (`book_check`). Two read a signed-in client's own data: the
 places the client already goes to (`me_list_places`) and their bookings (`me_list_bookings`), each
-with the usual service and team member. Three book, move and cancel at the client's own places
-(`me_book`, `me_reschedule_booking`, `me_cancel_booking`), each in two calls: a preview with a
-confirmation token, then the change once the client has agreed. What the chat cannot do (online
-prepayment, memberships, an inactive widget, a place the client has not visited) ends at the
+with the usual service and team member. Three book at any business that takes online bookings,
+and move and cancel the client's own bookings (`me_book`, `me_reschedule_booking`,
+`me_cancel_booking`), each in two calls: a preview with a confirmation token, then the change once
+the client has agreed. What the chat cannot do (online prepayment, memberships, an inactive
+widget) ends at the
 business's pre-selected widget link, with the reason stated. They call the Altegio public booking
 API through a throttled client
 (`src/booking`), and live suites have checked that client and the three write tools against a real
@@ -47,12 +48,12 @@ personal data passes through the chat.
 
 **Built: the client's own places** ([ADR 0005](docs/decisions/0005-own-places-first.md),
 [ADR 0006](docs/decisions/0006-in-chat-booking-at-own-places.md)). A signed-in client sees the
-places they already go to and their bookings, and books, moves and cancels appointments there in
-the chat with `me_book`, `me_reschedule_booking` and `me_cancel_booking`, each in two steps: a
-preview with a confirmation token, then the write. The client's name, phone and e-mail come from
-their Altegio profile and never from the chat. The widget link stays for partner and anonymous
-callers, services with online prepayment, memberships, inactive widgets and places without
-earlier visits. The sign-in itself (phone + SMS on the platform proxy's page, OAuth 2.1) is the
+places they already go to and their bookings, and books in the chat there or at any other
+business they know by id, and moves and cancels their own appointments, with `me_book`,
+`me_reschedule_booking` and `me_cancel_booking`, each in two steps: a preview with a confirmation
+token, then the write. The client's name, phone and e-mail come from their Altegio profile and
+never from the chat. The widget link stays for partner and anonymous callers, services with online
+prepayment, memberships and inactive widgets (ADR 0006 D3 as amended 2026-10-12). The sign-in itself (phone + SMS on the platform proxy's page, OAuth 2.1) is the
 proxy's: until it ships, the client tier runs locally with a direct user-token header. On top of
 these tools run the cases the Altegio.me app lacks, built and described under
 [Cases](#cases): two people side by side, freed-slot monitoring and slot hold with a reminder. A
@@ -389,7 +390,7 @@ by ADR 0005, own places first). Three scopes:
 - `mcp:me:read` is the signed-in client's own places and bookings. Only a client sign-in grants it,
   and `me_list_places` and `me_list_bookings` require it. An anonymous or partner caller who calls
   one of them gets an in-band error that names the client sign-in.
-- `mcp:me:book` is the signed-in client's writes at their own places (ADR 0006). A client sign-in grants it, always with the direct header and behind the proxy when the signed scope list names it, and nobody else holds it.
+- `mcp:me:book` is the signed-in client's writes: a booking at any business, a move or a cancel of their own bookings (ADR 0006). A client sign-in grants it, always with the direct header and behind the proxy when the signed scope list names it, and nobody else holds it.
 
 `tools/list` shows the same tools to everyone.
 
@@ -411,13 +412,14 @@ empty. The recorded flow is `me_list_places`, `business_list_dates`, `business_l
 `book_check`, ending at the pre-selected widget link with the usual service and team member; the
 client can also book in the chat with the tools below.
 
-**The write tools.** With `mcp:me:book` the signed-in client books, moves and cancels at their own
-places, where an own place is any business that holds an earlier record of the client, a cancelled
-one included. Each tool takes two calls with the same arguments:
+**The write tools.** With `mcp:me:book` the signed-in client books at any business that takes
+online bookings, one of their own places or one they know by its location id, and moves and
+cancels their own bookings (an own place is any business that holds an earlier record of the
+client, a cancelled one included). Each tool takes two calls with the same arguments:
 
 | Tool | What it does | Scopes | Annotations |
 | --- | --- | --- | --- |
-| `me_book` | Books the chosen services, team member and free slot at an own place | `mcp:me:read`, `mcp:me:book` | write, not destructive |
+| `me_book` | Books the chosen services, team member and free slot at a business | `mcp:me:read`, `mcp:me:book` | write, not destructive |
 | `me_reschedule_booking` | Moves one of the client's upcoming bookings to another free time | `mcp:me:read`, `mcp:me:book` | write, destructive |
 | `me_cancel_booking` | Cancels one of the client's upcoming bookings | `mcp:me:read`, `mcp:me:book` | write, destructive |
 
@@ -429,7 +431,7 @@ one included. Each tool takes two calls with the same arguments:
   it (the client is asked for a new preview elsewhere); set it to share confirmations across
   instances.
 - **The widget fallbacks.** What the chat cannot do returns `status: fallback` from `me_book`, with
-  a reason (`not_own_place`, `prepayment`, `membership`, `widget_inactive`, `not_confirmed` when the
+  a reason (`prepayment`, `membership`, `widget_inactive`, `not_confirmed` when the
   booking service cannot confirm the booking from here, `required_field`) and the pre-filled widget
   link, or the business contacts when there is no usable form. Nothing is booked in that case.
 - **Personal data.** The client's name and phone are read from their Altegio profile for the
