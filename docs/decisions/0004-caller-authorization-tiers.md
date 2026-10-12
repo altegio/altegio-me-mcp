@@ -45,15 +45,12 @@ tool by scope; headless agents may present an API key as the Bearer next to OAut
 the Altegio marketplace, sent as `Authorization: Bearer <token>` (or `X-Altegio-Partner-Token`).
 It grants the scope `mcp:me:read`, which every current tool needs. There is no anonymous call.
 
-*Amended 2026-10-12 (platform owner's ask of 2026-10-09, altegio-mcp-platform PR #255 as amended):
-the anonymous call is back for the known-business tools and `business_search`. A client who knows
-the business must be able to look it up and book through the widget link without signing in, and
-the SMS sign-in happens only when a case needs the client. The proxy's `/me` lane forwards a call
-without any credential with no `x-mcp-auth-kind` header, and this server, deployed with
-`CALLER_AUTH=optional`, serves it with its own account-2630 token at the `mcp:me:discover` tier.
-A `tools/call` of a `me_*` tool without a credential is answered by the proxy with 401 and
-`resource_metadata`, which starts the OAuth sign-in on an interactive host. The partner token
-stays the headless caller's way in and is still checked and used when present.*
+*2026-10-12: an anonymous tier was reopened for a few hours (release 14, PR #23) on a misreading
+of the platform owner's 2026-10-09 note and closed again the same day (release 15): the partner
+token is always required, as #252 established; "without authorization" in that note meant
+without the client's SMS sign-in, with a partner token present. A headless caller reads with its
+partner token and needs no SMS; an interactive host (claude.ai) has no partner token, so its
+client signs in by SMS first (D4, platform PR #255), a long-lived session.*
 
 *Amended 2026-10-08 (ADR 0005, Phase 4): the base scope is `mcp:me:discover`; `mcp:me:read` is the
 signed-in client's read scope.*
@@ -96,18 +93,13 @@ client-credentials extension is a later, standard way to obtain the base tier.
 **D6. Interactive hosts wait for Phase 2.** claude.ai, ChatGPT and the connector directories
 cannot present a partner token, so they cannot use `/me` until D4 ships, and directory
 submission moves to Phase 2. Agents built by partners (Claude API, Agent SDK, OpenAI Responses,
-their own clients) send the token as a header today. *Amended 2026-10-12: an interactive host
-uses the reading tools without a credential (D1 as amended) and is sent to the sign-in by the
-proxy at the first `me_*` call.*
+their own clients) send the token as a header today.
 
 **D7. Defense in depth.** With `CALLER_AUTH=required` (the default) this server refuses a call
 without a valid partner token itself, so an anonymous proxy route could not reopen it. Behind the
 proxy only the signed header `x-mcp-auth-altegio-partner-token` counts: the proxy signature covers
 every `x-mcp-auth-*` header, and the `run.app` address is public, so any unsigned header is the
-sender's to choose. *Amended 2026-10-12: production runs `CALLER_AUTH=optional` again (D1 as
-amended), so the proxy decides who is anonymous; `PROXY_AUTH=required` still refuses every
-unsigned request, and the signed-header rule stands. `required` remains the image default and
-the setting for a deployment without the proxy's lazy sign-in.*
+sender's to choose.
 
 ### Header contract with the proxy
 
