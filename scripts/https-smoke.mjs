@@ -177,6 +177,7 @@ try {
     'business_list_services',
     'business_list_team_members',
     'business_list_time_slots',
+    'business_search',
     'me_book',
     'me_cancel_booking',
     'me_list_bookings',
