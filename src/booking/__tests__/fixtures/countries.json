@@ -1,0 +1,67 @@
+{
+  "default": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [
+        {
+          "id": 1,
+          "title": "Cyprus"
+        },
+        {
+          "id": 4,
+          "title": "Ukraine"
+        },
+        {
+          "id": 8,
+          "title": "Kazakhstan"
+        },
+        {
+          "id": 12,
+          "title": "Poland"
+        }
+      ],
+      "meta": []
+    }
+  },
+  "empty": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [],
+      "meta": []
+    }
+  },
+  "unauthorized": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "Unauthorized"
+      }
+    }
+  },
+  "server_error": {
+    "status": 500,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "Internal error"
+      }
+    }
+  }
+}

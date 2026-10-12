@@ -1,7 +1,8 @@
 # Altegio.me MCP Server
 
-Status: the stateless MCP server serves eleven tools: eight that read and three that write for a
-signed-in client. Six are for a known business: business card (`business_get`), services
+Status: the stateless MCP server serves twelve tools: nine that read and three that write for a
+signed-in client. Seven are for a known business: a search by name, city and country that
+returns the location id the other tools take (`business_search`), business card (`business_get`), services
 (`business_list_services`), team members (`business_list_team_members`), dates with free time
 (`business_list_dates`), free time slots (`business_list_time_slots`) and a slot check that hands
 off a pre-selected booking widget link (`book_check`). Two read a signed-in client's own data: the
@@ -57,7 +58,12 @@ prepayment, memberships and inactive widgets (ADR 0006 D3 as amended 2026-10-12)
 proxy's: until it ships, the client tier runs locally with a direct user-token header. On top of
 these tools run the cases the Altegio.me app lacks, built and described under
 [Cases](#cases): two people side by side, freed-slot monitoring and slot hold with a reminder. A
-searchable catalog of all businesses is parked.
+searchable catalog of all businesses is parked; a business the client names is found by
+`business_search` (name, city and country), which reads the city's business list from
+`GET /companies` as it is (ADR 0005 D2, amended 2026-10-12) and matches the name on the server:
+at most three pages of 1000 per city, reused for ten minutes per process, and the largest city
+of the network holds under 2000 active businesses. These listing calls are the ones Altegio logs
+as "suspicious search params" (open question B1).
 
 **Distribution.** Claude Connectors Directory listing and promo inside the Altegio.me app; later
 ChatGPT, the MCP Registry, and outreach to Perplexity, Mistral, xAI and Google. See
@@ -472,7 +478,7 @@ curl -s localhost:8080/health
 npx -y @modelcontextprotocol/inspector@2.9.0 --cli http://localhost:8080/mcp --transport http --method tools/list
 ```
 
-`GET /health` returns the status, version and commit. `tools/list` lists the eleven tools. Tool
+`GET /health` returns the status, version and commit. `tools/list` lists the twelve tools. Tool
 calls reach the Altegio API, so they need the real partner token in `.env`; with the placeholder
 token they return an in-band error. `.env.example` sets `CALLER_AUTH=optional`, so these calls
 need no caller token; with `CALLER_AUTH=required` send `Authorization: Bearer <partner token>`. Raw HTTP clients must send `Accept: application/json, text/event-stream` on

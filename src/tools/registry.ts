@@ -7,6 +7,7 @@ import {
   businessListTeamMembers,
   businessListTimeSlots,
 } from './business.js';
+import { businessSearch } from './business-search.js';
 import type { Confirmations } from './confirmation.js';
 import type { DefinedTool } from './factory.js';
 import { meListBookings, meListPlaces } from './me.js';
@@ -30,6 +31,7 @@ export interface ToolDeps {
 export const productionTools: readonly DefinedTool<ToolDeps>[] = Object.freeze([
   meListPlaces,
   meListBookings,
+  businessSearch,
   businessGet,
   businessListServices,
   businessListTeamMembers,

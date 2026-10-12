@@ -486,12 +486,13 @@ describe('known-business flow from a location id to a pre-selected link (ROADMAP
     for (const line of logs.slice(0, -1)) expect(line.outcome).toBe('ok');
   });
 
-  it('lists the eleven tools over POST /mcp, with book_check annotated read-only and the client write tools as the only writes', async () => {
+  it('lists the twelve tools over POST /mcp, with book_check annotated read-only and the client write tools as the only writes', async () => {
     const flow = await startFlow(loadFixture('book_check', 'created_empty'));
     const { tools } = await flow.client.listTools();
     // The MCP layer lists tools by name; the registry order is checked by the compliance suite.
     expect(tools.map((tool) => tool.name).sort()).toEqual(
       [
+        'business_search',
         'business_get',
         'business_list_services',
         'business_list_team_members',

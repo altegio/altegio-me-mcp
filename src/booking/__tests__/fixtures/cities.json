@@ -1,0 +1,58 @@
+{
+  "default": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [
+        {
+          "id": 4,
+          "country_id": 4,
+          "title": "Київ (Kyiv)"
+        },
+        {
+          "id": 205,
+          "country_id": 4,
+          "title": "Одеса (Odesa)"
+        },
+        {
+          "id": 100,
+          "country_id": 4,
+          "title": "Львів (Lviv)"
+        },
+        {
+          "id": 9001,
+          "country_id": 4,
+          "title": "Kyivska Rudnia"
+        }
+      ],
+      "meta": []
+    }
+  },
+  "empty": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [],
+      "meta": []
+    }
+  },
+  "server_error": {
+    "status": 500,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "Internal error"
+      }
+    }
+  }
+}

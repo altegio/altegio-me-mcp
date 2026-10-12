@@ -3,7 +3,7 @@ import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from '../tools/untrusted.js';
 // Returned from initialize. Written as a description of the server and of the
 // trust boundary, with no directive aimed at the model (research A10, T-1-20).
 export const SERVER_INSTRUCTIONS = [
-  'This server looks up businesses that use Altegio for online booking, together with their bookable services, team members and free time slots.',
+  'This server looks up businesses that use Altegio for online booking, together with their bookable services, team members and free time slots; business_search finds a business by its name, city and country and returns the location id the other tools take, so a client is never asked for an id.',
   'A client who signed in to this connector with their Altegio account can list the places they already visit and their own bookings (me_list_places, me_list_bookings); each place carries the location id the business tools take and, after an earlier visit, the usual service and team member, so booking the usual runs through the free dates and slots and then me_book.',
   'The client can book in the chat at any business that takes online bookings, a place they already visit or one they know by its location id, and move and cancel their own bookings (me_book, me_reschedule_booking, me_cancel_booking); each of the three first returns a preview with a confirmation token, and only a second call with that token, made after the client agreed, changes the booking.',
   "me_book also takes a second_appointment at the same start with a different team member, so two people side by side are booked in one preview and one confirmation, both under the client's name.",

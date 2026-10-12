@@ -1634,9 +1634,10 @@ describe('business_list_time_slots (DISC-05)', () => {
     ).toBe(true);
   });
 
-  it('is registered after business_list_dates, completing the five business tools in flow order', () => {
+  it('is registered after business_list_dates, completing the six business tools in flow order', () => {
     // The two own-data tools lead the registry; the exact registry, book_check included, is asserted by the compliance suite.
-    expect(productionTools.slice(2, 7).map((tool) => tool.name)).toEqual([
+    expect(productionTools.slice(2, 8).map((tool) => tool.name)).toEqual([
+      'business_search',
       'business_get',
       'business_list_services',
       'business_list_team_members',

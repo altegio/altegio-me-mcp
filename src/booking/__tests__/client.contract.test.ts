@@ -356,7 +356,7 @@ describe('location id guard (T-02-14)', () => {
 });
 
 describe('route table (D-01)', () => {
-  it('is frozen and holds exactly the six documented routes', () => {
+  it('is frozen and holds exactly the six documented booking routes and the three reference routes of business_search', () => {
     expect(Object.isFrozen(BOOKING_ROUTES)).toBe(true);
     for (const entry of Object.values(BOOKING_ROUTES)) {
       expect(Object.isFrozen(entry)).toBe(true);
@@ -373,6 +373,9 @@ describe('route table (D-01)', () => {
         'GET /book_dates/{location_id}',
         'GET /book_times/{location_id}/{team_member_id}/{date}',
         'POST /book_check/{location_id}',
+        'GET /countries',
+        'GET /cities',
+        'GET /companies',
       ].sort()
     );
   });
