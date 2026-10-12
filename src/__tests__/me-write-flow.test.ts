@@ -47,6 +47,8 @@ const SERVICE = 10303531;
 const TEAM_MEMBER = 2098145;
 const DATETIME = '2099-01-12T11:00:00+03:00';
 const NEW_RECORD_ID = 990001;
+const SECOND_RECORD_ID = 990002;
+const SECOND_TEAM_MEMBER = 2098146;
 const MOVE_TO = '2099-01-13T11:00:00+03:00';
 const MOVED_DATETIME = '2099-01-13T11:00:00+0300';
 const CLIENT_HEADERS = { [DIRECT_USER_TOKEN_HEADER]: CLIENT_USER_TOKEN };
@@ -79,11 +81,26 @@ interface BookOutput {
     time: string;
     utc_offset: string;
     cancellation: string | null;
+    cancel_until: string | null;
+    second_appointment: {
+      services: {
+        id: number;
+        title: string | null;
+        price: { min: number; max: number; currency: string | null } | null;
+      }[];
+      team_member: { id: number; name: string | null } | null;
+    } | null;
   } | null;
   confirmation_token: string | null;
   expires_at: string | null;
   booking_id: number | null;
   booking: { booking_id: number; status: string; datetime: string } | null;
+  second_booking_id: number | null;
+  second_booking: {
+    booking_id: number;
+    status: string;
+    datetime: string;
+  } | null;
 }
 
 interface RpcResult {
@@ -100,7 +117,7 @@ afterEach(async () => {
 
 /** The default records, plus the new booking once the create call has been made. */
 function recordsReply(
-  state: { created: boolean; moved: boolean },
+  state: { created: boolean; pair: boolean; moved: boolean },
   failAfterCreate: boolean
 ): () => FixtureResponse {
   return () => {
@@ -130,6 +147,14 @@ function recordsReply(
       datetime: '2099-01-12T11:00:00+0300',
       date: '2099-01-12 11:00:00',
     });
+    if (state.pair) {
+      body.data.push({
+        ...structuredClone(template),
+        id: SECOND_RECORD_ID,
+        datetime: '2099-01-12T11:00:00+0300',
+        date: '2099-01-12 11:00:00',
+      });
+    }
     return { ...fixture, body };
   };
 }
@@ -137,6 +162,7 @@ function recordsReply(
 interface Scenario {
   confirmations?: Confirmations;
   create?: string;
+  check?: string;
   profile?: string;
   records?: string;
   recordsAfterCreate?: 'fail';
@@ -149,7 +175,7 @@ async function start(
   scenario: Scenario = {},
   overrides: Parameters<typeof startApp>[0] = {}
 ): Promise<{ harness: Harness; upstream: FakeFetch }> {
-  const state = { created: false, moved: false };
+  const state = { created: false, pair: false, moved: false };
   const routes: FakeRoute[] = [
     {
       method: 'GET',
@@ -187,14 +213,21 @@ async function start(
     {
       method: 'POST',
       path: `/book_check/${LOCATION}`,
-      reply: loadFixture('book_check', 'created_empty'),
+      reply: loadFixture('book_check', scenario.check ?? 'created_empty'),
     },
     {
       method: 'POST',
       path: `/book_record/${LOCATION}`,
-      reply: () => {
+      reply: (call) => {
         state.created = true;
-        return loadFixture('book_record_create', scenario.create ?? 'created');
+        const sent = JSON.parse(call.body ?? '{}') as {
+          appointments?: unknown[];
+        };
+        state.pair = sent.appointments?.length === 2;
+        return loadFixture(
+          'book_record_create',
+          scenario.create ?? (state.pair ? 'created_pair' : 'created')
+        );
       },
     },
     {
@@ -302,6 +335,10 @@ describe('me_book, first call: the preview', () => {
     });
     expect(out?.preview?.cancellation).toContain('Online cancellation');
     expect(out?.preview?.cancellation).toContain('2 hours before the start');
+    expect(out?.preview?.cancel_until).toBe('2099-01-12T09:00:00+03:00');
+    expect(text).toContain(
+      'Latest online cancellation: 2099-01-12 09:00 (UTC+03:00).'
+    );
 
     expect(out?.confirmation_token).toMatch(/^\d+\.[A-Za-z0-9_-]{43}$/);
     const expiresAt = Date.parse(out?.expires_at ?? '');
@@ -536,10 +573,242 @@ describe('me_book output and logs', () => {
         'confirmation_token',
         'datetime',
         'location_id',
+        'second_appointment',
         'service_ids',
         'team_member_id',
       ].sort()
     );
+  });
+
+  it('takes only service ids and a team member id for the second appointment', () => {
+    const tool = productionTools.find((entry) => entry.name === 'me_book');
+    const schema = tool?.spec.inputSchema as {
+      properties: {
+        second_appointment: { properties: Record<string, unknown> };
+      };
+    };
+    expect(
+      Object.keys(schema.properties.second_appointment.properties).sort()
+    ).toEqual(['service_ids', 'team_member_id']);
+  });
+});
+
+// Two people side by side (CASE-02, D-01): one call, one preview, one token, one
+// create with two appointments, both under the client's name.
+
+const PAIR = {
+  ...SELECTION,
+  second_appointment: {
+    service_ids: [SERVICE],
+    team_member_id: SECOND_TEAM_MEMBER,
+  },
+};
+const PAIR_ENTRIES = [
+  { id: 1, services: [SERVICE], staff_id: TEAM_MEMBER, datetime: DATETIME },
+  {
+    id: 2,
+    services: [SERVICE],
+    staff_id: SECOND_TEAM_MEMBER,
+    datetime: DATETIME,
+  },
+];
+
+describe('me_book with second_appointment, first call: the pair preview', () => {
+  it('checks both appointments in one request and previews both, with one token and no create', async () => {
+    const { harness, upstream } = await start({ check: 'pair_created' });
+    const { body, text } = await callBook(harness, PAIR);
+    expect(body.result?.isError).not.toBe(true);
+    const out = body.result?.structuredContent;
+    expect(out?.status).toBe('preview');
+    expect(out?.preview?.services).toEqual([
+      {
+        id: SERVICE,
+        title: 'Manicure',
+        price: { min: 1500, max: 1500, currency: 'EUR' },
+      },
+    ]);
+    expect(out?.preview?.team_member).toEqual({
+      id: TEAM_MEMBER,
+      name: 'Anna Smith',
+    });
+    expect(out?.preview?.second_appointment?.services).toEqual([
+      {
+        id: SERVICE,
+        title: 'Manicure',
+        price: { min: 1500, max: 1500, currency: 'EUR' },
+      },
+    ]);
+    expect(out?.preview?.second_appointment?.team_member?.id).toBe(
+      SECOND_TEAM_MEMBER
+    );
+    expect(out?.preview).toMatchObject({
+      date: '2099-01-12',
+      time: '11:00',
+      utc_offset: '+03:00',
+    });
+    expect(out?.confirmation_token).toMatch(/^\d+\.[A-Za-z0-9_-]{43}$/);
+    expect(out?.booking_id).toBeNull();
+    expect(out?.second_booking_id).toBeNull();
+    expect(out?.second_booking).toBeNull();
+
+    expect(text).toContain('First appointment:');
+    expect(text).toContain('Second appointment:');
+    expect(text).toContain(`team member ${TEAM_MEMBER}`);
+    expect(text).toContain(`team member ${SECOND_TEAM_MEMBER}`);
+    expect(text).toContain("Both bookings are under the client's name");
+    expect(text).toContain('second_appointment');
+    expect(text).toContain(out?.confirmation_token ?? 'missing');
+
+    const checks = upstream.calls.filter(
+      (call) => call.method === 'POST' && call.url.pathname.includes('book_')
+    );
+    expect(checks).toHaveLength(1);
+    expect(checks[0]?.url.pathname).toBe(`/api/v1/book_check/${LOCATION}`);
+    expect(checks[0]?.headers.get('authorization')).toBe(PARTNER_AUTHORIZATION);
+    expect(JSON.parse(checks[0]?.body ?? 'null')).toEqual({
+      appointments: PAIR_ENTRIES,
+    });
+    expect(routesOf(upstream)).not.toContain(`POST /book_record/${LOCATION}`);
+    expect(upstream.unmatched).toEqual([]);
+  });
+
+  it('refuses team member 0 on either side, and the same team member twice, with no upstream call', async () => {
+    const { harness, upstream } = await start();
+    for (const args of [
+      { ...PAIR, team_member_id: 0 },
+      {
+        ...PAIR,
+        second_appointment: { ...PAIR.second_appointment, team_member_id: 0 },
+      },
+      {
+        ...PAIR,
+        second_appointment: {
+          ...PAIR.second_appointment,
+          team_member_id: TEAM_MEMBER,
+        },
+      },
+    ]) {
+      const { body } = await callBook(harness, args);
+      expect(body.result?.isError).toBe(true);
+      const text = body.result?.content?.[0]?.text ?? '';
+      expect(text).toContain(
+        'Nothing was booked: two appointments need two different named team members.'
+      );
+      expect(text).toContain('business_list_team_members');
+    }
+    expect(upstream.calls).toEqual([]);
+  });
+});
+
+describe('me_book with second_appointment, second call: the pair booking', () => {
+  async function previewPair(scenario: Scenario = {}) {
+    const { harness, upstream } = await start({
+      check: 'pair_created',
+      ...scenario,
+    });
+    const { body } = await callBook(harness, PAIR);
+    const token = body.result?.structuredContent?.confirmation_token;
+    if (token === null || token === undefined) {
+      throw new Error('the pair preview carried no confirmation token');
+    }
+    upstream.calls.length = 0;
+    return { harness, upstream, token };
+  }
+
+  it('reads the profile, creates both appointments in one request, re-reads and returns both bookings', async () => {
+    const { harness, upstream, token } = await previewPair();
+    const { body, text } = await callBook(harness, {
+      ...PAIR,
+      confirmation_token: token,
+    });
+    expect(body.result?.isError).not.toBe(true);
+    const out = body.result?.structuredContent;
+    expect(out?.status).toBe('booked');
+    expect(out?.booking_id).toBe(NEW_RECORD_ID);
+    expect(out?.second_booking_id).toBe(SECOND_RECORD_ID);
+    expect(out?.booking).toMatchObject({
+      booking_id: NEW_RECORD_ID,
+      status: 'upcoming',
+      datetime: '2099-01-12T11:00:00+0300',
+    });
+    expect(out?.second_booking).toMatchObject({
+      booking_id: SECOND_RECORD_ID,
+      status: 'upcoming',
+    });
+    expect(out?.preview).toBeNull();
+    expect(out?.confirmation_token).toBeNull();
+    expect(text).toContain(`Booked: two appointments at location ${LOCATION}`);
+    expect(text).toContain(`booking ${NEW_RECORD_ID}`);
+    expect(text).toContain(`booking ${SECOND_RECORD_ID}`);
+    expect(text).toContain("Both are under the client's name.");
+    expect(text).toContain('me_cancel_booking');
+
+    expect(routesOf(upstream)).toEqual([
+      'GET /booking/user/data',
+      `POST /book_record/${LOCATION}`,
+      'GET /user/records',
+    ]);
+    for (const call of upstream.calls) {
+      expect(call.headers.get('authorization')).toBe(USER_AUTHORIZATION);
+    }
+    expect(JSON.parse(upstream.calls[1]?.body ?? 'null')).toEqual({
+      phone: '+15550000001',
+      fullname: 'Fixture Client',
+      email: 'fixture.client@example.invalid',
+      appointments: PAIR_ENTRIES,
+    });
+    const sent = JSON.parse(upstream.calls[1]?.body ?? '{}') as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(sent)).toEqual([
+      'phone',
+      'fullname',
+      'email',
+      'appointments',
+    ]);
+
+    const list = await postMcp(
+      harness.baseUrl,
+      toolCallBody('me_list_bookings', {}),
+      CLIENT_HEADERS
+    );
+    const listText = await list.text();
+    expect(listText).toContain(`${NEW_RECORD_ID}`);
+    expect(listText).toContain(`${SECOND_RECORD_ID}`);
+  });
+
+  it('names the booked one and the next action when the answer names only the first appointment', async () => {
+    const { harness, token } = await previewPair({
+      create: 'created_pair_partial',
+    });
+    const { body, text } = await callBook(harness, {
+      ...PAIR,
+      confirmation_token: token,
+    });
+    expect(body.result?.isError).not.toBe(true);
+    const out = body.result?.structuredContent;
+    expect(out?.status).toBe('partially_booked');
+    expect(out?.booking_id).toBe(NEW_RECORD_ID);
+    expect(out?.second_booking_id).toBeNull();
+    expect(out?.booking).toMatchObject({ booking_id: NEW_RECORD_ID });
+    expect(text).toContain(
+      `Only one of the two appointments was booked: booking ${NEW_RECORD_ID}.`
+    );
+    expect(text).toContain('me_cancel_booking');
+  });
+
+  it('leaks neither the sign-in, the profile nor a record hash into any response or log line', async () => {
+    const { harness, token } = await previewPair();
+    const second = await callBook(harness, {
+      ...PAIR,
+      confirmation_token: token,
+    });
+    await waitForLogs(harness, 2);
+    const everything = [second.text, JSON.stringify(harness.logs)].join('\n');
+    for (const bait of [...BAIT, 'fixture-hash-0003']) {
+      expect(everything).not.toContain(bait);
+    }
   });
 });
 
@@ -578,6 +847,27 @@ function signedClient(scope: string): Record<string, string> {
 }
 
 describe('me_book for callers that are not a signed-in client with the book scope', () => {
+  it('refuses a pair from an anonymous caller and from a partner caller, with InsufficientScope and no upstream call', async () => {
+    const anonymous = await start();
+    const { body } = await callBook(anonymous.harness, PAIR, {});
+    expect(body.result?.isError).toBe(true);
+    expect(anonymous.upstream.calls).toEqual([]);
+    const lines = await waitForLogs(anonymous.harness, 1);
+    expect(lines[0]).toMatchObject({
+      tool: 'me_book',
+      error_type: 'InsufficientScope',
+    });
+
+    const partner = await start({}, REQUIRED);
+    const refused = await callBook(partner.harness, PAIR, {
+      authorization: `Bearer ${PARTNER_TOKEN}`,
+    });
+    expect(refused.body.result?.isError).toBe(true);
+    expect(partner.upstream.calls).toEqual([]);
+    const partnerLines = await waitForLogs(partner.harness, 1);
+    expect(partnerLines[0]).toMatchObject({ error_type: 'InsufficientScope' });
+  });
+
   it('refuses an anonymous caller in band, naming the sign-in and book_check, with no upstream call', async () => {
     const { harness, upstream } = await start();
     const { body } = await callBook(harness, SELECTION, {});

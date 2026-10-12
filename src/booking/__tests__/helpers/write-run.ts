@@ -60,6 +60,100 @@ export function createBody(input: CreateInput): Record<string, unknown> {
   };
 }
 
+// The pair helpers of plan 05-01: the body of the two-appointment create, the
+// slots two team members share, and the record ids a pair create answered with.
+
+/** One appointment of a pair: the services and the explicit team member. */
+export interface PairAppointment {
+  serviceIds: number[];
+  staffId: number;
+}
+
+/** The body of the pair create call. */
+export interface PairCreateInput {
+  phone: string;
+  fullname: string;
+  email: string;
+  first: PairAppointment;
+  second: PairAppointment;
+  datetime: string;
+}
+
+/**
+ * The exact body of the pair create: one client (phone, fullname, `email` only
+ * when there is one) and two appointments at one start on two different, explicit
+ * team members. Team member 0 ("any") is refused, because two "any" entries can
+ * resolve to one team member and be refused as overlapping; equal ids are refused
+ * for the same reason. Nothing about a second person is ever added.
+ */
+export function createPairBody(
+  input: PairCreateInput
+): Record<string, unknown> {
+  const { first, second } = input;
+  if (
+    first.staffId <= 0 ||
+    second.staffId <= 0 ||
+    first.staffId === second.staffId
+  ) {
+    throw new TypeError('a pair needs two different team members above 0');
+  }
+  return {
+    phone: input.phone,
+    fullname: input.fullname,
+    ...(input.email === '' ? {} : { email: input.email }),
+    appointments: [
+      {
+        id: 1,
+        services: first.serviceIds,
+        staff_id: first.staffId,
+        datetime: input.datetime,
+      },
+      {
+        id: 2,
+        services: second.serviceIds,
+        staff_id: second.staffId,
+        datetime: input.datetime,
+      },
+    ],
+  };
+}
+
+/**
+ * The slot datetimes present in both lists, in the order of the first. They are
+ * compared as exact strings: a slot carries its offset, so local times of two
+ * lists are never compared.
+ */
+export function commonSlots(
+  first: readonly string[],
+  second: readonly string[]
+): string[] {
+  const other = new Set(second);
+  return first.filter((slot) => other.has(slot));
+}
+
+/**
+ * The record ids of a pair create answer, by appointment id (1 and 2): a
+ * positive safe integer, or null when the entry is missing or has none.
+ */
+export function createdRecordIds(data: unknown): {
+  first: number | null;
+  second: number | null;
+} {
+  const entries = Array.isArray(data) ? (data as unknown[]) : [];
+  const idOf = (appointment: number): number | null => {
+    for (const entry of entries) {
+      if (isRecord(entry) && entry.id === appointment) {
+        const id = entry.record_id;
+        return typeof id === 'number' && Number.isSafeInteger(id) && id > 0
+          ? id
+          : null;
+      }
+    }
+    return null;
+  };
+  return { first: idOf(1), second: idOf(2) };
+}
+
 const REMOVED = '[removed]';
 const MAX_MESSAGE_LENGTH = 300;
 const EMAIL_PATTERN = /[\w.+-]+@[\w-]+\.[\w.]+/g;

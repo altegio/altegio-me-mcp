@@ -2161,3 +2161,202 @@ describe('the membership restriction of a service (ADR 0006, D-04)', () => {
     ).toEqual([true, true, false, false]);
   });
 });
+
+describe('pair check and create (CASE-02, D-01)', () => {
+  const USER_TOKEN = 'client-user-token-0001-abcdef';
+  const PAIR_SLOT = '2099-01-12T11:00:00+03:00';
+  const FIRST = {
+    serviceIds: [10303531],
+    teamMemberId: 2098145,
+    datetime: PAIR_SLOT,
+  };
+  const SECOND = {
+    serviceIds: [10303531],
+    teamMemberId: 2098146,
+    datetime: PAIR_SLOT,
+  };
+  const PROFILE = {
+    fullname: 'Fixture Client',
+    phone: '+15550000001',
+    email: null,
+  };
+  const PAIR_ENTRIES = [
+    { id: 1, services: [10303531], staff_id: 2098145, datetime: PAIR_SLOT },
+    { id: 2, services: [10303531], staff_id: 2098146, datetime: PAIR_SLOT },
+  ];
+
+  function pairClient(options: { check?: FakeReply; create?: FakeReply }) {
+    const upstream = fakeFetch([
+      {
+        method: 'POST',
+        path: CHECK_PATH,
+        reply: options.check ?? loadFixture('book_check', 'pair_created'),
+      },
+      {
+        method: 'POST',
+        path: `/book_record/${LOCATION}`,
+        reply:
+          options.create ?? loadFixture('book_record_create', 'created_pair'),
+      },
+    ]);
+    const client = new BookingClient({
+      base: BASE,
+      token: TOKEN,
+      fetch: upstream.fetch,
+    });
+    return { client, upstream };
+  }
+
+  it('checks two appointments with one POST carrying exactly two numbered entries and the partner token only', async () => {
+    const { client, upstream } = pairClient({});
+    await expect(
+      client.checkPair(LOCATION, FIRST, SECOND)
+    ).resolves.toBeUndefined();
+    expect(upstream.calls).toHaveLength(1);
+    const call = upstream.calls[0];
+    expect(call?.method).toBe('POST');
+    expect(call?.url.pathname).toBe(`/api/v1${CHECK_PATH}`);
+    expect(call?.headers.get('authorization')).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(call?.body ?? 'null')).toEqual({
+      appointments: PAIR_ENTRIES,
+    });
+  });
+
+  it('maps the code-less 422 the live probe recorded for one team member twice to rejected with no code', async () => {
+    const { client } = pairClient({
+      check: loadFixture('book_check', 'pair_same_member_437'),
+    });
+    const error = await upstreamError(
+      client.checkPair(LOCATION, FIRST, SECOND)
+    );
+    expect(error.kind).toBe('rejected');
+    expect(error.status).toBe(422);
+    expect(error.codes).toEqual([]);
+    expect(error.upstreamMessage).toContain('enough time');
+  });
+
+  it('maps the documented code-437 shape to rejected with the code', async () => {
+    const { client } = pairClient({
+      check: loadFixture('book_check', 'pair_same_member_coded_437'),
+    });
+    const error = await upstreamError(
+      client.checkPair(LOCATION, FIRST, SECOND)
+    );
+    expect(error.kind).toBe('rejected');
+    expect(error.codes).toEqual([437]);
+  });
+
+  it('maps a taken time of the pair to rejected with code 433', async () => {
+    const { client } = pairClient({
+      check: loadFixture('book_check', 'pair_taken_433'),
+    });
+    const error = await upstreamError(
+      client.checkPair(LOCATION, FIRST, SECOND)
+    );
+    expect(error.codes).toEqual([433]);
+  });
+
+  it.each([
+    ['team member 0 first', { ...FIRST, teamMemberId: 0 }, SECOND],
+    ['team member 0 second', FIRST, { ...SECOND, teamMemberId: 0 }],
+    ['the same team member twice', FIRST, { ...SECOND, teamMemberId: 2098145 }],
+    [
+      'two different datetimes',
+      FIRST,
+      { ...SECOND, datetime: '2099-01-12T12:00:00+03:00' },
+    ],
+    ['no services of the second', FIRST, { ...SECOND, serviceIds: [] }],
+    [
+      'a bad datetime',
+      { ...FIRST, datetime: 'x' },
+      { ...SECOND, datetime: 'x' },
+    ],
+  ])('sends nothing for a pair with %s', async (_label, first, second) => {
+    const { client, upstream } = pairClient({});
+    await expect(client.checkPair(LOCATION, first, second)).rejects.toThrow(
+      TypeError
+    );
+    await expect(
+      client.createPairBooking(LOCATION, first, second, PROFILE, {
+        userToken: USER_TOKEN,
+      })
+    ).rejects.toThrow(TypeError);
+    expect(upstream.calls).toEqual([]);
+  });
+
+  it('creates two appointments with one POST of exactly the profile and the two entries, and returns both ids', async () => {
+    const { client, upstream } = pairClient({});
+    const created = await client.createPairBooking(
+      LOCATION,
+      FIRST,
+      SECOND,
+      PROFILE,
+      { userToken: USER_TOKEN }
+    );
+    expect(created).toEqual({ bookingIds: [990001, 990002] });
+    expect(JSON.stringify(created)).not.toContain('fixture-hash');
+    expect(upstream.calls).toHaveLength(1);
+    const call = upstream.calls[0];
+    expect(call?.method).toBe('POST');
+    expect(call?.url.pathname).toBe(`/api/v1/book_record/${LOCATION}`);
+    expect(call?.headers.get('authorization')).toBe(
+      `Bearer ${TOKEN}, User ${USER_TOKEN}`
+    );
+    expect(JSON.parse(call?.body ?? 'null')).toEqual({
+      phone: '+15550000001',
+      fullname: 'Fixture Client',
+      appointments: PAIR_ENTRIES,
+    });
+  });
+
+  it('sends the profile e-mail only when there is one', async () => {
+    const { client, upstream } = pairClient({});
+    await client.createPairBooking(
+      LOCATION,
+      FIRST,
+      SECOND,
+      { ...PROFILE, email: 'fixture.client@example.invalid' },
+      { userToken: USER_TOKEN }
+    );
+    expect(JSON.parse(upstream.calls[0]?.body ?? '{}')).toMatchObject({
+      email: 'fixture.client@example.invalid',
+    });
+  });
+
+  it('names a null for the appointment an answer does not name', async () => {
+    const { client } = pairClient({
+      create: loadFixture('book_record_create', 'created_pair_partial'),
+    });
+    expect(
+      await client.createPairBooking(LOCATION, FIRST, SECOND, PROFILE, {
+        userToken: USER_TOKEN,
+      })
+    ).toEqual({ bookingIds: [990001, null] });
+  });
+
+  it('maps a 201 that names no booking to anti_fraud, and a 412 to anti_fraud', async () => {
+    for (const [scenario, status] of [
+      ['fake_201', 201],
+      ['anti_fraud_412', 412],
+    ] as const) {
+      const { client } = pairClient({
+        create: loadFixture('book_record_create', scenario),
+      });
+      const error = await upstreamError(
+        client.createPairBooking(LOCATION, FIRST, SECOND, PROFILE, {
+          userToken: USER_TOKEN,
+        })
+      );
+      expect(error.kind).toBe('anti_fraud');
+      expect(error.status).toBe(status);
+    }
+  });
+
+  it('sends nothing without a user token', async () => {
+    const { client, upstream } = pairClient({});
+    await expect(
+      client.createPairBooking(LOCATION, FIRST, SECOND, PROFILE, {})
+    ).rejects.toThrow(TypeError);
+    expect(upstream.calls).toEqual([]);
+  });
+});

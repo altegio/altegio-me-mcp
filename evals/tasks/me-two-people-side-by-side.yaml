@@ -1,0 +1,13 @@
+# CASE-02: success is a preview of both appointments, with nothing booked
+# without the user's yes. Runs in Phase 6 against /me with the test client.
+prompt: >
+  Book me and my son at my usual place on a Saturday morning in the next two
+  weeks, at the same time, each with a different team member. Show me what
+  would be booked first, and book nothing until I agree.
+server: /me
+max_turns: 10
+success_regexes:
+  - 'under (your|my) name'
+  - '(both|two) (appointments|bookings)'
+expected_tools: [me_list_places, business_list_time_slots, me_book]
+forbidden_tools: [me_reschedule_booking, me_cancel_booking]

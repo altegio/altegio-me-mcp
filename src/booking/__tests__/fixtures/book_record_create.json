@@ -190,5 +190,47 @@
         }
       }
     }
+  },
+  "created_pair": {
+    "status": 201,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [
+        {
+          "id": 1,
+          "record_id": 990001,
+          "record_hash": "fixture-hash-0002"
+        },
+        {
+          "id": 2,
+          "record_id": 990002,
+          "record_hash": "fixture-hash-0003"
+        }
+      ],
+      "meta": []
+    }
+  },
+  "created_pair_partial": {
+    "status": 201,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": true,
+      "data": [
+        {
+          "id": 1,
+          "record_id": 990001,
+          "record_hash": "fixture-hash-0002"
+        },
+        {
+          "id": 2
+        }
+      ],
+      "meta": []
+    }
   }
 }

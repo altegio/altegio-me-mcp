@@ -78,6 +78,24 @@ anyone else gets an in-band refusal with no upstream call.
   `docs/research/signed-in-routes.md` ("Tool run"). It books a real appointment at
   the owner's business and cancels it.
 
+## Scheduled host runs
+
+The `watch_for_a_free_slot` prompt makes the client's AI host run a scheduled task, daily by
+default and at most hourly, that watches a team member's free times. On this server such a run is
+an ordinary sequence of read calls: `business_list_dates`, then `business_list_time_slots` for each
+date with free time, and no `me_` tool. A `me_book`, `me_reschedule_booking` or `me_cancel_booking`
+line in the logs for a scheduled run is a defect to look into, because the prompt says a run
+books nothing.
+
+- **Cost upstream.** One `book_dates` call plus one `book_times` call per date with free time, per
+  run. At the MVP load assumption (under 10,000 bookings a month) this needs no load work.
+- **In the logs.** One `mcp_call` line per request, with the tool name and no arguments, like any
+  caller (see "Logs"); a run cannot be told from a person's read except by its timing.
+- **State.** Nothing about a watch is stored on the server: the ids and the window live in the
+  host's task, and pausing or deleting the task stops it.
+- **Limits.** The request gate and the edge limits apply as to any caller.
+- **Evidence.** The host run record is in `docs/research/cases.md` under "Host runs".
+
 ## Admission and shared partner allocation
 
 ME uses developer **2630**, Secret Manager `MARKETPLACE_PARTNER_TOKEN`.

@@ -22,8 +22,10 @@ signed client identity; the proxy's phone sign-in page waits for the platform te
 ([ADR 0004](docs/decisions/0004-caller-authorization-tiers.md),
 [ADR 0005](docs/decisions/0005-own-places-first.md),
 [ADR 0006](docs/decisions/0006-in-chat-booking-at-own-places.md), see [Access](#access)).
-The catalog of bookable
-businesses and search come next. Decisions and research are in [`docs/`](docs/).
+The server also lists four prompts (`prompts/list`) for the cases built
+on these tools: two people side by side, freed-slot monitoring and slot hold with a reminder, see
+[Cases](#cases) and [Prompts](#prompts). The catalog of bookable businesses and search are parked.
+Decisions and research are in [`docs/`](docs/).
 
 A remote [MCP](https://modelcontextprotocol.io) server that lets clients of businesses using
 Altegio (salons, barbershops, studios and similar) find a business, browse its services, team
@@ -51,13 +53,185 @@ preview with a confirmation token, then the write. The client's name, phone and 
 their Altegio profile and never from the chat. The widget link stays for partner and anonymous
 callers, services with online prepayment, memberships, inactive widgets and places without
 earlier visits. The sign-in itself (phone + SMS on the platform proxy's page, OAuth 2.1) is the
-proxy's: until it ships, the client tier runs locally with a direct user-token header. Next: the
-cases the Altegio.me app lacks (two people side by side, a freed slot at a favourite team member,
-a held slot). A searchable catalog of all businesses is parked.
+proxy's: until it ships, the client tier runs locally with a direct user-token header. On top of
+these tools run the cases the Altegio.me app lacks, built and described under
+[Cases](#cases): two people side by side, freed-slot monitoring and slot hold with a reminder. A
+searchable catalog of all businesses is parked.
 
 **Distribution.** Claude Connectors Directory listing and promo inside the Altegio.me app; later
 ChatGPT, the MCP Registry, and outreach to Perplexity, Mistral, xAI and Google. See
 [`docs/research/ai-platforms-distribution.md`](docs/research/ai-platforms-distribution.md).
+
+## Cases
+
+Cases the Altegio.me app lacks run on the tools above, with no tool of their own. Each case has a
+server prompt that a client can offer its user, an example dialogue and an eval task; the prompts
+are listed over `prompts/list`, and the decisions behind each case are in
+[`docs/research/cases.md`](docs/research/cases.md).
+
+### Two people side by side
+
+A signed-in client books two appointments at one of their places, at the same start, with two
+different named team members, for example a parent and a child. It is one `me_book` call with an
+optional `second_appointment` (its own services and a team member): one preview that lists both
+appointments, one confirmation token over both, and one create with two appointments, so either
+both exist or neither does. The prompt is `book_side_by_side`.
+
+What it does not do:
+
+- Both bookings are under the client's name. Nothing about the second person (name, phone,
+  e-mail, a comment) is taken or sent; the client tells the business who the second one is for.
+- One place, one start time and exactly two appointments. Both team members must be named and
+  different; "any team member" is refused for a pair, because the booking service could pick the
+  same team member twice.
+- Online prepayment, a membership-only service, an inactive widget and a place without an
+  earlier visit end at the business's booking widget, which books one appointment at a time, so
+  the answer carries one pre-filled link for each appointment.
+- If the booking service names only one of the two bookings, the answer says
+  `partially_booked` with the booked id and what to do next.
+- Each booking is moved or cancelled on its own with `me_reschedule_booking` or
+  `me_cancel_booking`.
+
+> **Client:** Book me and my son at BaBarber on Saturday, me with Anna, him with Oleg, same time.
+>
+> **Assistant:** (`me_list_places`, `business_list_time_slots` for each) Anna and Oleg are both
+> free at 11:00 and 14:30 on Sat 17 Oct. 11:00?
+>
+> **Client:** 11:00.
+>
+> **Assistant:** (`me_book` preview) BaBarber, Sat 17 Oct 11:00 (+07:00). First appointment:
+> men's haircut with Anna, 600. Second appointment: kids' haircut with Oleg, 400. Both bookings
+> are under your name; nothing about the second person is sent. Online cancellation is allowed
+> until 2 hours before the start. Book both?
+>
+> **Client:** Yes.
+>
+> **Assistant:** (`me_book` with the confirmation token) Booked: two appointments, booking 6762101
+> and booking 6762102. Both are under your name.
+
+The eval task for this case is [`evals/tasks/me-two-people-side-by-side.yaml`](evals/tasks/me-two-people-side-by-side.yaml).
+
+### Freed-slot monitoring
+
+A scheduled task of the client's AI host checks the free times of a favourite team member and
+reports them. Nothing is stored on this server, a run books nothing, and the booking happens in the
+chat with `me_book` once the client picks a time. There is no tool, scheduler or notification
+channel for it: each run reads with `business_list_dates` and then `business_list_time_slots` for
+every date found, which the host sends like any other read.
+
+Hosts: Claude scheduled tasks (Cowork) and Claude Code routines, at most once an hour. Other hosts
+are not verified, and the text makes no claim about them. The prompt is `watch_for_a_free_slot`.
+
+Setup, in three lines:
+
+1. In the chat, `me_list_places` gives the usual place, service and team member; the client gives
+   the dates (within 62 days) and the times of day.
+2. The assistant helps create one scheduled task on the host, daily unless the client asks for more
+   often, with only the ids, the dates and the times of day in its text.
+3. Each run reports the free times inside the window or that there are none yet; the client stops
+   the watch by pausing or deleting the task.
+
+> **Client:** My usual barber is full this week. Tell me when an evening time frees up before 25
+> Oct.
+>
+> **Assistant:** (`me_list_places`) You usually see Anna at BaBarber for a men's haircut. I will set
+> up a daily scheduled task that checks Anna's free times after 17:00 up to 25 Oct and tells you
+> what it finds. A run only reads and books nothing. Set it up?
+>
+> **Client:** Yes.
+>
+> **Assistant:** Done: a daily task with the place, service and Anna's ids and that window. Nothing
+> about you is in it.
+>
+> *(Next morning, the task's report)* Anna is free on Thu 15 Oct at 18:00 and 19:30. Nothing else
+> before 25 Oct.
+>
+> **Client:** Book the 18:00.
+>
+> **Assistant:** (`me_book` preview) BaBarber, Thu 15 Oct 18:00 (+07:00), men's haircut with Anna,
+> 600. Online cancellation is allowed until 2 hours before the start. Book it?
+>
+> **Client:** Yes.
+>
+> **Assistant:** (`me_book` with the confirmation token) Booked: booking 6762201.
+
+What it does not do:
+
+- A run never books, moves or cancels. Where a connection has no client sign-in, `me_book` answers
+  with the sign-in refusal and `book_check` gives the pre-filled booking link.
+- The slot may be gone by the time the client reads the report; the `me_book` preview checks again.
+- The one host run of 2026-10-09 (Claude Desktop) could not reach the server, because a claude.ai
+  or Claude Desktop connector cannot send the partner token that `/me` needs until the client
+  sign-in of the platform proxy exists. The record and the retest condition are in
+  [`docs/research/cases.md`](docs/research/cases.md) under "Host runs".
+
+The eval task for this case is [`evals/tasks/me-watch-for-a-free-slot.yaml`](evals/tasks/me-watch-for-a-free-slot.yaml).
+
+### Slot hold
+
+A client keeps a time at one of their places while they decide: the assistant books it with
+`me_book` after the client says yes, then helps set up a one-time scheduled task on the client's
+AI host for one day before the business's latest online cancellation time. That time is in the
+`me_book` preview as `cancel_until` (the start minus the business's limit, in the business's own
+offset). The task only reminds the client of the booking and asks whether to keep it or cancel it.
+The prompt is `hold_a_slot`.
+
+What it does not do:
+
+- The reminder changes nothing on its own. A scheduled run is never the client's consent: if the
+  client answers cancel, the assistant shows the cancellation with `me_cancel_booking` and cancels
+  only after the client says yes in the chat.
+- No hold where the business does not allow online cancellation or does not state its limit
+  (`cancel_until` is null), and no reminder task when that time has passed; a time less than a day
+  away gets a reminder a few hours before it.
+- One hold per place at a time, and a service with online prepayment is not held; it ends at the
+  business's booking widget.
+- The server keeps nothing for it: no scheduler, no stored hold and no tool of its own.
+- A booking that cancels itself with no reminder waits for the proxy's client sign-in (I8) and one
+  host run that shows an unattended cancel with a preview and a confirmation; it is not built,
+  see "Slot hold" in [`docs/research/cases.md`](docs/research/cases.md).
+
+> **Client:** Hold Saturday 17 Oct at 18:00 with Anna at BaBarber for me. I will know by
+> Thursday.
+>
+> **Assistant:** (`me_list_places`, `business_list_time_slots`, `me_book` preview) BaBarber, Sat
+> 17 Oct 18:00 (+07:00), men's haircut with Anna, 600. Online cancellation is allowed until 2
+> hours before the start. Latest online cancellation: 2026-10-17 16:00 (UTC+07:00). Book it?
+>
+> **Client:** Yes.
+>
+> **Assistant:** (`me_book` with the confirmation token) Booked: booking 6762301. Shall I set up a
+> one-time scheduled task for Fri 16 Oct, one day before 16:00 on Saturday, that reminds you of
+> it and asks whether you keep it or cancel it? It changes nothing on its own.
+>
+> **Client:** Yes.
+>
+> *(Fri 16 Oct, the task's reminder)* You have a booking at BaBarber on Sat 17 Oct at 18:00 with
+> Anna. Keep it or cancel it?
+>
+> **Client:** Cancel it.
+>
+> **Assistant:** (`me_cancel_booking` preview) Cancel booking 6762301, BaBarber, Sat 17 Oct 18:00?
+>
+> **Client:** Yes.
+>
+> **Assistant:** (`me_cancel_booking` with the confirmation token) Cancelled.
+
+The eval task for this case is [`evals/tasks/me-hold-a-slot.yaml`](evals/tasks/me-hold-a-slot.yaml).
+
+## Prompts
+
+The server lists four prompts over `prompts/list`, each one user message in the client's voice that
+names the tools to use and asks for nothing about the sign-in:
+
+- `book_my_usual`: shows the places the client already goes to, proposes the usual service and team
+  member, and books it in the chat once the client agrees.
+- `book_side_by_side`: books two appointments at the same start with two different team members,
+  both under the client's name.
+- `watch_for_a_free_slot`: helps set up a scheduled task that checks a team member's free times and
+  reports them; a run only reads.
+- `hold_a_slot`: books a time and sets up a one-time reminder before the cancellation limit that
+  asks keep or cancel; the reminder changes nothing on its own.
 
 ## Architecture
 

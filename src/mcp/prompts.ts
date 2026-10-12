@@ -1,8 +1,12 @@
-// Server prompts (D-03): the "sign in, pick a place, book your usual" path as
-// one prompt a client can offer its user. Written in the user's voice, the way
-// a client shows a prompt. It names tools and asks for nothing about the
-// sign-in, which happens on the connector's own sign-in page and never in the
-// chat; compliance checks the text like a tool description.
+// Server prompts: one per case, each a path a client can offer its user:
+// "sign in, pick a place, book your usual" (D-03), two people side by side
+// (CASE-02, CASE-05) and watching for a free time as a scheduled task of the
+// client's AI host (CASE-03, D-03), and holding a slot as a booking plus a
+// one-time reminder before the business's cancellation limit (CASE-04, D-04).
+// Written in the user's voice, the way a client shows a prompt, and taking no
+// arguments. It names tools and asks for nothing about the sign-in, which
+// happens on the connector's own sign-in page and never in the chat;
+// compliance checks the text like a tool description.
 
 export interface ServerPrompt {
   name: string;
@@ -24,6 +28,46 @@ export const SERVER_PROMPTS: readonly ServerPrompt[] = Object.freeze([
       'Find free dates and times with business_list_dates and business_list_time_slots, using that service and team member unless I choose otherwise.',
       'Show me the booking for the time I choose with me_book and book it only after I say yes; if the business needs its booking widget, check the time with book_check and give me the pre-filled booking link.',
       'My sign-in is already done through the connector and nothing about it belongs in this chat.',
+    ].join(' '),
+  }),
+  Object.freeze({
+    name: 'book_side_by_side',
+    title: 'Book two people side by side at a place I already go to',
+    description:
+      'Books two appointments that start at the same time with two different team members at one of my places, shown in one preview and booked once I agree, both under my name.',
+    text: [
+      'At one of my places from me_list_places, book two appointments that start at the same time with two different team members, for example one for me and one for my child.',
+      'Pick the two team members with business_list_team_members and offer only the start times that business_list_time_slots shows for both of them on the same date.',
+      'Show me the booking of both with one me_book call, my appointment plus second_appointment, and book it only after I say yes.',
+      'Both bookings will be under my name and nothing about the other person is needed; each booking is moved or cancelled on its own.',
+    ].join(' '),
+  }),
+  Object.freeze({
+    name: 'watch_for_a_free_slot',
+    title: 'Watch for a free time with my favourite team member',
+    description:
+      'Helps me set up a scheduled task in this app that checks the free times of my usual team member and tells me when one opens in my window; the task only reads, and a booking happens here in the chat once I pick a time.',
+    text: [
+      'Take the place, the service and the team member from my usual in me_list_places unless I name others, and the dates (within 62 days) and the times of day I give.',
+      'Help me set up a scheduled task in this app, for example a scheduled task or a routine, that runs daily unless I ask for more often and at most once an hour, with only the ids, the dates and the times of day in its text.',
+      'Each run checks business_list_dates for that team member, then business_list_time_slots for each date found, and tells me the free times inside my window or that there are none yet.',
+      'A run books nothing.',
+      'When I come back and pick a time, show me the booking with me_book and book it only after I say yes; if this connection cannot book, check the time with book_check and give me the pre-filled booking link.',
+      'I stop the watch by pausing or deleting the task.',
+    ].join(' '),
+  }),
+  Object.freeze({
+    name: 'hold_a_slot',
+    title: 'Hold a time at a place I already go to',
+    description:
+      'Books the time I name at one of my places and helps me set up a one-time scheduled task in this app that reminds me before the business stops allowing online cancellation and asks whether I keep it or cancel it; the task changes nothing on its own.',
+    text: [
+      'At one of my places from me_list_places, hold the time I name: show me the booking with me_book and book it only after I say yes.',
+      'If the preview says the business does not allow online cancellation, or shows no latest online cancellation time, tell me a hold is not possible there.',
+      'Otherwise, after the booking, help me set up a one-time scheduled task in this app for one day before the latest online cancellation time in the preview (a few hours before it when that time is less than a day away, and no task when it has passed) that reminds me of the booking and asks whether I want to keep it or cancel it.',
+      'The task changes nothing on its own.',
+      'If I answer cancel, show me the cancellation with me_cancel_booking and cancel only after I say yes.',
+      'I keep one hold per place at a time, and a service that needs online prepayment is not held.',
     ].join(' '),
   }),
 ]);

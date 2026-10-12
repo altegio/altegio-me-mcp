@@ -1,0 +1,13 @@
+# CASE-03: success is a proposed daily check with the team member and the window,
+# and no booking. Runs in Phase 6 against /me with the test client.
+prompt: >
+  My usual team member is fully booked this week. Tell me when an evening time
+  frees up with them before a date about two weeks from now, and set up a way
+  to check it for me. Do not book anything.
+server: /me
+max_turns: 8
+success_regexes:
+  - '(daily|every (day|morning)|hourly|scheduled)'
+  - '(free|open) (time|slot)'
+expected_tools: [me_list_places, business_list_dates]
+forbidden_tools: [me_book, me_reschedule_booking, me_cancel_booking]

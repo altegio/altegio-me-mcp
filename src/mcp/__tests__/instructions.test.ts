@@ -52,6 +52,30 @@ describe('SERVER_INSTRUCTIONS', () => {
     expect(SERVER_INSTRUCTIONS).toMatch(/after the client agreed/i);
   });
 
+  it('describes two people side by side as one me_book call with a second_appointment', () => {
+    expect(SERVER_INSTRUCTIONS).toContain('second_appointment');
+    expect(SERVER_INSTRUCTIONS).toContain('side by side');
+    expect(SERVER_INSTRUCTIONS).toMatch(/under the client's name/);
+  });
+
+  it('describes watching for a free time as a scheduled task of the host that only reads and keeps nothing on the server', () => {
+    expect(SERVER_INSTRUCTIONS).toMatch(/scheduled task/i);
+    expect(SERVER_INSTRUCTIONS).toContain('business_list_dates');
+    expect(SERVER_INSTRUCTIONS).toContain('business_list_time_slots');
+    expect(SERVER_INSTRUCTIONS).toMatch(/only reads/i);
+    expect(SERVER_INSTRUCTIONS).toMatch(/server keeps nothing/i);
+  });
+
+  it('describes holding a slot as a booking plus a one-time reminder that changes nothing, with the cancel through me_cancel_booking (D-04)', () => {
+    expect(SERVER_INSTRUCTIONS).toMatch(/holding a slot/i);
+    expect(SERVER_INSTRUCTIONS).toMatch(/one-time reminder/i);
+    expect(SERVER_INSTRUCTIONS).toMatch(/latest online cancellation time/i);
+    expect(SERVER_INSTRUCTIONS).toMatch(/reminder changes nothing/i);
+    expect(SERVER_INSTRUCTIONS).toMatch(
+      /cancel goes through me_cancel_booking with the client's confirmation/i
+    );
+  });
+
   it('keeps the pre-filled widget link for what the chat cannot do', () => {
     expect(SERVER_INSTRUCTIONS).toContain('pre-filled');
     for (const case_ of [

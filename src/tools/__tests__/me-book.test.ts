@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import { BookingClient } from '../../booking/client.js';
+import { BookingClient, type BusinessRules } from '../../booking/client.js';
 import {
   fakeFetch,
   loadFixture,
@@ -9,7 +9,7 @@ import {
 import { createConfirmations } from '../confirmation.js';
 import { NO_TOOL_CONTEXT, type ToolContext } from '../context.js';
 import type { ToolInvocation } from '../factory.js';
-import { meBook } from '../me-book.js';
+import { cancelUntil, meBook } from '../me-book.js';
 
 // me_book at handler level through the real BookingClient with a fake fetch
 // (ADR 0006, D-02): what every create rejection, the anti-fraud paths and an
@@ -30,6 +30,15 @@ const SELECTION = {
   datetime: '2099-01-12T11:00:00+03:00',
 };
 
+const SECOND_TEAM_MEMBER = 2098146;
+const PAIR = {
+  ...SELECTION,
+  second_appointment: {
+    service_ids: [10303531],
+    team_member_id: SECOND_TEAM_MEMBER,
+  },
+};
+
 // The contract fixtures quote these in meta.message of every create error.
 const BAIT = [
   '+15550000001',
@@ -45,6 +54,7 @@ interface Setup {
 function setup(
   options: {
     create?: FakeReply;
+    check?: FakeReply;
     profile?: FakeReply;
     company?: FakeReply;
     services?: FakeReply;
@@ -87,7 +97,7 @@ function setup(
     {
       method: 'POST',
       path: `/book_check/${LOCATION}`,
-      reply: loadFixture('book_check', 'created_empty'),
+      reply: options.check ?? loadFixture('book_check', 'created_empty'),
     },
     {
       method: 'POST',
@@ -118,24 +128,27 @@ function textOf(invocation: ToolInvocation): string {
 interface BookOut {
   status: string;
   booking_id: number | null;
+  second_booking_id: number | null;
   fallback: {
     reason: string;
     link: { url: string; kind: string } | null;
+    second_link: { url: string; kind: string } | null;
   } | null;
 }
 
 /** The preview call, then the confirm call with its token; the upstream calls are cleared between. */
 async function previewThenConfirm(
-  made: Setup
+  made: Setup,
+  args: Record<string, unknown> = SELECTION
 ): Promise<{ preview: ToolInvocation; confirm: ToolInvocation }> {
-  const preview = await made.invoke(SELECTION);
+  const preview = await made.invoke(args);
   expect(preview.result.isError).not.toBe(true);
   const token = (
     preview.result.structuredContent as { confirmation_token: string }
   ).confirmation_token;
   made.upstream.calls.length = 0;
   const confirm = await made.invoke({
-    ...SELECTION,
+    ...args,
     confirmation_token: token,
   });
   return { preview, confirm };
@@ -458,7 +471,7 @@ const WIDGET_INACTIVE_SENTENCE =
 
 interface PreviewOut extends BookOut {
   confirmation_token: string | null;
-  preview: { optional_prepayment: boolean } | null;
+  preview: { optional_prepayment: boolean; cancel_until: string | null } | null;
 }
 
 function previewOf(invocation: ToolInvocation): PreviewOut {
@@ -643,5 +656,557 @@ describe('me_book fallbacks: the confirm path keeps its own', () => {
     expect(textOf(confirm)).toContain(
       'Not booked: the business could not confirm this booking from here.'
     );
+  });
+});
+
+describe('me_book pair rule: two different named team members, before any upstream call (D-01, T-05-04)', () => {
+  const REFUSAL =
+    'Nothing was booked: two appointments need two different named team members.';
+
+  it.each([
+    ['team member 0 in the first appointment', { ...PAIR, team_member_id: 0 }],
+    [
+      'team member 0 in the second appointment',
+      {
+        ...PAIR,
+        second_appointment: { ...PAIR.second_appointment, team_member_id: 0 },
+      },
+    ],
+    [
+      'the same team member twice',
+      {
+        ...PAIR,
+        second_appointment: {
+          ...PAIR.second_appointment,
+          team_member_id: SELECTION.team_member_id,
+        },
+      },
+    ],
+  ])(
+    'refuses %s, with a next action and zero upstream calls',
+    async (_label, args) => {
+      const made = setup();
+      const result = await made.invoke(args);
+      expect(result.result.isError).toBe(true);
+      const text = textOf(result);
+      expect(text).toContain(REFUSAL);
+      expect(text).toContain('Next: choose two different team members');
+      expect(text).toContain('business_list_team_members');
+      expect(made.upstream.calls).toEqual([]);
+    }
+  );
+
+  it('refuses the same pair on the confirm call too, even with a token', async () => {
+    const made = setup();
+    const result = await made.invoke({
+      ...PAIR,
+      team_member_id: 0,
+      confirmation_token: '1.x',
+    });
+    expect(result.result.isError).toBe(true);
+    expect(textOf(result)).toContain(REFUSAL);
+    expect(made.upstream.calls).toEqual([]);
+  });
+
+  it('takes no detail of the second person: a name, phone, e-mail or comment is a schema error', async () => {
+    const made = setup();
+    for (const extra of [
+      { fullname: 'x' },
+      { phone: '+15550000009' },
+      { email: 'x@example.invalid' },
+      { comment: 'x' },
+    ]) {
+      const result = await made.invoke({
+        ...PAIR,
+        second_appointment: { ...PAIR.second_appointment, ...extra },
+      });
+      expect(result.result.isError).toBe(true);
+    }
+    expect(made.upstream.calls).toEqual([]);
+  });
+});
+
+// Two people side by side (CASE-02, D-01): every way a pair can fail answers in
+// band, a half-done pair is named as such, the widget hand-off gives one link
+// per appointment and no token crosses between a single booking and a pair.
+
+const TAKEN_PAIR =
+  'Nothing was booked: one of the two times is no longer free.';
+const TAKEN_PAIR_NEXT =
+  'Next: choose another time with business_list_time_slots for both team members, then call me_book without confirmation_token for a new preview.';
+const NOT_AVAILABLE_PAIR =
+  'Nothing was booked: a chosen team member is not available at this time.';
+const SAME_MEMBER_PAIR =
+  'Nothing was booked: one team member cannot take both appointments at this time.';
+
+describe('me_book pair check: the answer of the booking service', () => {
+  it.each([
+    ['pair_taken_433', TAKEN_PAIR],
+    ['no_member_436', NOT_AVAILABLE_PAIR],
+    ['pair_same_member_437', SAME_MEMBER_PAIR],
+    ['pair_same_member_coded_437', SAME_MEMBER_PAIR],
+  ])(
+    'answers the %s check with the pair text and no token',
+    async (scenario, sentence) => {
+      const made = setup({ check: loadFixture('book_check', scenario) });
+      const result = await made.invoke(PAIR);
+      expect(result.result.isError).toBe(true);
+      const text = textOf(result);
+      expect(text).toContain(sentence);
+      expect(text).toContain('Next:');
+      expect(text).toContain('business_list_');
+      expect(result.result.structuredContent).toBeUndefined();
+      expect(
+        made.upstream.calls.some((call) =>
+          call.url.pathname.includes('book_record')
+        )
+      ).toBe(false);
+    }
+  );
+
+  it('names the time slots of both team members for a taken pair, and two different team members for the same one twice', async () => {
+    const taken = await setup({
+      check: loadFixture('book_check', 'pair_taken_433'),
+    }).invoke(PAIR);
+    expect(textOf(taken)).toContain(TAKEN_PAIR_NEXT);
+    const same = await setup({
+      check: loadFixture('book_check', 'pair_same_member_437'),
+    }).invoke(PAIR);
+    expect(textOf(same)).toContain('choose two different team members');
+  });
+
+  it('keeps the single-booking text for a single check', async () => {
+    const made = setup({ check: loadFixture('book_check', 'taken_433') });
+    const text = textOf(await made.invoke(SELECTION));
+    expect(text).not.toContain('one of the two');
+  });
+});
+
+describe('me_book pair confirm: create rejections', () => {
+  it.each([
+    ['taken_433', TAKEN_PAIR],
+    ['no_team_member_436', NOT_AVAILABLE_PAIR],
+    ['overlap_437', SAME_MEMBER_PAIR],
+  ])(
+    'answers the %s create with the pair text and quotes nothing',
+    async (scenario, sentence) => {
+      const made = setup({
+        create: loadFixture('book_record_create', scenario),
+      });
+      const { confirm } = await previewThenConfirm(made, PAIR);
+      expect(confirm.result.isError).toBe(true);
+      const text = textOf(confirm);
+      expect(text).toContain(sentence);
+      expect(text).toContain('without confirmation_token for a new preview');
+      expectNoBait(confirm);
+    }
+  );
+
+  it('answers the code-less 422 the probe recorded for one team member twice with the same-member text', async () => {
+    const made = setup({
+      create: {
+        status: 422,
+        body: {
+          success: false,
+          data: null,
+          meta: {
+            message:
+              'Failed to register: the team member does not have enough time to perform the selected services. +15550000001 Fixture Client',
+            errors: [],
+          },
+        },
+      },
+    });
+    const { confirm } = await previewThenConfirm(made, PAIR);
+    expect(textOf(confirm)).toContain(SAME_MEMBER_PAIR);
+    expectNoBait(confirm);
+  });
+
+  it('keeps the single texts for a single booking', async () => {
+    const made = setup({
+      create: loadFixture('book_record_create', 'taken_433'),
+    });
+    const { confirm } = await previewThenConfirm(made);
+    expect(textOf(confirm)).toContain(
+      'Nothing was booked: this time was taken meanwhile.'
+    );
+  });
+
+  it.each([
+    ['blacklisted_434', /does not accept online bookings from this client/],
+    ['phone_431', /Altegio profile/],
+    ['name_435', /Altegio profile/],
+    ['code_432', /confirms bookings with a code/],
+  ])(
+    'keeps today text for the %s create of a pair',
+    async (scenario, pattern) => {
+      const made = setup({
+        create: loadFixture('book_record_create', scenario),
+      });
+      const { confirm } = await previewThenConfirm(made, PAIR);
+      expect(confirm.result.isError).toBe(true);
+      expect(textOf(confirm)).toMatch(pattern);
+      expectNoBait(confirm);
+    }
+  );
+});
+
+describe('me_book pair confirm: only one of the two appointments is named', () => {
+  it('returns partially_booked with the booked id and the next action, for an answer that names the first only', async () => {
+    const made = setup({
+      create: loadFixture('book_record_create', 'created_pair_partial'),
+    });
+    const { confirm } = await previewThenConfirm(made, PAIR);
+    expect(confirm.result.isError).not.toBe(true);
+    const out = confirm.result.structuredContent as unknown as BookOut;
+    expect(out.status).toBe('partially_booked');
+    expect(out.booking_id).toBe(990001);
+    expect(out.second_booking_id).toBeNull();
+    const text = textOf(confirm);
+    expect(text).toContain(
+      'Only one of the two appointments was booked: booking 990001.'
+    );
+    expect(text).toContain('Next: tell the user');
+    expect(text).toContain('me_book on its own after a new preview');
+    expect(text).toContain('cancel booking 990001 with me_cancel_booking');
+    expectNoBait(confirm);
+    expect(JSON.stringify(confirm.result)).not.toContain('fixture-hash');
+  });
+
+  it('returns the same shape for an answer that names the second only', async () => {
+    const made = setup({
+      create: {
+        status: 201,
+        body: {
+          success: true,
+          data: [
+            { id: 1 },
+            { id: 2, record_id: 990002, record_hash: 'fixture-hash-0003' },
+          ],
+          meta: [],
+        },
+      },
+    });
+    const { confirm } = await previewThenConfirm(made, PAIR);
+    const out = confirm.result.structuredContent as unknown as BookOut;
+    expect(out.status).toBe('partially_booked');
+    expect(out.booking_id).toBeNull();
+    expect(out.second_booking_id).toBe(990002);
+    expect(textOf(confirm)).toContain(
+      'Only one of the two appointments was booked: booking 990002.'
+    );
+    expect(textOf(confirm)).toContain(
+      'cancel booking 990002 with me_cancel_booking'
+    );
+  });
+});
+
+describe('me_book pair fallbacks: one link for each appointment', () => {
+  const WIDGET_ONE_AT_A_TIME =
+    "The business's booking widget books one appointment at a time, so there is one link for each appointment.";
+
+  function expectBothLinks(invocation: ToolInvocation): void {
+    const out = previewOf(invocation);
+    expect(out.fallback?.link?.kind).toBe('preselected');
+    expect(out.fallback?.second_link?.kind).toBe('preselected');
+    expect(out.fallback?.link?.url).toContain('m2098145');
+    expect(out.fallback?.second_link?.url).toContain(`m${SECOND_TEAM_MEMBER}`);
+    expect(out.fallback?.link?.url).toContain('s10303531');
+    const text = textOf(invocation);
+    expect(text).toContain(WIDGET_ONE_AT_A_TIME);
+    expect(text).toContain(out.fallback?.link?.url ?? 'missing');
+    expect(text).toContain(out.fallback?.second_link?.url ?? 'missing');
+    expect(text).toContain('first appointment');
+    expect(text).toContain('second appointment');
+  }
+
+  it.each(['anti_fraud_412', 'fake_201'])(
+    'gives not_confirmed with both links for %s on a pair',
+    async (scenario) => {
+      const made = setup({
+        create: loadFixture('book_record_create', scenario),
+      });
+      const { confirm } = await previewThenConfirm(made, PAIR);
+      expect(confirm.result.isError).not.toBe(true);
+      expect(previewOf(confirm).status).toBe('fallback');
+      expect(previewOf(confirm).fallback?.reason).toBe('not_confirmed');
+      expectBothLinks(confirm);
+      expectNoBait(confirm);
+    }
+  );
+
+  it('gives required_field with both links for a business that needs the e-mail', async () => {
+    const made = setup({
+      profile: loadFixture('booking_user_data', 'bare_digits_no_email'),
+      create: loadFixture('book_record_create', 'required_email_422'),
+    });
+    const { confirm } = await previewThenConfirm(made, PAIR);
+    expect(previewOf(confirm).fallback?.reason).toBe('required_field');
+    expectBothLinks(confirm);
+  });
+
+  it('gives not_own_place with both links, after reading only the records and the card', async () => {
+    const made = setup();
+    const result = await made.invoke({ ...PAIR, location_id: 731000 });
+    expectFallback(result, 'not_own_place', NOT_OWN_PLACE_SENTENCE);
+    const out = previewOf(result);
+    expect(out.fallback?.second_link?.url).toContain('731000');
+    expect(out.fallback?.second_link?.url).toContain(`m${SECOND_TEAM_MEMBER}`);
+    expect(routesOf(made)).toEqual([
+      'GET /user/records',
+      'GET /company/731000',
+    ]);
+  });
+
+  it('gives prepayment with both links when the second appointment has a prepayment-required service', async () => {
+    const made = setup();
+    const result = await made.invoke({
+      ...PAIR,
+      second_appointment: {
+        ...PAIR.second_appointment,
+        service_ids: [10303532],
+      },
+    });
+    expectFallback(result, 'prepayment', PREPAYMENT_SENTENCE);
+    expect(previewOf(result).fallback?.second_link?.url).toContain('s10303532');
+    expect(previewOf(result).fallback?.link?.url).toContain('s10303531');
+    expect(routesOf(made)).not.toContain(`POST /book_check/${LOCATION}`);
+  });
+
+  it('gives prepayment when it is the first appointment that has one', async () => {
+    const made = setup();
+    const result = await made.invoke({
+      ...PAIR,
+      service_ids: [10303532],
+    });
+    expectFallback(result, 'prepayment', PREPAYMENT_SENTENCE);
+  });
+
+  it('gives membership with both links when the second appointment has a membership-only service', async () => {
+    const made = setup({
+      services: loadFixture('book_services', 'membership_only'),
+    });
+    const result = await made.invoke({
+      ...PAIR,
+      service_ids: [10303533],
+    });
+    expectFallback(result, 'membership', MEMBERSHIP_SENTENCE);
+    expect(previewOf(result).fallback?.second_link?.kind).toBe('preselected');
+    expect(routesOf(made)).not.toContain(`POST /book_check/${LOCATION}`);
+  });
+
+  it('gives widget_inactive with the plain form link and no second link', async () => {
+    const made = setup({ company: loadFixture('company', 'inactive') });
+    const result = await made.invoke(PAIR);
+    const out = expectFallback(
+      result,
+      'widget_inactive',
+      WIDGET_INACTIVE_SENTENCE
+    );
+    expect(out.fallback?.link?.kind).toBe('booking_form');
+    expect(out.fallback?.second_link).toBeNull();
+    expect(textOf(result)).not.toContain(WIDGET_ONE_AT_A_TIME);
+  });
+
+  it('gives a single booking no second link and no per-appointment wording', async () => {
+    const made = setup();
+    const result = await made.invoke({ ...SELECTION, service_ids: [10303532] });
+    const out = expectFallback(result, 'prepayment', PREPAYMENT_SENTENCE);
+    expect(out.fallback?.second_link).toBeNull();
+    expect(textOf(result)).not.toContain('one link for each appointment');
+  });
+});
+
+describe('me_book tokens do not cross between a single booking and a pair (T-05-05)', () => {
+  const NOT_VALID =
+    'Nothing was booked: this confirmation_token is not valid for this selection and sign-in.';
+
+  async function tokenOf(made: Setup, args: Record<string, unknown>) {
+    const result = await made.invoke(args);
+    const token = (
+      result.result.structuredContent as { confirmation_token: string }
+    ).confirmation_token;
+    made.upstream.calls.length = 0;
+    return token;
+  }
+
+  async function expectNotValid(
+    made: Setup,
+    args: Record<string, unknown>
+  ): Promise<void> {
+    const result = await made.invoke(args);
+    expect(result.result.isError).toBe(true);
+    expect(textOf(result)).toContain(NOT_VALID);
+    expect(made.upstream.calls).toEqual([]);
+  }
+
+  it('refuses a single token for a pair', async () => {
+    const made = setup();
+    const token = await tokenOf(made, SELECTION);
+    await expectNotValid(made, { ...PAIR, confirmation_token: token });
+  });
+
+  it('refuses a pair token for a single booking', async () => {
+    const made = setup();
+    const token = await tokenOf(made, PAIR);
+    await expectNotValid(made, { ...SELECTION, confirmation_token: token });
+  });
+
+  it('refuses a pair token for a changed second team member or second service', async () => {
+    const made = setup();
+    const token = await tokenOf(made, PAIR);
+    await expectNotValid(made, {
+      ...PAIR,
+      second_appointment: {
+        ...PAIR.second_appointment,
+        team_member_id: 2098147,
+      },
+      confirmation_token: token,
+    });
+    await expectNotValid(made, {
+      ...PAIR,
+      second_appointment: {
+        ...PAIR.second_appointment,
+        service_ids: [10303533],
+      },
+      confirmation_token: token,
+    });
+  });
+
+  it('still books the pair with the pair token', async () => {
+    const made = setup({
+      create: loadFixture('book_record_create', 'created_pair'),
+    });
+    const token = await tokenOf(made, PAIR);
+    const result = await made.invoke({ ...PAIR, confirmation_token: token });
+    expect(result.result.isError).not.toBe(true);
+    expect(previewOf(result).status).toBe('booked');
+  });
+});
+
+const RULES: BusinessRules = {
+  cancelAllowed: true,
+  cancelBeforeSeconds: 7200,
+  moveAllowed: true,
+  moveBeforeSeconds: 7200,
+};
+
+describe('cancelUntil: the latest time the client can still cancel online (D-04, T-05-15)', () => {
+  it('subtracts the limit from the start and keeps the offset of the slot', () => {
+    expect(cancelUntil('2026-11-02T18:00:00+07:00', RULES)).toBe(
+      '2026-11-02T16:00:00+07:00'
+    );
+  });
+
+  it('crosses the date, the month and the year with a long limit', () => {
+    const day = { ...RULES, cancelBeforeSeconds: 86_400 };
+    expect(cancelUntil('2026-11-02T18:00:00+07:00', day)).toBe(
+      '2026-11-01T18:00:00+07:00'
+    );
+    expect(cancelUntil('2026-11-01T01:30:00+07:00', RULES)).toBe(
+      '2026-10-31T23:30:00+07:00'
+    );
+    expect(cancelUntil('2027-01-01T00:30:00+03:00', RULES)).toBe(
+      '2026-12-31T22:30:00+03:00'
+    );
+  });
+
+  it('keeps a half-hour offset and a negative offset', () => {
+    expect(cancelUntil('2026-11-02T10:00:00+05:30', RULES)).toBe(
+      '2026-11-02T08:00:00+05:30'
+    );
+    expect(cancelUntil('2026-11-02T10:00:00-05:30', RULES)).toBe(
+      '2026-11-02T08:00:00-05:30'
+    );
+  });
+
+  it('handles a leap day', () => {
+    expect(cancelUntil('2028-03-01T01:00:00+03:00', RULES)).toBe(
+      '2028-02-29T23:00:00+03:00'
+    );
+  });
+
+  it('is the start itself when the business sets no limit', () => {
+    const none = { ...RULES, cancelBeforeSeconds: 0 };
+    expect(cancelUntil('2026-11-02T18:00:00+07:00', none)).toBe(
+      '2026-11-02T18:00:00+07:00'
+    );
+  });
+
+  it('is null when the limit is not stated', () => {
+    const unknown = { ...RULES, cancelBeforeSeconds: null };
+    expect(cancelUntil('2026-11-02T18:00:00+07:00', unknown)).toBeNull();
+  });
+
+  it('is null when the business does not allow online cancellation or does not say', () => {
+    for (const cancelAllowed of [false, null]) {
+      expect(
+        cancelUntil('2026-11-02T18:00:00+07:00', { ...RULES, cancelAllowed })
+      ).toBeNull();
+    }
+  });
+
+  it('is null for a datetime that is not a slot', () => {
+    expect(cancelUntil('tomorrow evening', RULES)).toBeNull();
+  });
+});
+
+function companyWithRules(
+  rules: Record<string, number | boolean | null>
+): FakeReply {
+  const fixture = loadFixture('company', 'default');
+  const body = fixture.body as { data: Record<string, unknown> };
+  return { ...fixture, body: { ...body, data: { ...body.data, ...rules } } };
+}
+
+function cancelUntilOf(invocation: ToolInvocation): string | null {
+  const out = previewOf(invocation).preview;
+  if (out === null) throw new Error('no preview');
+  return out.cancel_until;
+}
+
+describe('me_book preview: cancel_until (D-04)', () => {
+  it('names the latest online cancellation time two hours before the slot, in the slot offset', async () => {
+    const made = setup();
+    const result = await made.invoke(SELECTION);
+    expect(result.result.isError).not.toBe(true);
+    expect(cancelUntilOf(result)).toBe('2099-01-12T09:00:00+03:00');
+    expect(textOf(result)).toContain(
+      'Latest online cancellation: 2099-01-12 09:00 (UTC+03:00).'
+    );
+  });
+
+  it('crosses the date when the limit is a day', async () => {
+    const made = setup({
+      company: companyWithRules({ allow_delete_record_delay_step: 86_400 }),
+    });
+    const result = await made.invoke(SELECTION);
+    expect(cancelUntilOf(result)).toBe('2099-01-11T11:00:00+03:00');
+  });
+
+  it('is null and unnamed when the business does not allow online cancellation', async () => {
+    const made = setup({
+      company: companyWithRules({ allow_delete_record: false }),
+    });
+    const result = await made.invoke(SELECTION);
+    expect(cancelUntilOf(result)).toBeNull();
+    expect(textOf(result)).not.toContain('Latest online cancellation');
+  });
+
+  it('is null and unnamed when the card states no limit', async () => {
+    const made = setup({
+      company: companyWithRules({ allow_delete_record_delay_step: null }),
+    });
+    const result = await made.invoke(SELECTION);
+    expect(cancelUntilOf(result)).toBeNull();
+    expect(textOf(result)).not.toContain('Latest online cancellation');
+  });
+
+  it('is the same on a pair preview', async () => {
+    const made = setup({ check: loadFixture('book_check', 'pair_created') });
+    const result = await made.invoke(PAIR);
+    expect(result.result.isError).not.toBe(true);
+    expect(cancelUntilOf(result)).toBe('2099-01-12T09:00:00+03:00');
+    expect(textOf(result)).toContain('Latest online cancellation:');
   });
 });
