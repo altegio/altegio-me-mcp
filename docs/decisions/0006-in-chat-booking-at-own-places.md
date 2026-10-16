@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-08
-- Deciders: Mike Kondakov
+- Deciders: Mike Kondakov (owner)
 - Amends: [ADR 0005](0005-own-places-first.md) D3 (the widget was the completion step for own
   places) and [ADR 0001](0001-scope-and-architecture.md) D2 (in-chat booking was product Phase 2)
 
@@ -12,7 +12,9 @@ Phase 4 delivered the signed-in client: own places, own bookings, the usual serv
 member, and a pre-filled widget link as the last step (ADR 0005 D3). Walking the flow as a
 client shows the problem: at a place the client already goes to, the widget is an extra step.
 The client is known (the user token), the business already has their name and phone, and the
-API creates, moves and cancels a booking for a signed-in client without a confirmation code:
+API creates, moves and cancels a booking for a signed-in client without a confirmation code
+(confirmed by the platform owner 2026-10-15: a signed-in client never needs an SMS code for
+`book_record`, and a code is never typed into the chat):
 `POST /book_record/{loc}` with `Authorization: Bearer <partner>, User <user>`, `PUT
 /book_record/{loc}/{record_id}` ("Change Online Booking Date/Time", partner + user), `DELETE
 /user/records/{record_id}/{record_hash}` ("record_id is enough to delete the appointment if the

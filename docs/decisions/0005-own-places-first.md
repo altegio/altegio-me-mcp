@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-08
-- Deciders: Mike Kondakov, after the 2026-10-07 1-1 with Yri Petrou (platform owner)
+- Deciders: Mike Kondakov (owner), after the 2026-10-07 1-1 with Yri Petrou (platform owner)
 - Amends: [ADR 0001](0001-scope-and-architecture.md) D2 (phase order) and D4 (catalog, parked),
   and [ADR 0004](0004-caller-authorization-tiers.md) D6 (interactive hosts no longer wait for a
   later phase: the client tier is the core of milestone v1)
@@ -78,6 +78,11 @@ team (I8) is raised after the case research, so it names the scopes and tools th
 app** (a banner and a short video with the example cases), so clients add the connector from the
 directory rather than through "add custom connection". The directory submission moves after the
 first case ships, not before.
+
+*Confirmed 2026-10-15 by the platform owner: #20 (a signed-in client books at any business) and
+#21 (`business_search` over `GET /companies` as it is) stand; "find my places by phone" is
+`me_list_places` after the sign-in, no separate tool; a cross-vendor search for agent platforms is
+a separate product, not `/me`.*
 
 ## Consequences
 
