@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-06
-- Deciders: ypetrou (y@alteg.io)
+- Deciders: Yri Petrou (platform owner); amendments by Mike Kondakov (owner) where marked
 - Amends: [ADR 0001](0001-scope-and-architecture.md) (Phase 1 is no longer anonymous) and
   [ADR 0002](0002-public-address-on-platform-proxy.md) (the `/me` lane admits partner tokens, not
   anonymous callers)
@@ -80,7 +80,14 @@ measured.
 **D4. Client tier: OAuth 2.1 for actions on one client's behalf (Phase 2).** The platform proxy,
 the authorization server on `mcp.alteg.io`, signs the client in by phone and SMS code
 (`/user/auth`), keeps the Altegio user token encrypted as it does for Pro, and forwards it
-signed. Tools that act for a client need `mcp:me:book`; a partner token never grants it.
+signed. *Amended 2026-10-16 (platform owner's decisions of 2026-10-15): the sign-in is a
+separate authorization server for `/me`, issuer `https://mcp.alteg.io/oauth/me`, with its own
+`/authorize`, `/token` and `/register`, its own signing key, client registry and sessions; `/pro`
+and `/me` tokens never accept each other. The sign-in calls the network-wide
+`POST /booking/yplaces/code` and `POST /booking/yplaces/auth` with the account-2630 token, not
+the per-business `/user/auth`; Altegio pays for the SMS; the user token is kept encrypted for 30
+days and the phone only as a hash. The SMS code is typed on the proxy's page and never into the
+chat, in any scenario. Built as altegio-mcp-platform PR #255 (owner).* Tools that act for a client need `mcp:me:book`; a partner token never grants it.
 Compliance rule R14 makes every writing tool require it.
 
 **D5. Who enforces what.** The proxy authenticates (no credential, 401). This server checks the
