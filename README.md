@@ -501,6 +501,9 @@ npm run check
 runs lint, format check, typecheck, the Jest tests and the build, in that order. It is the same
 set the CI job runs. Tests use Jest with ts-jest, as in Altegio.Pro MCP, and live in
 `__tests__/` directories next to the code. Run them with `npm test` or `npx jest <path>`.
+ts-jest only transpiles; `npm run typecheck` type-checks the sources and the tests. Jest runs
+two workers and replaces one once its heap passes 256 MB, so a full run stays near 1 GB on any
+machine; there is no need to add `--runInBand` or `--maxWorkers`.
 
 The compliance suite (`src/compliance`) runs every registered tool through rules R1-R14 and fails
 the build when a tool:
