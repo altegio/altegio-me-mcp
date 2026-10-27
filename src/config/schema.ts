@@ -24,6 +24,7 @@ const PARTNER_TOKEN_REQUIRED =
 export const CONFIG_KEYS = [
   'PORT',
   'ALTEGIO_API_BASE',
+  'ALTEGIO_APP_BASE',
   'ALTEGIO_API_TOKEN',
   'ALTEGIO_API_TOKEN_FILE',
   'PUBLIC_BASE_URL',
@@ -48,6 +49,7 @@ export const CONFIG_KEYS = [
   'EDGE_POOL_BURST',
   'EDGE_POOL_REFILL_PER_SEC',
   'GATE_MAX_QUEUE_PER_KEY',
+  'MARKETPLACE_APPLICATION_ID',
 ] as const;
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -161,6 +163,9 @@ const ConfigSchema = z
       .pipe(z.number().int().min(1).max(65535))
       .default(8080),
     ALTEGIO_API_BASE: httpUrl().default('https://api.alteg.io/api/v1'),
+    // The Integrations Hub partner routes live on the app host, not under
+    // the API base (the installation status of the gate below).
+    ALTEGIO_APP_BASE: httpUrl().default('https://app.alteg.io'),
     ALTEGIO_API_TOKEN: z.string().min(1).optional(),
     ALTEGIO_API_TOKEN_FILE: z
       .string()
@@ -220,6 +225,15 @@ const ConfigSchema = z
     EDGE_POOL_BURST: positiveInteger(200),
     EDGE_POOL_REFILL_PER_SEC: positiveNumber(20),
     GATE_MAX_QUEUE_PER_KEY: positiveInteger(8),
+    // The assistant-booking gate (ADR 0006, D3 amended 2026-10-27): the id of
+    // this server's Integrations Hub application (2642 in production). Set, a
+    // client books from the chat only where it is active; unset, everywhere.
+    MARKETPLACE_APPLICATION_ID: z
+      .string()
+      .regex(/^\d+$/)
+      .transform(Number)
+      .pipe(z.number().int().positive())
+      .optional(),
   })
   .superRefine(
     (config, ctx) => {
@@ -228,6 +242,7 @@ const ConfigSchema = z
       const {
         NODE_ENV: nodeEnv,
         ALTEGIO_API_BASE: base,
+        ALTEGIO_APP_BASE: appBase,
         ALTEGIO_API_TOKEN: token,
         ALTEGIO_API_TOKEN_FILE: tokenFile,
         PROXY_AUTH: proxyAuth,
@@ -238,6 +253,7 @@ const ConfigSchema = z
       } = config as {
         NODE_ENV?: unknown;
         ALTEGIO_API_BASE?: unknown;
+        ALTEGIO_APP_BASE?: unknown;
         ALTEGIO_API_TOKEN?: unknown;
         ALTEGIO_API_TOKEN_FILE?: unknown;
         PROXY_AUTH?: unknown;
@@ -296,13 +312,18 @@ const ConfigSchema = z
       }
 
       if (nodeEnv !== 'production') return;
-      if (typeof base !== 'string' || !URL.canParse(base)) return;
-      if (new URL(base).protocol !== 'https:') {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['ALTEGIO_API_BASE'],
-          message: 'https required in production',
-        });
+      for (const [key, value] of [
+        ['ALTEGIO_API_BASE', base],
+        ['ALTEGIO_APP_BASE', appBase],
+      ] as const) {
+        if (typeof value !== 'string' || !URL.canParse(value)) continue;
+        if (new URL(value).protocol !== 'https:') {
+          ctx.addIssue({
+            code: 'custom',
+            path: [key],
+            message: 'https required in production',
+          });
+        }
       }
     },
     { when: () => true }
@@ -324,6 +345,11 @@ const MESSAGES: Readonly<
     invalid: 'must be an integer between 1 and 65535',
   },
   ALTEGIO_API_BASE: {
+    missing: 'is required (see .env.example)',
+    invalid:
+      'must be an https URL (http is accepted only when NODE_ENV is development or test)',
+  },
+  ALTEGIO_APP_BASE: {
     missing: 'is required (see .env.example)',
     invalid:
       'must be an https URL (http is accepted only when NODE_ENV is development or test)',
@@ -426,6 +452,10 @@ const MESSAGES: Readonly<
     invalid: POSITIVE_NUMBER,
   },
   GATE_MAX_QUEUE_PER_KEY: {
+    missing: 'is required (see .env.example)',
+    invalid: POSITIVE_INTEGER,
+  },
+  MARKETPLACE_APPLICATION_ID: {
     missing: 'is required (see .env.example)',
     invalid: POSITIVE_INTEGER,
   },

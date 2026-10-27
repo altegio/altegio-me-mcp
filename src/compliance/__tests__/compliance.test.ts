@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import {
   BOOKING_ROUTES,
   CLIENT_WRITE_ROUTES,
+  MARKETPLACE_ROUTES,
   USER_ROUTES,
 } from '../../booking/client.js';
 import { createMcpServer } from '../../mcp/create-server.js';
@@ -154,10 +155,11 @@ describe('compliant tools', () => {
     ]);
   });
 
-  it('declares only BOOKING_ROUTES, USER_ROUTES or CLIENT_WRITE_ROUTES entries as upstream calls', () => {
+  it('declares only BOOKING_ROUTES, USER_ROUTES, MARKETPLACE_ROUTES or CLIENT_WRITE_ROUTES entries as upstream calls', () => {
     const routes = [
       ...Object.values(BOOKING_ROUTES),
       ...Object.values(USER_ROUTES),
+      ...Object.values(MARKETPLACE_ROUTES),
       ...Object.values(CLIENT_WRITE_ROUTES),
     ];
     for (const tool of productionTools) {

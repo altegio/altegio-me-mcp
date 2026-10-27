@@ -1,4 +1,5 @@
 import type { BookingClient } from '../booking/client.js';
+import type { InstallationGate } from '../booking/installation.js';
 import { bookCheck } from './book.js';
 import {
   businessGet,
@@ -19,6 +20,11 @@ export interface ToolDeps {
   booking: BookingClient;
   /** Confirmation tokens of the write tools; absent uses the process-wide default. */
   confirmations?: Confirmations;
+  /**
+   * The assistant-booking gate (ADR 0006, D3 amended 2026-10-27): whether a
+   * business takes bookings from the chat. Absent, every business does.
+   */
+  installations?: InstallationGate;
 }
 
 // Every tool reads, apart from me_book and the tools that change a booking, which
