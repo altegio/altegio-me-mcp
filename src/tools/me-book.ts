@@ -2,11 +2,13 @@ import { z } from 'zod';
 import {
   BOOKING_ROUTES,
   CLIENT_WRITE_ROUTES,
+  MARKETPLACE_ROUTES,
   USER_ROUTES,
   type BusinessCard,
   type BusinessRules,
   type CheckSelection,
 } from '../booking/client.js';
+import type { InstallationVerdict } from '../booking/installation.js';
 import {
   bookableFormUrl,
   buildBookingLink,
@@ -192,6 +194,7 @@ const FALLBACK_REASONS = [
   'prepayment',
   'membership',
   'widget_inactive',
+  'not_connected',
   'not_confirmed',
   'required_field',
 ] as const;
@@ -251,7 +254,7 @@ const bookOutput = z.strictObject({
       reason: z
         .enum(FALLBACK_REASONS)
         .describe(
-          "prepayment: a chosen service needs online prepayment, or its prepayment is not known. membership: a chosen service is for membership holders. widget_inactive: the business takes no online bookings right now. not_confirmed: the business's booking service could not confirm the booking from here. required_field: the business needs a detail the client's Altegio profile does not have."
+          "prepayment: a chosen service needs online prepayment, or its prepayment is not known. membership: a chosen service is for membership holders. widget_inactive: the business takes no online bookings right now. not_connected: the business does not take bookings from AI assistants, and its booking widget is the way to book. not_confirmed: the business's booking service could not confirm the booking from here. required_field: the business needs a detail the client's Altegio profile does not have."
         ),
       link: z
         .strictObject({
@@ -476,6 +479,24 @@ function widgetInactiveFallback(
   );
 }
 
+/**
+ * Whether the business takes bookings from the chat (ADR 0006, D3 amended
+ * 2026-10-27). Without a gate every business does; a gate that cannot say
+ * answers `unknown`, which books as before.
+ */
+function gateVerdict(
+  deps: ToolDeps,
+  locationId: number,
+  ctx: ToolContext
+): Promise<InstallationVerdict> {
+  return deps.installations === undefined
+    ? Promise.resolve('accepts')
+    : deps.installations.verdict(locationId, {
+        signal: ctx.signal,
+        key: ctx.clientKey,
+      });
+}
+
 /** Preview: validates the slot and issues the confirmation token. Nothing is written upstream. */
 async function preview(
   input: BookInput,
@@ -488,19 +509,32 @@ async function preview(
   const first = firstAppointment(input);
   const second = secondAppointment(input);
   const appointments = second === null ? [first] : [first, second];
-  const [cardResult, catalogResult, membersResult] = await Promise.allSettled([
-    deps.booking.company(input.location_id, call),
-    deps.booking.services(input.location_id, {}, call),
-    appointments.some((appointment) => appointment.teamMemberId > 0)
-      ? deps.booking.teamMembers(input.location_id, {}, call)
-      : Promise.resolve(null),
-  ]);
+  const [[cardResult, catalogResult, membersResult], verdict] =
+    await Promise.all([
+      Promise.allSettled([
+        deps.booking.company(input.location_id, call),
+        deps.booking.services(input.location_id, {}, call),
+        appointments.some((appointment) => appointment.teamMemberId > 0)
+          ? deps.booking.teamMembers(input.location_id, {}, call)
+          : Promise.resolve(null),
+      ]),
+      gateVerdict(deps, input.location_id, ctx),
+    ]);
   if (cardResult.status === 'rejected') throw toToolError(cardResult.reason);
   if (catalogResult.status === 'rejected') {
     throw toToolError(catalogResult.reason);
   }
   const card = cardResult.value;
   if (!canTakeOnlineBookings(card)) return widgetInactiveFallback(input, card);
+  // The business has not got, or has removed, this server's Integrations Hub
+  // application (ADR 0006, D3 amended 2026-10-27): its widget still books.
+  if (verdict === 'declines') {
+    return fallbackOutput(
+      input,
+      'not_connected',
+      ...selectionLinks(input, card)
+    );
+  }
 
   const currency = sanitizeUntrusted(card.currency, {
     maxChars: LABEL_MAX_CHARS,
@@ -829,7 +863,7 @@ async function fallbackResult(
   input: BookInput,
   deps: ToolDeps,
   ctx: ToolContext,
-  reason: 'not_confirmed' | 'required_field'
+  reason: 'not_connected' | 'not_confirmed' | 'required_field'
 ): Promise<BookOutput> {
   let card;
   try {
@@ -867,6 +901,12 @@ async function confirm(
           : 'Nothing was booked: this confirmation_token is not valid for this selection and sign-in.',
       NEW_PREVIEW_NEXT
     );
+  }
+
+  // The owner may have removed the application since the preview; the gate
+  // answers from its cache within the token's life.
+  if ((await gateVerdict(deps, input.location_id, ctx)) === 'declines') {
+    return fallbackResult(input, deps, ctx, 'not_connected');
   }
 
   const profile = await deps.booking.myProfile(userSide).catch((error) => {
@@ -1048,6 +1088,8 @@ const FALLBACK_TEXT: Record<FallbackReason, string> = {
     "Not booked. A chosen service is for membership holders, which only the business's booking widget checks.",
   widget_inactive:
     'Not booked. This business does not take online bookings right now.',
+  not_connected:
+    'Not booked. This business does not take bookings from AI assistants.',
   not_confirmed:
     'Not booked: the business could not confirm this booking from here.',
   required_field:
@@ -1139,7 +1181,7 @@ export const meBook = defineTool<typeof bookInput, typeof bookOutput, ToolDeps>(
     name: TOOL_NAME,
     title: 'Book me in',
     description:
-      "Books for the signed-in client at a business, one of their own places or one they know by id, in two calls. The first call checks the time with the business and returns a preview and a confirmation_token valid for 10 minutes; nothing is booked. After the client agrees, the second call with the same selection and that token creates the booking and returns it. The client's name and phone come from their Altegio profile. Where the chat cannot complete a booking, namely online prepayment, a membership-only service or an inactive booking widget, the answer states the reason and carries the pre-filled booking widget link. With the optional second_appointment (a different named team member, the same start) it books two people side by side in one preview and one confirmation, both under the client's name. Needs the client's sign-in.",
+      "Books for the signed-in client at a business, one of their own places or one they know by id, in two calls. The first call checks the time with the business and returns a preview and a confirmation_token valid for 10 minutes; nothing is booked. After the client agrees, the second call with the same selection and that token creates the booking and returns it. The client's name and phone come from their Altegio profile. Where the chat cannot complete a booking, namely online prepayment, a membership-only service, an inactive booking widget or a business that does not take bookings from AI assistants, the answer states the reason and carries the pre-filled booking widget link. With the optional second_appointment (a different named team member, the same start) it books two people side by side in one preview and one confirmation, both under the client's name. Needs the client's sign-in.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -1152,6 +1194,7 @@ export const meBook = defineTool<typeof bookInput, typeof bookOutput, ToolDeps>(
       BOOKING_ROUTES.company,
       BOOKING_ROUTES.services,
       BOOKING_ROUTES.teamMembers,
+      MARKETPLACE_ROUTES.installation,
       BOOKING_ROUTES.check,
       USER_ROUTES.profile,
       CLIENT_WRITE_ROUTES.create,

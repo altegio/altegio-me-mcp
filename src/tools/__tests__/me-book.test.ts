@@ -5,7 +5,10 @@ import {
   loadFixture,
   type FakeFetch,
   type FakeReply,
+  type FixtureResponse,
+  type RecordedCall,
 } from '../../booking/__tests__/helpers/fake-fetch.js';
+import { createInstallationGate } from '../../booking/installation.js';
 import { createConfirmations } from '../confirmation.js';
 import { NO_TOOL_CONTEXT, type ToolContext } from '../context.js';
 import type { ToolInvocation } from '../factory.js';
@@ -31,6 +34,20 @@ const SELECTION = {
 };
 
 const SECOND_TEAM_MEMBER = 2098146;
+/** The Integrations Hub application of the assistant-booking gate. */
+const APPLICATION = 2642;
+const INSTALLED: FakeReply = {
+  status: 200,
+  body: {
+    success: true,
+    data: { connection_status: { status: 'active' }, logs: [], payments: [] },
+    meta: [],
+  },
+};
+const NOT_INSTALLED: FakeReply = {
+  status: 404,
+  body: { success: false, meta: { message: 'An error occurred' } },
+};
 const PAIR = {
   ...SELECTION,
   second_appointment: {
@@ -48,7 +65,10 @@ const BAIT = [
 
 interface Setup {
   upstream: FakeFetch;
-  invoke: (args: Record<string, unknown>) => Promise<ToolInvocation>;
+  invoke: (
+    args: Record<string, unknown>,
+    ctx?: ToolContext
+  ) => Promise<ToolInvocation>;
 }
 
 function setup(
@@ -61,9 +81,21 @@ function setup(
     /** The card of location 731000, a place the client has no record at; its catalog is the default one. */
     otherCompany?: FakeReply;
     timeoutMs?: number;
+    /** The assistant-booking gate for application 2642; absent, no gate. */
+    gate?: { installation?: FakeReply; ttlMs?: number };
   } = {}
 ): Setup {
   const upstream = fakeFetch([
+    {
+      method: 'GET',
+      path: `/marketplace/salon/${LOCATION}/application/${APPLICATION}`,
+      reply: (call) => installationReply(options.gate?.installation, call),
+    },
+    {
+      method: 'GET',
+      path: `/marketplace/salon/731000/application/${APPLICATION}`,
+      reply: (call) => installationReply(options.gate?.installation, call),
+    },
     {
       method: 'GET',
       path: '/user/records',
@@ -129,11 +161,28 @@ function setup(
   const deps = {
     booking,
     confirmations: createConfirmations({ secret: SECRET }),
+    installations:
+      options.gate === undefined
+        ? undefined
+        : createInstallationGate({
+            booking,
+            applicationId: APPLICATION,
+            ttlMs: options.gate.ttlMs,
+          }),
   };
   return {
     upstream,
-    invoke: (args) => meBook.invoke(args, deps, CTX),
+    invoke: (args, ctx = CTX) => meBook.invoke(args, deps, ctx),
   };
+}
+
+/** A scripted installation answer, or the installed one; a function answers per call. */
+function installationReply(
+  reply: FakeReply | undefined,
+  call: RecordedCall
+): FixtureResponse | Promise<FixtureResponse> {
+  const chosen = reply ?? INSTALLED;
+  return typeof chosen === 'function' ? chosen(call) : chosen;
 }
 
 function textOf(invocation: ToolInvocation): string {
@@ -1223,5 +1272,114 @@ describe('me_book preview: cancel_until (D-04)', () => {
     expect(result.result.isError).not.toBe(true);
     expect(cancelUntilOf(result)).toBe('2099-01-12T09:00:00+03:00');
     expect(textOf(result)).toContain('Latest online cancellation:');
+  });
+});
+
+describe('me_book and the assistant-booking gate (ADR 0006, D3 amended 2026-10-27)', () => {
+  const NOT_CONNECTED_SENTENCE =
+    'Not booked. This business does not take bookings from AI assistants.';
+  const HUB_ROUTE = `GET /marketplace/salon/${LOCATION}/application/${APPLICATION}`;
+
+  it('never asks the Hub without a gate', async () => {
+    const made = setup();
+    const { confirm } = await previewThenConfirm(made);
+    expect(previewOf(confirm).status).toBe('booked');
+    expect(
+      routesOf(made).some((route) => route.includes('/marketplace/'))
+    ).toBe(false);
+  });
+
+  it('asks the Hub once for the preview and the confirm, and books where the application is active', async () => {
+    const made = setup({ gate: {} });
+    const preview = await made.invoke(SELECTION);
+    expect(previewOf(preview).status).toBe('preview');
+    expect(routesOf(made).filter((route) => route === HUB_ROUTE)).toHaveLength(
+      1
+    );
+    const token = (
+      preview.result.structuredContent as { confirmation_token: string }
+    ).confirmation_token;
+    made.upstream.calls.length = 0;
+    const confirm = await made.invoke({
+      ...SELECTION,
+      confirmation_token: token,
+    });
+    expect(previewOf(confirm).status).toBe('booked');
+    // The verdict was cached by the preview.
+    expect(routesOf(made)).not.toContain(HUB_ROUTE);
+  });
+
+  it('signs the Hub read with the server token even when the caller brought their own', async () => {
+    const made = setup({ gate: {} });
+    await made.invoke(SELECTION, {
+      ...CTX,
+      partnerToken: 'caller-partner-token-0001',
+    });
+    const hub = made.upstream.calls.find((call) =>
+      call.url.pathname.includes('/marketplace/')
+    );
+    const card = made.upstream.calls.find(
+      (call) => call.url.pathname === `/api/v1/company/${LOCATION}`
+    );
+    expect(hub?.headers.get('authorization')).toBe(`Bearer ${PARTNER_TOKEN}`);
+    expect(card?.headers.get('authorization')).toBe(
+      'Bearer caller-partner-token-0001'
+    );
+  });
+
+  it('hands off the pre-selected widget link where the application is not installed, with no slot check and no token', async () => {
+    const made = setup({ gate: { installation: NOT_INSTALLED } });
+    const result = await made.invoke(SELECTION);
+    const out = expectFallback(result, 'not_connected', NOT_CONNECTED_SENTENCE);
+    expect(out.fallback?.link?.kind).toBe('preselected');
+    expect(textOf(result)).toContain(out.fallback?.link?.url ?? 'missing');
+    expect(routesOf(made)).not.toContain(`POST /book_check/${LOCATION}`);
+    expect(routesOf(made)).not.toContain(`POST /book_record/${LOCATION}`);
+  });
+
+  it('keeps widget_inactive ahead of the gate for a business whose widget is off', async () => {
+    const made = setup({
+      company: loadFixture('company', 'inactive'),
+      gate: { installation: NOT_INSTALLED },
+    });
+    const result = await made.invoke(SELECTION);
+    expectFallback(result, 'widget_inactive', WIDGET_INACTIVE_SENTENCE);
+  });
+
+  it('refuses at the confirm, with the link and no create, when the application was removed after the preview', async () => {
+    let installed = true;
+    const made = setup({
+      gate: {
+        ttlMs: 0,
+        installation: () => (installed ? INSTALLED : NOT_INSTALLED),
+      },
+    });
+    const preview = await made.invoke(SELECTION);
+    expect(previewOf(preview).status).toBe('preview');
+    installed = false;
+    const token = (
+      preview.result.structuredContent as { confirmation_token: string }
+    ).confirmation_token;
+    made.upstream.calls.length = 0;
+    const confirm = await made.invoke({
+      ...SELECTION,
+      confirmation_token: token,
+    });
+    expectFallback(confirm, 'not_connected', NOT_CONNECTED_SENTENCE);
+    expect(routesOf(made)).not.toContain(`POST /book_record/${LOCATION}`);
+    expect(routesOf(made)).not.toContain('GET /booking/user/data');
+  });
+
+  it('books as before when the Hub cannot answer', async () => {
+    const made = setup({ gate: { installation: { status: 503, body: '' } } });
+    const { confirm } = await previewThenConfirm(made);
+    expect(previewOf(confirm).status).toBe('booked');
+  });
+
+  it('declares the Hub read among its upstream routes', () => {
+    expect(meBook.meta.upstream).toContainEqual({
+      method: 'GET',
+      route: '/marketplace/salon/{location_id}/application/{application_id}',
+    });
   });
 });

@@ -231,6 +231,23 @@ export const userPlacesDataSchema = z.array(userPlaceSchema);
 
 export type UserPlacesData = z.infer<typeof userPlacesDataSchema>;
 
+/**
+ * `data` of GET /marketplace/salon/{location_id}/application/{application_id}
+ * (Integrations Hub, documented): the installation status of one application
+ * at one location. Recorded 2026-10-27 at location 722227: `pending` after the
+ * owner's grant, `active` after the partner's confirmation, and 404 after an
+ * uninstall, the same answer as for a location that never installed it.
+ */
+export const installationStatusDataSchema = z.looseObject({
+  connection_status: z.looseObject({
+    status: z.enum(['pending', 'freezed', 'active']),
+  }),
+});
+
+export type InstallationStatusData = z.infer<
+  typeof installationStatusDataSchema
+>;
+
 const userRecordServiceSchema = z.looseObject({
   id: z.number().int(),
   title: text,

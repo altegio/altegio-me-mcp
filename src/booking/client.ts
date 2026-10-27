@@ -17,6 +17,7 @@ import {
   companiesDataSchema,
   companyDataSchema,
   countriesDataSchema,
+  installationStatusDataSchema,
   datesDataSchema,
   servicesDataSchema,
   teamMembersDataSchema,
@@ -123,6 +124,24 @@ export const CLIENT_WRITE_ROUTES = Object.freeze({
     route: '/user/records/{record_id}/{record_hash}',
   } as const),
 });
+
+/**
+ * The Integrations Hub route of the assistant-booking gate (ADR 0006, D3
+ * amended 2026-10-27): the installation status of this server's own
+ * marketplace application at a location. It lives on the app host
+ * (`appBase`, https://app.alteg.io), not under the public API base, and is
+ * read with the server's own partner token only: the application belongs to
+ * developer account 2630, and a caller's token says nothing about it.
+ */
+export const MARKETPLACE_ROUTES = Object.freeze({
+  installation: Object.freeze({
+    method: 'GET',
+    route: '/marketplace/salon/{location_id}/application/{application_id}',
+  } as const),
+});
+
+/** What the Hub says about an application at a location; `none` is its 404. */
+export type InstallationStatus = 'pending' | 'freezed' | 'active' | 'none';
 
 /**
  * The hash segment of the cancel path. The recording of 2026-10-08 settled it
@@ -738,7 +757,13 @@ function createFullname(data: BookingUserData): string | null {
   return joined === '' ? null : joined;
 }
 
-export type BookingClientOptions = BookingHttpOptions;
+/** The host of the Integrations Hub partner routes (MARKETPLACE_ROUTES). */
+export const DEFAULT_APP_BASE = 'https://app.alteg.io';
+
+export interface BookingClientOptions extends BookingHttpOptions {
+  /** Base URL of the Integrations Hub partner routes; the same token and gate. */
+  appBase?: string;
+}
 
 /** A country or a city of the reference lists. The title is raw upstream text. */
 export interface ReferencePlace {
@@ -794,6 +819,8 @@ export type PartnerTokenVerdict = 'valid' | 'invalid' | 'unavailable';
 
 export class BookingClient {
   private readonly http: BookingHttp;
+  /** The Integrations Hub partner routes: another host, the same token and gate. */
+  private readonly appHttp: BookingHttp;
   private readonly now: () => number;
   /**
    * Reference data reused across calls of one process: the countries, the
@@ -804,7 +831,12 @@ export class BookingClient {
   private readonly reference = new Map<string, CacheEntry<unknown>>();
 
   constructor(options: BookingClientOptions) {
-    this.http = new BookingHttp(options);
+    const { appBase, ...http } = options;
+    this.http = new BookingHttp(http);
+    this.appHttp = new BookingHttp({
+      ...http,
+      base: appBase ?? DEFAULT_APP_BASE,
+    });
     this.now = options.now ?? Date.now;
   }
 
@@ -1365,6 +1397,45 @@ export class BookingClient {
       }
       return 'unavailable';
     }
+  }
+
+  /**
+   * The installation status of marketplace application `applicationId` at a
+   * location, as the Hub reports it, or `none` for its 404, which it answers
+   * both for a location that never installed the application and for one
+   * that uninstalled it. Always signed with the server's own token: the
+   * application is ours. Any other failure is thrown as an UpstreamError.
+   */
+  async installationStatus(
+    locationId: number,
+    applicationId: number,
+    call?: Omit<UpstreamCallOptions, 'partnerToken' | 'userToken'>
+  ): Promise<InstallationStatus> {
+    assertLocationId(locationId);
+    assertPositiveInt(applicationId, 'application id');
+    const { route, method } = MARKETPLACE_ROUTES.installation;
+    let reply;
+    try {
+      reply = await this.appHttp.send({
+        method,
+        route,
+        path: `/marketplace/salon/${locationId}/application/${applicationId}`,
+        ...call,
+      });
+    } catch (error) {
+      if (error instanceof UpstreamError && error.kind === 'not_found') {
+        return 'none';
+      }
+      throw error;
+    }
+    const parsed = installationStatusDataSchema.safeParse(reply.data);
+    if (!parsed.success) {
+      throw new UpstreamError('contract_drift', route, {
+        status: reply.status,
+        cause: parsed.error,
+      });
+    }
+    return parsed.data.connection_status.status;
   }
 
   /** One call, its data parsed by `schema`; a parse failure is contract_drift. */

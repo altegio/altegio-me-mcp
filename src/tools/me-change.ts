@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   BOOKING_ROUTES,
   CLIENT_WRITE_ROUTES,
+  MARKETPLACE_ROUTES,
   USER_ROUTES,
   type BusinessRules,
   type OwnRecord,
@@ -72,6 +73,34 @@ function refusal(
   nextAction: string
 ): ToolError {
   return new ToolError(`${NOTHING_DONE[change]}: ${reason}`, nextAction);
+}
+
+/**
+ * The business has not got, or has removed, this server's Integrations Hub
+ * application (ADR 0006, D3 amended 2026-10-27): nothing of its is changed
+ * from the chat. Cancelling stays open, it is the client's own booking.
+ */
+function notConnected(change: Change): ToolError {
+  return refusal(
+    change,
+    'the business does not take bookings from AI assistants.',
+    `tell the user to move this booking in the Altegio.me app or in the business's booking widget, or ${CONTACT_ACTION}.`
+  );
+}
+
+/** Whether the business takes bookings from the chat; without a gate every business does. */
+async function assertConnected(
+  change: Change,
+  deps: ToolDeps,
+  locationId: number,
+  ctx: ToolContext
+): Promise<void> {
+  if (deps.installations === undefined) return;
+  const verdict = await deps.installations.verdict(locationId, {
+    signal: ctx.signal,
+    key: ctx.clientKey,
+  });
+  if (verdict === 'declines') throw notConnected(change);
 }
 
 function notAllowedOnline(change: Change): ToolError {
@@ -369,6 +398,7 @@ async function previewMove(
       throw toToolError(error);
     });
   if (card.rules.moveAllowed === false) throw notAllowedOnline('move');
+  await assertConnected('move', deps, record.locationId, ctx);
   if (record.services.length === 0) {
     throw refusal(
       'move',
@@ -431,6 +461,8 @@ async function confirmMove(
     Date.now()
   );
   try {
+    // The owner may have removed the application since the preview (cached).
+    await assertConnected('move', deps, record.locationId, ctx);
     await deps.booking.moveBooking(
       record.locationId,
       record.id,
@@ -517,6 +549,7 @@ export const meRescheduleBooking = defineTool<
   upstream: [
     USER_ROUTES.records,
     BOOKING_ROUTES.company,
+    MARKETPLACE_ROUTES.installation,
     BOOKING_ROUTES.check,
     CLIENT_WRITE_ROUTES.move,
   ],

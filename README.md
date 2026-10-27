@@ -330,6 +330,7 @@ values) when one is missing or invalid.
 |---|---|---|---|
 | `PORT` | HTTP port (Cloud Run sets it) | `8080` | no |
 | `ALTEGIO_API_BASE` | Base URL of the Altegio public API; must be https when NODE_ENV is production | `https://api.alteg.io/api/v1` | no |
+| `ALTEGIO_APP_BASE` | Base URL of the Altegio app host, where the Integrations Hub partner routes live (the installation status the assistant-booking gate reads); must be https when NODE_ENV is production | `https://app.alteg.io` | no |
 | `ALTEGIO_API_TOKEN` | Partner API token of developer account 2630 "Altegio AI" (in production the Secret Manager secret `MARKETPLACE_PARTNER_TOKEN`). Local runs use this plain form | none | this or `ALTEGIO_API_TOKEN_FILE`, non-empty |
 | `ALTEGIO_API_TOKEN_FILE` | Absolute path of a mounted file that holds the partner token; wins over `ALTEGIO_API_TOKEN` and is re-read lazily every 60 s, so a rotation of the shared secret needs no restart. An upstream 401 or 403 forces one re-read (at most once per 60 s) and one retry. An unreadable or empty file stops startup | none | this or `ALTEGIO_API_TOKEN` |
 | `PUBLIC_BASE_URL` | Public URL of the server; its origin is the allowed browser `Origin` | none | yes, http(s) URL |
@@ -354,6 +355,7 @@ values) when one is missing or invalid.
 | `EDGE_POOL_BURST` | Token-bucket size for the shared-egress pool. Above the request gate's capacity on purpose: under saturation the gate's in-band "busy, retry in N s" answer is friendlier to the model than an HTTP 429 | `200` | no |
 | `EDGE_POOL_REFILL_PER_SEC` | Token-bucket refill for the shared-egress pool, in requests per second | `20` | no |
 | `GATE_MAX_QUEUE_PER_KEY` | Most upstream calls one non-pool client may have waiting in the request gate; the shared pool is not capped per client | `8` | no |
+| `MARKETPLACE_APPLICATION_ID` | Id of this server's Integrations Hub application (2642 in production). Set, a client books and moves from the chat only at businesses where it is active; unset, at every business with online booking. Keep it unset until Altegio has switched the application on for the Altegio.me locations | none | no |
 
 `ALTEGIO_API_TOKEN` has the same name and the same rule (any non-empty string) as in Altegio.Pro
 MCP. [`.env.example`](.env.example) carries the placeholder `your_partner_token_here`, so a copied
@@ -437,9 +439,21 @@ client, a cancelled one included). Each tool takes two calls with the same argum
   it (the client is asked for a new preview elsewhere); set it to share confirmations across
   instances.
 - **The widget fallbacks.** What the chat cannot do returns `status: fallback` from `me_book`, with
-  a reason (`prepayment`, `membership`, `widget_inactive`, `not_confirmed` when the
-  booking service cannot confirm the booking from here, `required_field`) and the pre-filled widget
-  link, or the business contacts when there is no usable form. Nothing is booked in that case.
+  a reason (`prepayment`, `membership`, `widget_inactive`, `not_connected`, `not_confirmed` when
+  the booking service cannot confirm the booking from here, `required_field`) and the pre-filled
+  widget link, or the business contacts when there is no usable form. Nothing is booked in that
+  case.
+- **The assistant-booking gate** (ADR 0006, D3 amended 2026-10-27). With
+  `MARKETPLACE_APPLICATION_ID` set, a client books and moves from the chat only at a business
+  where that Integrations Hub application (2642, "Altegio.me MCP") is active: Altegio switches it
+  on for every location that has Altegio.me, and an owner turns the chat bookings off by removing
+  it in Integrations. `me_book` then answers `fallback` with `not_connected` and the widget link,
+  `me_reschedule_booking` refuses before any write, and cancelling stays open. The Hub answers 404
+  for a removed application exactly as for one never installed, so the gate asks only "is it
+  installed". The status is read with the server's own token on the app host
+  (`GET /marketplace/salon/{location_id}/application/{application_id}`) and cached per location
+  for 10 minutes; when the Hub cannot answer, the booking goes ahead and one
+  `installation_gate_unavailable` warning is logged. Unset, every business takes chat bookings.
 - **Personal data.** The client's name and phone are read from their Altegio profile for the
   create call only. They are never a tool input and never appear in a result or a log.
 - **Evidence.** The routes were recorded from a live create, move and cancel, and the three tools

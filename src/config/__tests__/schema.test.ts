@@ -58,6 +58,8 @@ describe('.env.example', () => {
     const config = loadConfig(readEnvExample());
     expect(config.PORT).toBe(8080);
     expect(config.ALTEGIO_API_BASE).toBe('https://api.alteg.io/api/v1');
+    expect(config.ALTEGIO_APP_BASE).toBe('https://app.alteg.io');
+    expect(config.MARKETPLACE_APPLICATION_ID).toBeUndefined();
     expect(config.ALTEGIO_API_TOKEN).toBe('your_partner_token_here');
     expect(config.LOG_LEVEL).toBe('info');
     expect(config.NODE_ENV).toBe('development');
@@ -83,6 +85,7 @@ describe('loadConfig defaults and required keys', () => {
     expect(loadConfig(VALID)).toEqual({
       PORT: 8080,
       ALTEGIO_API_BASE: 'https://api.alteg.io/api/v1',
+      ALTEGIO_APP_BASE: 'https://app.alteg.io',
       ALTEGIO_API_TOKEN: 'partner-token-value',
       PUBLIC_BASE_URL: 'https://mcp.example.com',
       LOG_LEVEL: 'info',
@@ -182,6 +185,41 @@ describe('loadConfig URLs and enums', () => {
       ]);
     }
   );
+
+  it.each(['not a url', 'ftp://example.com'])(
+    'rejects ALTEGIO_APP_BASE %j',
+    (url) => {
+      expect(issueKeys({ ...VALID, ALTEGIO_APP_BASE: url })).toEqual([
+        'ALTEGIO_APP_BASE',
+      ]);
+    }
+  );
+
+  it('requires https for ALTEGIO_APP_BASE in production', () => {
+    expect(
+      issueKeys({
+        ...VALID,
+        NODE_ENV: 'production',
+        ALTEGIO_APP_BASE: 'http://app.example.test',
+      })
+    ).toEqual(['ALTEGIO_APP_BASE']);
+  });
+
+  it('reads MARKETPLACE_APPLICATION_ID as a positive integer, or leaves the gate off', () => {
+    expect(
+      loadConfig({ ...VALID, MARKETPLACE_APPLICATION_ID: '2642' })
+        .MARKETPLACE_APPLICATION_ID
+    ).toBe(2642);
+    expect(
+      loadConfig({ ...VALID, MARKETPLACE_APPLICATION_ID: '' })
+        .MARKETPLACE_APPLICATION_ID
+    ).toBeUndefined();
+    for (const bad of ['0', '-1', '2642.5', 'abc']) {
+      expect(issueKeys({ ...VALID, MARKETPLACE_APPLICATION_ID: bad })).toEqual([
+        'MARKETPLACE_APPLICATION_ID',
+      ]);
+    }
+  });
 
   it('accepts http and https URLs outside production', () => {
     const config = loadConfig({
@@ -383,6 +421,7 @@ describe('ConfigError reporting', () => {
       ALTEGIO_API_TOKEN: 'x',
       ALTEGIO_API_TOKEN_FILE: 'relative/token',
       ALTEGIO_API_BASE: 'nope',
+      ALTEGIO_APP_BASE: 'nope',
       PORT: 'abc',
       PROXY_AUTH: 'maybe',
       MCP_PROXY_BACKEND_KEY: 'short',
@@ -403,6 +442,7 @@ describe('ConfigError reporting', () => {
       EDGE_POOL_BURST: '0',
       EDGE_POOL_REFILL_PER_SEC: '0',
       GATE_MAX_QUEUE_PER_KEY: '0',
+      MARKETPLACE_APPLICATION_ID: 'abc',
     });
     expect(error.issues.map((issue) => issue.key)).toEqual(
       CONFIG_KEYS.filter((key) => key !== 'ALTEGIO_API_TOKEN')

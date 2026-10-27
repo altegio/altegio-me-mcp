@@ -2,6 +2,7 @@ import type { Server } from 'node:http';
 import type { Logger } from 'pino';
 import { allowedOriginsFor, createApp } from './app.js';
 import { BookingClient } from './booking/client.js';
+import { createInstallationGate } from './booking/installation.js';
 import { RequestGate, PRODUCTION_GATE_OPTIONS } from './booking/gate.js';
 import {
   createFileSecretSource,
@@ -182,6 +183,7 @@ async function main(): Promise<void> {
   // No upstream call at startup: /health stays free of Altegio API calls.
   const booking = new BookingClient({
     base: config.ALTEGIO_API_BASE,
+    appBase: config.ALTEGIO_APP_BASE,
     tokenSource,
     // One gate per process, shared by every request and session: all
     // upstream calls, partner-token probes included, stay below the API
@@ -192,6 +194,29 @@ async function main(): Promise<void> {
     }),
   });
 
+  // The assistant-booking gate (ADR 0006, D3 amended 2026-10-27): with the
+  // application id set, a client books from the chat only where that
+  // Integrations Hub application is active. Unset, every business takes chat
+  // bookings, as before the gate.
+  const installations =
+    config.MARKETPLACE_APPLICATION_ID === undefined
+      ? undefined
+      : createInstallationGate({
+          booking,
+          applicationId: config.MARKETPLACE_APPLICATION_ID,
+          onUnavailable: (locationId, error) => {
+            logger.warn(
+              {
+                event: 'installation_gate_unavailable',
+                location_id: locationId,
+                error_type: errorClass(error),
+                error_message: errorMessage(error, secrets()),
+              },
+              'installation status unavailable; the booking goes ahead'
+            );
+          },
+        });
+
   const app = createApp({
     name: PACKAGE_NAME,
     version: PACKAGE_VERSION,
@@ -200,6 +225,7 @@ async function main(): Promise<void> {
     // set, else by a random key of this process.
     toolDeps: {
       booking,
+      installations,
       confirmations: createConfirmations({
         secret: config.CONFIRMATION_SECRET,
       }),
@@ -247,6 +273,17 @@ async function main(): Promise<void> {
     logger.info(
       { event: 'server_started', port: config.PORT, version: PACKAGE_VERSION },
       'listening'
+    );
+    logger.info(
+      installations === undefined
+        ? { event: 'installation_gate', application_id: null }
+        : {
+            event: 'installation_gate',
+            application_id: installations.applicationId,
+          },
+      installations === undefined
+        ? 'no marketplace application id: every business takes chat bookings'
+        : 'chat bookings only where the marketplace application is active'
     );
     // After the listening line, so that line stays the first one written.
     if (config.CALLER_AUTH === 'optional') {

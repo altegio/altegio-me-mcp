@@ -46,7 +46,18 @@ booked in the chat like an own place. The API creates the booking for a signed-i
 business, the client is known by their profile, and "book me at this salon I know" must end with
 a booking too. `me_book` reads no client records in the preview, and the `not_own_place` reason is
 retired; the other D3 fallbacks stand. Moving and cancelling stay limited to the client's own
-bookings.*
+bookings.* *Amended 2026-10-27 (owner decision): a business takes bookings from the chat while
+this server's Integrations Hub application (2642, "Altegio.me MCP") is active at its location.
+Altegio switches the application on for every location that has Altegio.me at the card's
+moderation, and an owner turns the chat bookings off by removing it in Integrations: that is the
+opt-out that open question B2 waited for. The Hub answers 404 for a removed application exactly
+as for one never installed (recorded at location 722227 the same day), so the server asks only
+whether the application is installed: `me_book` answers `fallback` with the new `not_connected`
+reason and the widget link, `me_reschedule_booking` refuses before any write, and cancelling, the
+client's own booking, stays open. The status is read with the server's own token, cached per
+location for 10 minutes, and a Hub that cannot answer does not close the business. The gate is
+`MARKETPLACE_APPLICATION_ID`; unset, every business with online booking takes chat bookings, as
+before. It is set in production only after Altegio's bulk enablement.*
 
 **D4. Anti-fraud is tested live before the tools ship.** Server-side `book_record` with a client
 token from our egress may meet the anti-fraud paths (HTTP 412 with `X-App-Security-Level`, a
@@ -75,3 +86,6 @@ scheduled tasks with no server state.*
   the business's defaults (`notify_by_sms` / `notify_by_email` are not set by us).
 - The pre-filled widget link remains the completion step for partner callers (known-business
   tools) and for the D3 cases.
+- The assistant-booking gate (D3, 2026-10-27) adds one documented Hub read on the app host,
+  `GET /marketplace/salon/{location_id}/application/{application_id}`, declared by `me_book` and
+  `me_reschedule_booking`, always with the server's own partner token.

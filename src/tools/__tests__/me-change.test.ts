@@ -8,6 +8,7 @@ import {
   type FixtureResponse,
   type RecordedCall,
 } from '../../booking/__tests__/helpers/fake-fetch.js';
+import { createInstallationGate } from '../../booking/installation.js';
 import { createConfirmations, type Confirmations } from '../confirmation.js';
 import { NO_TOOL_CONTEXT, type ToolContext } from '../context.js';
 import type { ToolInvocation } from '../factory.js';
@@ -97,9 +98,16 @@ function setup(
     move?: FakeReply;
     cancel?: FakeReply;
     timeoutMs?: number;
+    /** The assistant-booking gate for application 2642; absent, no gate. */
+    gate?: { installation: FakeReply };
   } = {}
 ): Setup {
   const upstream = fakeFetch([
+    {
+      method: 'GET',
+      path: `/marketplace/salon/${LOCATION}/application/2642`,
+      reply: options.gate?.installation ?? { status: 599, body: '' },
+    },
     {
       method: 'GET',
       path: '/user/records',
@@ -133,7 +141,14 @@ function setup(
     timeoutMs: options.timeoutMs,
   });
   const confirmations = createConfirmations({ secret: SECRET });
-  const deps = { booking, confirmations };
+  const deps = {
+    booking,
+    confirmations,
+    installations:
+      options.gate === undefined
+        ? undefined
+        : createInstallationGate({ booking, applicationId: 2642 }),
+  };
   return {
     upstream,
     confirmations,
@@ -901,5 +916,70 @@ describe('me_cancel_booking: tokens of another tool or booking', () => {
     expect(result.result.isError).toBe(true);
     expect(textOf(result).startsWith('Nothing was moved')).toBe(true);
     expect(made.upstream.calls).toEqual([]);
+  });
+});
+
+describe('the assistant-booking gate on moving and cancelling (ADR 0006, D3 amended 2026-10-27)', () => {
+  const INSTALLED: FakeReply = {
+    status: 200,
+    body: {
+      success: true,
+      data: { connection_status: { status: 'active' }, logs: [], payments: [] },
+      meta: [],
+    },
+  };
+  const NOT_INSTALLED: FakeReply = {
+    status: 404,
+    body: { success: false, meta: { message: 'An error occurred' } },
+  };
+  const HUB_ROUTE = `GET /marketplace/salon/${LOCATION}/application/2642`;
+
+  it('never asks the Hub without a gate', async () => {
+    const made = setup();
+    await made.invoke(MOVE);
+    expect(routesOf(made.upstream)).not.toContain(HUB_ROUTE);
+  });
+
+  it('refuses to move, before the slot check and any write, where the application is not installed', async () => {
+    const made = setup({ gate: { installation: NOT_INSTALLED } });
+    const preview = await made.invoke(MOVE);
+    expect(preview.result.isError).toBe(true);
+    const text = textOf(preview);
+    expect(text).toContain('Nothing was moved');
+    expect(text).toContain('does not take bookings from AI assistants');
+    expect(text).toContain('Altegio.me app');
+    expect(routesOf(made.upstream)).toContain(HUB_ROUTE);
+    expect(routesOf(made.upstream)).not.toContain(
+      `POST /book_check/${LOCATION}`
+    );
+    expect(routesOf(made.upstream)).not.toContain(
+      `PUT /book_record/${LOCATION}/5`
+    );
+  });
+
+  it('previews the move where the application is active, asking the Hub once', async () => {
+    const made = setup({ gate: { installation: INSTALLED } });
+    const preview = await made.invoke(MOVE);
+    expect(preview.result.isError).not.toBe(true);
+    expect(outOf(preview).status).toBe('preview');
+    expect(
+      routesOf(made.upstream).filter((route) => route === HUB_ROUTE)
+    ).toHaveLength(1);
+  });
+
+  it('lets the client cancel their own booking whatever the Hub says', async () => {
+    const made = setup({ gate: { installation: NOT_INSTALLED } });
+    const preview = await made.invokeCancel(CANCEL);
+    expect(preview.result.isError).not.toBe(true);
+    expect(routesOf(made.upstream)).not.toContain(HUB_ROUTE);
+  });
+
+  it('declares the Hub read among the move routes only', () => {
+    const hub = {
+      method: 'GET',
+      route: '/marketplace/salon/{location_id}/application/{application_id}',
+    };
+    expect(meRescheduleBooking.meta.upstream).toContainEqual(hub);
+    expect(meCancelBooking.meta.upstream).not.toContainEqual(hub);
   });
 });
