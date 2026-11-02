@@ -442,7 +442,10 @@ client, a cancelled one included). Each tool takes two calls with the same argum
   a reason (`prepayment`, `membership`, `widget_inactive`, `not_connected`, `not_confirmed` when
   the booking service cannot confirm the booking from here, `required_field`) and the pre-filled
   widget link, or the business contacts when there is no usable form. Nothing is booked in that
-  case.
+  case. A `required_field` fallback also carries `missing_fields`, the names of the fields the
+  business requires beyond the client's profile (for example `email`), so the assistant can tell
+  the client exactly what to add to their Altegio profile; the names are third-party data and the
+  values are never taken in the chat.
 - **The assistant-booking gate** (ADR 0006, D3 amended 2026-10-27). With
   `MARKETPLACE_APPLICATION_ID` set, a client books and moves from the chat only at a business
   where that Integrations Hub application (2642, "Altegio.me MCP") is active: Altegio switches it

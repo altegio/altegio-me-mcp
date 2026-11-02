@@ -61,7 +61,11 @@ import {
   type UpstreamErrorOverrides,
   type UpstreamErrorText,
 } from './upstream-errors.js';
-import { sanitizeUntrusted, withUntrustedBlock } from './untrusted.js';
+import {
+  UNTRUSTED_NOTE,
+  sanitizeUntrusted,
+  withUntrustedBlock,
+} from './untrusted.js';
 
 // me_book (ME-06, ADR 0006, D-02, D-03): a signed-in client books at any
 // business that takes online bookings, one of their own places or one they
@@ -254,7 +258,19 @@ const bookOutput = z.strictObject({
       reason: z
         .enum(FALLBACK_REASONS)
         .describe(
-          "prepayment: a chosen service needs online prepayment, or its prepayment is not known. membership: a chosen service is for membership holders. widget_inactive: the business takes no online bookings right now. not_connected: the business does not take bookings from AI assistants, and its booking widget is the way to book. not_confirmed: the business's booking service could not confirm the booking from here. required_field: the business needs a detail the client's Altegio profile does not have."
+          "prepayment: a chosen service needs online prepayment, or its prepayment is not known. membership: a chosen service is for membership holders. widget_inactive: the business takes no online bookings right now. not_connected: the business does not take bookings from AI assistants, and its booking widget is the way to book. not_confirmed: the business's booking service could not confirm the booking from here. required_field: the business needs a detail the client's Altegio profile does not have; missing_fields names it."
+        ),
+      missing_fields: z
+        .array(
+          z
+            .string()
+            .describe(
+              `A field name, as the business's booking form names it. ${UNTRUSTED_NOTE}`
+            )
+        )
+        .nullable()
+        .describe(
+          "For required_field: the fields the business requires that the client's Altegio profile does not have, for example email. The client adds them to their Altegio profile and books again, or completes the booking through the link. Null for every other reason."
         ),
       link: z
         .strictObject({
@@ -441,7 +457,8 @@ function fallbackOutput(
   input: BookInput,
   reason: FallbackReason,
   link: FallbackLink | null,
-  secondLink: FallbackLink | null = null
+  secondLink: FallbackLink | null = null,
+  missingFields: readonly string[] | null = null
 ): BookOutput {
   return {
     status: 'fallback',
@@ -453,8 +470,28 @@ function fallbackOutput(
     booking: null,
     second_booking_id: null,
     second_booking: null,
-    fallback: { reason, link, second_link: secondLink },
+    fallback: {
+      reason,
+      link,
+      second_link: secondLink,
+      missing_fields: missingFields === null ? null : [...missingFields],
+    },
   };
+}
+
+/**
+ * The field names of a required_field refusal, cleaned for display as any
+ * third-party text; null when none survive, so the result never carries an
+ * empty list.
+ */
+function missingFieldNames(
+  fields: readonly string[]
+): readonly string[] | null {
+  const names = fields.flatMap((field) => {
+    const name = sanitizeUntrusted(field, { maxChars: LABEL_MAX_CHARS });
+    return name === null ? [] : [name];
+  });
+  return names.length === 0 ? null : names;
 }
 
 /**
@@ -863,7 +900,8 @@ async function fallbackResult(
   input: BookInput,
   deps: ToolDeps,
   ctx: ToolContext,
-  reason: 'not_connected' | 'not_confirmed' | 'required_field'
+  reason: 'not_connected' | 'not_confirmed' | 'required_field',
+  missingFields: readonly string[] = []
 ): Promise<BookOutput> {
   let card;
   try {
@@ -874,7 +912,12 @@ async function fallbackResult(
       BOOK_CHECK_LINK_NEXT
     );
   }
-  return fallbackOutput(input, reason, ...selectionLinks(input, card));
+  return fallbackOutput(
+    input,
+    reason,
+    ...selectionLinks(input, card),
+    missingFieldNames(missingFields)
+  );
 }
 
 /** Confirm: redeems the token, reads the profile, creates the booking(s) and reads them back. */
@@ -947,13 +990,20 @@ async function confirm(
         return fallbackResult(input, deps, ctx, 'not_confirmed');
       }
       // A business that requires a field the profile lacks (the e-mail) answers
-      // 422 with no code; the widget collects it.
+      // 422 with no code; the widget collects it, and missing_fields names it
+      // so the client knows what their profile lacks.
       if (
         error.kind === 'rejected' &&
         error.codes.length === 0 &&
         error.requiredFields.length > 0
       ) {
-        return fallbackResult(input, deps, ctx, 'required_field');
+        return fallbackResult(
+          input,
+          deps,
+          ctx,
+          'required_field',
+          error.requiredFields
+        );
       }
     }
     throw toWriteToolError(error, second !== null);
@@ -1113,6 +1163,12 @@ function renderFallback(out: BookOutput): string {
       ? FALLBACK_TEXT.not_confirmed
       : FALLBACK_TEXT[fallback.reason],
   ];
+  const missing = fallback?.missing_fields ?? null;
+  if (missing !== null) {
+    lines.push(
+      'The names of the missing fields are in the untrusted block below; the client can add them to their Altegio profile and book again, or complete the booking through the link.'
+    );
+  }
   if (fallback?.link != null) {
     const pair = fallback.second_link != null;
     if (pair) {
@@ -1130,7 +1186,11 @@ function renderFallback(out: BookOutput): string {
       'Next: tell the user to contact the business directly, using the contact details from business_get.'
     );
   }
-  return lines.join('\n');
+  return missing === null
+    ? lines.join('\n')
+    : withUntrustedBlock(lines.join('\n'), {
+        'Missing fields': missing.join(', '),
+      });
 }
 
 function renderBooked(out: BookOutput): string {
