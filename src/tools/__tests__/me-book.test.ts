@@ -744,6 +744,19 @@ describe("me_book booking form questions (ADR 0008): the widget's required field
     );
   });
 
+  it('reads the answers from a JSON string, for a host with a cached tool list', async () => {
+    const made = setup({
+      formFields: loadFixture('bookform_custom_fields', 'with_required'),
+    });
+    const { confirm } = await previewThenConfirm(made, {
+      ...SELECTION,
+      custom_fields: JSON.stringify(ANSWERS),
+    });
+    const out = confirm.result.structuredContent as unknown as BookOut;
+    expect(out.status).toBe('booked');
+    expect(createBody(made).appointments[0]?.custom_fields).toEqual(ANSWERS);
+  });
+
   it('books as before when the route does not know the form (404)', async () => {
     const made = setup({
       formFields: {
