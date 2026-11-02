@@ -1,0 +1,43 @@
+{
+  "with_required": {
+    "status": 200,
+    "headers": { "content-type": "application/json" },
+    "body": {
+      "data": [
+        {
+          "type": "booking_custom_fields",
+          "id": "79410",
+          "attributes": {
+            "code": "return",
+            "title": "Return",
+            "type": "date",
+            "resource": "record",
+            "chain_id": null,
+            "is_required": true,
+            "weight": 1,
+            "values": null
+          }
+        },
+        {
+          "type": "booking_custom_fields",
+          "id": "79409",
+          "attributes": {
+            "code": "floor",
+            "title": "Floor",
+            "type": "select",
+            "resource": "record",
+            "chain_id": null,
+            "is_required": true,
+            "weight": 2,
+            "values": ["1", "2", "3\n"]
+          }
+        }
+      ]
+    }
+  },
+  "empty": {
+    "status": 200,
+    "headers": { "content-type": "application/json" },
+    "body": { "data": [] }
+  }
+}

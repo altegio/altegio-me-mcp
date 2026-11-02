@@ -449,8 +449,11 @@ client, a cancelled one included). Each tool takes two calls with the same argum
   business requires beyond the client's profile (for example `email`), so the assistant can tell
   the client exactly what is missing; the names are third-party data. For the e-mail the assistant
   asks the client and books again with `me_book`'s optional `email` argument
-  ([ADR 0007](docs/decisions/0007-email-in-chat-when-required.md)); other fields are added to the
-  profile or collected by the widget.
+  ([ADR 0007](docs/decisions/0007-email-in-chat-when-required.md)). The booking form's own custom
+  fields are enforced at the preview ([ADR 0008](docs/decisions/0008-booking-form-custom-fields.md)):
+  a form with required questions this call did not answer returns `required_field` with
+  `form_fields` (code, title, type, required, allowed values), the assistant asks the client and
+  books again with `custom_fields`, validated against the form and sent on the create.
 - **The assistant-booking gate** (ADR 0006, D3 amended 2026-10-27). With
   `MARKETPLACE_APPLICATION_ID` set, a client books and moves from the chat only at a business
   where that Integrations Hub application (2642, "Altegio.me MCP") is active: Altegio switches it
