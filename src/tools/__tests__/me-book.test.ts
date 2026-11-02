@@ -197,6 +197,7 @@ interface BookOut {
     reason: string;
     link: { url: string; kind: string } | null;
     second_link: { url: string; kind: string } | null;
+    missing_fields: string[] | null;
   } | null;
 }
 
@@ -402,6 +403,7 @@ describe('me_book confirm path: the anti-fraud paths hand off the pre-filled lin
       expect(out.status).toBe('fallback');
       expect(out.booking_id).toBeNull();
       expect(out.fallback?.reason).toBe('not_confirmed');
+      expect(out.fallback?.missing_fields).toBeNull();
       expect(out.fallback?.link?.kind).toBe('preselected');
       expect(out.fallback?.link?.url).toContain('https://n1463903.alteg.io/');
       const text = textOf(confirm);
@@ -441,7 +443,11 @@ describe('me_book confirm path: the anti-fraud paths hand off the pre-filled lin
     expect(out.status).toBe('fallback');
     expect(out.fallback?.reason).toBe('required_field');
     expect(out.fallback?.link?.kind).toBe('preselected');
-    expect(textOf(confirm)).toContain('more details');
+    expect(out.fallback?.missing_fields).toEqual(['email']);
+    const text = textOf(confirm);
+    expect(text).toContain('more details');
+    expect(text).toContain('Missing fields: email');
+    expect(text).toContain('UNTRUSTED');
   });
 
   it('names book_check when the card cannot be read for the link', async () => {
@@ -1007,6 +1013,7 @@ describe('me_book pair fallbacks: one link for each appointment', () => {
     });
     const { confirm } = await previewThenConfirm(made, PAIR);
     expect(previewOf(confirm).fallback?.reason).toBe('required_field');
+    expect(previewOf(confirm).fallback?.missing_fields).toEqual(['email']);
     expectBothLinks(confirm);
   });
 
