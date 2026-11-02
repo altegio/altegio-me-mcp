@@ -450,6 +450,17 @@ describe('me_book confirm path: the anti-fraud paths hand off the pre-filled lin
     expect(text).toContain('UNTRUSTED');
   });
 
+  it('advises the email argument when email is the missing field', async () => {
+    const made = setup({
+      profile: loadFixture('booking_user_data', 'bare_digits_no_email'),
+      create: loadFixture('book_record_create', 'required_email_422'),
+    });
+    const { confirm } = await previewThenConfirm(made);
+    const text = textOf(confirm);
+    expect(text).toContain('email argument');
+    expect(text).toContain('without confirmation_token');
+  });
+
   it('names book_check when the card cannot be read for the link', async () => {
     let cardReads = 0;
     const made = setup({
@@ -466,6 +477,99 @@ describe('me_book confirm path: the anti-fraud paths hand off the pre-filled lin
     const text = textOf(confirm);
     expect(text).toContain('book_check');
     expect(text.startsWith('Nothing was booked')).toBe(true);
+  });
+});
+
+describe("me_book email argument (ADR 0007): the client's e-mail where the business requires it", () => {
+  const EMAIL = 'client.given@example.invalid';
+
+  function createBody(made: Setup): Record<string, unknown> {
+    const call = made.upstream.calls.find((entry) =>
+      entry.url.pathname.includes('book_record')
+    );
+    if (call?.body == null) throw new Error('no create call was sent');
+    return JSON.parse(call.body) as Record<string, unknown>;
+  }
+
+  it('sends the given e-mail with the create when the profile has none, after a preview that says so', async () => {
+    const made = setup({
+      profile: loadFixture('booking_user_data', 'bare_digits_no_email'),
+    });
+    const { preview, confirm } = await previewThenConfirm(made, {
+      ...SELECTION,
+      email: EMAIL,
+    });
+    const shown = preview.result.structuredContent as {
+      preview: { email_included: boolean };
+    };
+    expect(shown.preview.email_included).toBe(true);
+    expect(textOf(preview)).toContain('e-mail given in this call is sent');
+    expect(textOf(preview)).toContain(', email');
+    const out = confirm.result.structuredContent as unknown as BookOut;
+    expect(out.status).toBe('booked');
+    expect(createBody(made).email).toBe(EMAIL);
+  });
+
+  it('sends the given e-mail in place of the profile e-mail', async () => {
+    const made = setup();
+    const { confirm } = await previewThenConfirm(made, {
+      ...SELECTION,
+      email: EMAIL,
+    });
+    expect(
+      (confirm.result.structuredContent as unknown as BookOut).status
+    ).toBe('booked');
+    expect(createBody(made).email).toBe(EMAIL);
+  });
+
+  it('never returns the e-mail in a preview or a booked result', async () => {
+    const made = setup({
+      profile: loadFixture('booking_user_data', 'bare_digits_no_email'),
+    });
+    const { preview, confirm } = await previewThenConfirm(made, {
+      ...SELECTION,
+      email: EMAIL,
+    });
+    expect(JSON.stringify(preview.result)).not.toContain(EMAIL);
+    expect(JSON.stringify(confirm.result)).not.toContain(EMAIL);
+  });
+
+  it('does not redeem a token issued without the e-mail for a confirm with one', async () => {
+    const made = setup();
+    const first = await made.invoke(SELECTION);
+    const token = (
+      first.result.structuredContent as { confirmation_token: string }
+    ).confirmation_token;
+    made.upstream.calls.length = 0;
+    const confirm = await made.invoke({
+      ...SELECTION,
+      email: EMAIL,
+      confirmation_token: token,
+    });
+    expect(confirm.result.isError).toBe(true);
+    expect(textOf(confirm)).toContain('not valid for this selection');
+    expect(
+      made.upstream.calls.some((call) =>
+        call.url.pathname.includes('book_record')
+      )
+    ).toBe(false);
+  });
+
+  it('refuses a value that is not an e-mail before any upstream call', async () => {
+    const made = setup();
+    const result = await made.invoke({ ...SELECTION, email: 'not-an-email' });
+    expect(result.result.isError).toBe(true);
+    expect(made.upstream.calls).toEqual([]);
+  });
+
+  it('keeps email_included false without the argument', async () => {
+    const made = setup();
+    const first = await made.invoke(SELECTION);
+    const shown = first.result.structuredContent as {
+      preview: { email_included: boolean };
+    };
+    expect(shown.preview.email_included).toBe(false);
+    expect(textOf(first)).not.toContain('e-mail given in this call');
   });
 });
 

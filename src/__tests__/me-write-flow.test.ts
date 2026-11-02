@@ -557,12 +557,14 @@ describe('me_book, second call: the booking', () => {
 });
 
 describe('me_book output and logs', () => {
-  it('leaks neither the sign-in, the profile nor the record hash into any response or log line', async () => {
+  it('leaks neither the sign-in, the profile, the given e-mail nor the record hash into any response or log line', async () => {
+    const givenEmail = 'given.in.chat@example.invalid';
     const { harness } = await start();
-    const first = await callBook(harness, SELECTION);
+    const first = await callBook(harness, { ...SELECTION, email: givenEmail });
     const token = first.body.result?.structuredContent?.confirmation_token;
     const second = await callBook(harness, {
       ...SELECTION,
+      email: givenEmail,
       confirmation_token: token,
     });
     await waitForLogs(harness, 2);
@@ -571,10 +573,12 @@ describe('me_book output and logs', () => {
       second.text,
       JSON.stringify(harness.logs),
     ].join('\n');
-    for (const bait of BAIT) expect(everything).not.toContain(bait);
+    for (const bait of [...BAIT, givenEmail]) {
+      expect(everything).not.toContain(bait);
+    }
   });
 
-  it('takes no phone, name, e-mail or code in its input', () => {
+  it('takes no phone, name or code in its input; the e-mail only as the ADR 0007 sanctioned input', () => {
     const tool = productionTools.find((entry) => entry.name === 'me_book');
     const properties = Object.keys(
       (tool?.spec.inputSchema as { properties: Record<string, unknown> })
@@ -584,6 +588,7 @@ describe('me_book output and logs', () => {
       [
         'confirmation_token',
         'datetime',
+        'email',
         'location_id',
         'second_appointment',
         'service_ids',

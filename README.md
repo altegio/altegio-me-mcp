@@ -52,8 +52,11 @@ personal data passes through the chat.
 places they already go to and their bookings, and books in the chat there or at any other
 business they know by id, and moves and cancels their own appointments, with `me_book`,
 `me_reschedule_booking` and `me_cancel_booking`, each in two steps: a preview with a confirmation
-token, then the write. The client's name, phone and e-mail come from their Altegio profile and
-never from the chat. The widget link stays for partner and anonymous callers, services with online
+token, then the write. The client's name and phone come from their Altegio profile and never from
+the chat; the e-mail does too, except at a business whose booking form requires an e-mail the
+profile lacks — there `me_book` takes it as the optional `email` argument
+([ADR 0007](docs/decisions/0007-email-in-chat-when-required.md)), sends it only to that business
+with that booking, and never returns or keeps it. The widget link stays for partner and anonymous callers, services with online
 prepayment, memberships and inactive widgets (ADR 0006 D3 as amended 2026-10-12). The sign-in itself (phone + SMS on the platform proxy's page, OAuth 2.1) is the
 proxy's: until it ships, the client tier runs locally with a direct user-token header. On top of
 these tools run the cases the Altegio.me app lacks, built and described under
@@ -444,8 +447,10 @@ client, a cancelled one included). Each tool takes two calls with the same argum
   widget link, or the business contacts when there is no usable form. Nothing is booked in that
   case. A `required_field` fallback also carries `missing_fields`, the names of the fields the
   business requires beyond the client's profile (for example `email`), so the assistant can tell
-  the client exactly what to add to their Altegio profile; the names are third-party data and the
-  values are never taken in the chat.
+  the client exactly what is missing; the names are third-party data. For the e-mail the assistant
+  asks the client and books again with `me_book`'s optional `email` argument
+  ([ADR 0007](docs/decisions/0007-email-in-chat-when-required.md)); other fields are added to the
+  profile or collected by the widget.
 - **The assistant-booking gate** (ADR 0006, D3 amended 2026-10-27). With
   `MARKETPLACE_APPLICATION_ID` set, a client books and moves from the chat only at a business
   where that Integrations Hub application (2642, "Altegio.me MCP") is active: Altegio switches it

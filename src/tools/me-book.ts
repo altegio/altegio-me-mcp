@@ -74,7 +74,11 @@ import {
 // and that token, reads the client's profile, creates the booking with the
 // user token and returns it as me_list_bookings shows it. The name and phone
 // come from the client's Altegio profile and never from a tool input, and
-// never back out of the server.
+// never back out of the server. The one exception is the client's e-mail
+// (ADR 0007): a business whose booking form requires one the profile lacks
+// refuses the create (the required_field fallback below), and the optional
+// email input, given with a new preview and bound to its token, is sent to
+// that business with that create; it is never returned and never kept.
 //
 // Two people side by side (CASE-02, D-01): an optional second_appointment, with
 // its own services and a different, named team member, books two appointments
@@ -110,6 +114,8 @@ const secondAppointmentInput = z
     'A second appointment at the same datetime, with its own services and a different, named team member, booked for the same client; both appointments are previewed and confirmed together.'
   );
 
+const EMAIL_MAX_CHARS = 254;
+
 const bookInput = z.strictObject({
   location_id: locationIdInput,
   service_ids: uniqueServiceIds(
@@ -119,6 +125,13 @@ const bookInput = z.strictObject({
   team_member_id: teamMemberOrAnyInput,
   datetime: slotDatetimeInput,
   second_appointment: secondAppointmentInput.optional(),
+  email: z
+    .email()
+    .max(EMAIL_MAX_CHARS)
+    .optional()
+    .describe(
+      "The client's own e-mail, for a business whose booking form requires one (a required_field fallback naming email in missing_fields): given with a new preview, it is sent to this business with this booking in place of the profile's e-mail. It is never returned by any tool and the server does not keep it. Ask the client for it; never guess it."
+    ),
   [CONFIRMATION_TOKEN_ARG]: confirmationTokenInput,
 });
 
@@ -191,6 +204,11 @@ const previewSchema = z.strictObject({
     .boolean()
     .describe(
       'True when the business also offers optional online prepayment for a chosen service in its booking widget; this booking is made without it.'
+    ),
+  email_included: z
+    .boolean()
+    .describe(
+      "True when the e-mail given in this call's email argument will be sent to the business with the booking; the e-mail itself is never returned. False when no email argument was given and the profile's own e-mail, when it has one, is used."
     ),
 });
 
@@ -270,7 +288,7 @@ const bookOutput = z.strictObject({
         )
         .nullable()
         .describe(
-          "For required_field: the fields the business requires that the client's Altegio profile does not have, for example email. The client adds them to their Altegio profile and books again, or completes the booking through the link. Null for every other reason."
+          "For required_field: the fields the business requires that the client's Altegio profile does not have. For email, ask the client for their e-mail and call me_book again with the email argument for a new preview. Any field can also be added to the client's Altegio profile, or completed through the link. Null for every other reason."
         ),
       link: z
         .strictObject({
@@ -315,6 +333,10 @@ function boundArguments(input: BookInput): Record<string, unknown> {
     // Explicit, null for a single booking: a single token and a pair token
     // never verify for each other (T-05-05).
     second_appointment: input.second_appointment ?? null,
+    // The e-mail is part of the selection (ADR 0007): what the preview showed
+    // as sent is what the confirm sends, and an e-mail cannot be slipped into
+    // the confirm call without a new preview.
+    email: input.email ?? null,
   };
 }
 
@@ -698,6 +720,7 @@ async function preview(
       optional_prepayment: chosen.some((entry) =>
         entry.services.some((service) => service.prepayment === 'optional')
       ),
+      email_included: input.email !== undefined,
     },
     confirmation_token: issued.token,
     expires_at: new Date(issued.expiresAt).toISOString(),
@@ -964,13 +987,19 @@ async function confirm(
 
   const first = firstAppointment(input);
   const second = secondAppointment(input);
+  // The e-mail of the call, bound to the token and shown by the preview, is
+  // sent in place of the profile's (ADR 0007): the one way to book at a
+  // business that requires an e-mail the profile lacks. It goes only to this
+  // business with this create and is kept nowhere.
+  const sent =
+    input.email === undefined ? profile : { ...profile, email: input.email };
   let bookingIds: readonly [number | null, number | null];
   try {
     if (second === null) {
       const created = await deps.booking.createBooking(
         input.location_id,
         selectionOf(first, input.datetime),
-        profile,
+        sent,
         userSide
       );
       bookingIds = [created.bookingId, null];
@@ -979,7 +1008,7 @@ async function confirm(
         input.location_id,
         selectionOf(first, input.datetime),
         selectionOf(second, input.datetime),
-        profile,
+        sent,
         userSide
       );
       bookingIds = created.bookingIds;
@@ -1104,6 +1133,11 @@ function renderPreview(out: BookOutput): string {
       "Both bookings are under the client's name; nothing about the second person is sent."
     );
   }
+  if (shown.email_included) {
+    lines.push(
+      'The e-mail given in this call is sent to the business with the booking; it is not shown here and is not kept.'
+    );
+  }
   if (shown.cancellation !== null) lines.push(shown.cancellation);
   if (shown.cancel_until !== null) {
     lines.push(
@@ -1111,7 +1145,7 @@ function renderPreview(out: BookOutput): string {
     );
   }
   lines.push(
-    `Next: show this to the user; only after the user agrees, call me_book again with the same location_id, service_ids, team_member_id, datetime${pair === null ? '' : ', second_appointment'} and confirmation_token ${out.confirmation_token ?? ''} (valid until ${out.expires_at ?? ''} UTC).`
+    `Next: show this to the user; only after the user agrees, call me_book again with the same location_id, service_ids, team_member_id, datetime${pair === null ? '' : ', second_appointment'}${shown.email_included ? ', email' : ''} and confirmation_token ${out.confirmation_token ?? ''} (valid until ${out.expires_at ?? ''} UTC).`
   );
 
   const fields: Record<string, unknown> = {
@@ -1168,6 +1202,11 @@ function renderFallback(out: BookOutput): string {
     lines.push(
       'The names of the missing fields are in the untrusted block below; the client can add them to their Altegio profile and book again, or complete the booking through the link.'
     );
+    if (missing.includes('email')) {
+      lines.push(
+        'For the e-mail, ask the client for it, then call me_book again without confirmation_token and with the email argument for a new preview, and confirm that preview with the client.'
+      );
+    }
   }
   if (fallback?.link != null) {
     const pair = fallback.second_link != null;
@@ -1241,7 +1280,7 @@ export const meBook = defineTool<typeof bookInput, typeof bookOutput, ToolDeps>(
     name: TOOL_NAME,
     title: 'Book me in',
     description:
-      "Books for the signed-in client at a business, one of their own places or one they know by id, in two calls. The first call checks the time with the business and returns a preview and a confirmation_token valid for 10 minutes; nothing is booked. After the client agrees, the second call with the same selection and that token creates the booking and returns it. The client's name and phone come from their Altegio profile. Where the chat cannot complete a booking, namely online prepayment, a membership-only service, an inactive booking widget or a business that does not take bookings from AI assistants, the answer states the reason and carries the pre-filled booking widget link. With the optional second_appointment (a different named team member, the same start) it books two people side by side in one preview and one confirmation, both under the client's name. Needs the client's sign-in.",
+      "Books for the signed-in client at a business they know by id, in two calls. The first checks the time and returns a preview and a confirmation_token valid for 10 minutes; nothing is booked. After the client agrees, the second call with the same selection and that token creates the booking and returns it. The client's name and phone come from their Altegio profile. A business that requires an e-mail the profile lacks answers a required_field fallback naming email in missing_fields; ask the client for theirs and call again with the optional email argument for a new preview. Where the chat cannot complete a booking (online prepayment, a membership-only service, an inactive widget, a business that takes no bookings from AI assistants) the answer states the reason and carries the pre-filled booking widget link. The optional second_appointment (a different named team member, the same start) books two people side by side in one preview and one confirmation, both under the client's name. Needs the client's sign-in.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
