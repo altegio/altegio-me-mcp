@@ -148,7 +148,23 @@ const bookInput = z.strictObject({
       "The client's own e-mail, for a business whose booking form requires one (a required_field fallback naming email in missing_fields): given with a new preview, it is sent to this business with this booking in place of the profile's e-mail. It is never returned by any tool and the server does not keep it. Ask the client for it; never guess it."
     ),
   custom_fields: z
-    .record(z.string().min(1).max(FIELD_CODE_MAX_CHARS), customFieldValueInput)
+    .preprocess(
+      // A host that cached the tool list before this field existed sends the
+      // object as a JSON string; it is read as the object it encodes. The
+      // declared schema stays the record below.
+      (value) => {
+        if (typeof value !== 'string') return value;
+        try {
+          return JSON.parse(value) as unknown;
+        } catch {
+          return value;
+        }
+      },
+      z.record(
+        z.string().min(1).max(FIELD_CODE_MAX_CHARS),
+        customFieldValueInput
+      )
+    )
     .optional()
     .describe(
       'The client\'s answers to the business\'s booking form questions, keyed by field code exactly as fallback.form_fields names them, for example {"floor": "2"}. Given with a new preview after a required_field fallback that lists form_fields: ask the client each question first; never guess an answer. Sent to this business with this booking only.'
