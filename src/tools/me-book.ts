@@ -4,9 +4,11 @@ import {
   CLIENT_WRITE_ROUTES,
   MARKETPLACE_ROUTES,
   USER_ROUTES,
+  type BookformField,
   type BusinessCard,
   type BusinessRules,
   type CheckSelection,
+  type CustomFieldValues,
 } from '../booking/client.js';
 import type { InstallationVerdict } from '../booking/installation.js';
 import {
@@ -116,6 +118,19 @@ const secondAppointmentInput = z
 
 const EMAIL_MAX_CHARS = 254;
 
+// The booking form answers (ADR 0008): sent as given under the form's field
+// codes, so the caps mirror what a widget input takes.
+const FIELD_CODE_MAX_CHARS = 60;
+const FIELD_ANSWER_MAX_CHARS = 500;
+const MAX_FORM_ANSWERS = 20;
+
+const customFieldValueInput = z.union([
+  z.string().max(FIELD_ANSWER_MAX_CHARS),
+  z.number(),
+  z.boolean(),
+  z.array(z.string().max(FIELD_ANSWER_MAX_CHARS)).max(MAX_FORM_ANSWERS),
+]);
+
 const bookInput = z.strictObject({
   location_id: locationIdInput,
   service_ids: uniqueServiceIds(
@@ -131,6 +146,12 @@ const bookInput = z.strictObject({
     .optional()
     .describe(
       "The client's own e-mail, for a business whose booking form requires one (a required_field fallback naming email in missing_fields): given with a new preview, it is sent to this business with this booking in place of the profile's e-mail. It is never returned by any tool and the server does not keep it. Ask the client for it; never guess it."
+    ),
+  custom_fields: z
+    .record(z.string().min(1).max(FIELD_CODE_MAX_CHARS), customFieldValueInput)
+    .optional()
+    .describe(
+      'The client\'s answers to the business\'s booking form questions, keyed by field code exactly as fallback.form_fields names them, for example {"floor": "2"}. Given with a new preview after a required_field fallback that lists form_fields: ask the client each question first; never guess an answer. Sent to this business with this booking only.'
     ),
   [CONFIRMATION_TOKEN_ARG]: confirmationTokenInput,
 });
@@ -210,6 +231,12 @@ const previewSchema = z.strictObject({
     .describe(
       "True when the e-mail given in this call's email argument will be sent to the business with the booking; the e-mail itself is never returned. False when no email argument was given and the profile's own e-mail, when it has one, is used."
     ),
+  form_answers_included: z
+    .array(z.string().describe('A field code from custom_fields.'))
+    .nullable()
+    .describe(
+      "The field codes whose answers from this call's custom_fields will be sent to the business with the booking; null when none were given."
+    ),
 });
 
 const FALLBACK_REASONS = [
@@ -288,7 +315,36 @@ const bookOutput = z.strictObject({
         )
         .nullable()
         .describe(
-          "For required_field: the fields the business requires that the client's Altegio profile does not have. For email, ask the client for their e-mail and call me_book again with the email argument for a new preview. Any field can also be added to the client's Altegio profile, or completed through the link. Null for every other reason."
+          'For required_field: the fields the business requires that this call did not carry. For email, ask the client for their e-mail and call me_book again with the email argument. For a booking form field (listed in form_fields), ask the client the question and call again with the answer in custom_fields. Either way the new call needs no confirmation_token and returns a new preview; the widget link remains the other way. Null for every other reason.'
+        ),
+      form_fields: z
+        .array(
+          z.strictObject({
+            code: z
+              .string()
+              .describe(
+                `The key to send the answer under in custom_fields. ${UNTRUSTED_NOTE}`
+              ),
+            title: untrustedText('The question as the business worded it.'),
+            type: untrustedText(
+              "The widget's input kind, for example select, date, text, number, checkbox."
+            ),
+            required: z
+              .boolean()
+              .describe(
+                'True when the booking form does not submit without an answer.'
+              ),
+            values: z
+              .array(z.string().describe(`An allowed value. ${UNTRUSTED_NOTE}`))
+              .nullable()
+              .describe(
+                'For a select: the allowed values, sent exactly as written here; null for free input.'
+              ),
+          })
+        )
+        .nullable()
+        .describe(
+          "For required_field: every custom field of the business's booking form, so the client can be asked the missing questions and me_book called again with custom_fields. Null for every other reason and when the form has no custom fields."
         ),
       link: z
         .strictObject({
@@ -337,6 +393,8 @@ function boundArguments(input: BookInput): Record<string, unknown> {
     // as sent is what the confirm sends, and an e-mail cannot be slipped into
     // the confirm call without a new preview.
     email: input.email ?? null,
+    // The form answers too (ADR 0008), for the same reason.
+    custom_fields: input.custom_fields ?? null,
   };
 }
 
@@ -475,13 +533,87 @@ function selectionLinks(
   ];
 }
 
+/** The booking form the widget link opens: the card's chosen URL, else the default, else the first. */
+function bookformIdOf(card: BusinessCard): number | null {
+  const forms = card.bookingForms;
+  const chosen =
+    forms.find((form) => form.url === card.bookingFormUrl) ??
+    forms.find((form) => form.isDefault) ??
+    forms[0];
+  return chosen?.id ?? null;
+}
+
+/** An answer counts only when it carries something: no empty string, no empty list. */
+function answered(value: unknown): boolean {
+  if (value === undefined) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+
+/** The form's required fields this call did not answer. */
+function missingRequired(
+  fields: readonly BookformField[],
+  given: CustomFieldValues
+): readonly BookformField[] {
+  return fields.filter(
+    (field) => field.required && !answered(given[field.code])
+  );
+}
+
+/**
+ * The first given answer the form cannot take: a code the form does not have,
+ * or a select value outside the allowed list. The error quotes only the
+ * client's own code, never the form's texts.
+ */
+function formAnswerProblem(
+  fields: readonly BookformField[],
+  given: CustomFieldValues
+): ToolError | null {
+  for (const [code, value] of Object.entries(given)) {
+    const field = fields.find((entry) => entry.code === code);
+    if (field === undefined) {
+      return new ToolError(
+        `Nothing was booked: the booking form has no field "${code}".`,
+        'use the codes from fallback.form_fields, then call me_book again without confirmation_token.'
+      );
+    }
+    if (field.values === null) continue;
+    const answers = Array.isArray(value) ? value : [value];
+    const allowed = new Set(field.values);
+    const wrong = answers.some(
+      (answer) =>
+        typeof answer !== 'string' || !allowed.has(String(answer).trim())
+    );
+    if (wrong) {
+      return new ToolError(
+        `Nothing was booked: the answer to the booking form field "${code}" is not one of its allowed values.`,
+        'choose one of the values that fallback.form_fields lists for it, then call me_book again without confirmation_token.'
+      );
+    }
+  }
+  return null;
+}
+
+type FormFieldOut = NonNullable<
+  NonNullable<BookOutput['fallback']>['form_fields']
+>[number];
+
+/** What a required_field fallback says beyond the reason and the links. */
+interface FallbackDetails {
+  missingFields?: readonly string[] | null;
+  formFields?: readonly FormFieldOut[] | null;
+}
+
 function fallbackOutput(
   input: BookInput,
   reason: FallbackReason,
   link: FallbackLink | null,
   secondLink: FallbackLink | null = null,
-  missingFields: readonly string[] | null = null
+  details: FallbackDetails = {}
 ): BookOutput {
+  const missing = details.missingFields ?? null;
+  const form = details.formFields ?? null;
   return {
     status: 'fallback',
     location_id: input.location_id,
@@ -496,7 +628,8 @@ function fallbackOutput(
       reason,
       link,
       second_link: secondLink,
-      missing_fields: missingFields === null ? null : [...missingFields],
+      missing_fields: missing === null ? null : [...missing],
+      form_fields: form === null ? null : [...form],
     },
   };
 }
@@ -514,6 +647,38 @@ function missingFieldNames(
     return name === null ? [] : [name];
   });
   return names.length === 0 ? null : names;
+}
+
+/**
+ * The booking form's custom fields as a tool result shows them (ADR 0008):
+ * every text cleaned as third-party data, fields whose code does not survive
+ * the cleaning dropped; null for a form without custom fields.
+ */
+function formFieldsOut(
+  fields: readonly BookformField[]
+): readonly FormFieldOut[] | null {
+  const out = fields.flatMap((field) => {
+    const code = sanitizeUntrusted(field.code, {
+      maxChars: FIELD_CODE_MAX_CHARS,
+    });
+    if (code === null) return [];
+    const values = (field.values ?? []).flatMap((value) => {
+      const clean = sanitizeUntrusted(value, {
+        maxChars: FIELD_ANSWER_MAX_CHARS,
+      });
+      return clean === null ? [] : [clean];
+    });
+    return [
+      {
+        code,
+        title: sanitizeUntrusted(field.title, { maxChars: LABEL_MAX_CHARS }),
+        type: sanitizeUntrusted(field.type, { maxChars: LABEL_MAX_CHARS }),
+        required: field.required,
+        values: values.length === 0 ? null : values,
+      },
+    ];
+  });
+  return out.length === 0 ? null : out;
 }
 
 /**
@@ -639,6 +804,52 @@ async function preview(
   ) {
     return fallbackOutput(input, 'membership', ...selectionLinks(input, card));
   }
+
+  // The booking form's own questions (ADR 0008): the create route does not
+  // enforce them, so the widget's config is read and enforced here, before
+  // the client is asked to confirm anything. A form the card does not name
+  // cannot be read; the given answers then pass through unchecked, as every
+  // API integration sends them.
+  const givenAnswers: CustomFieldValues = input.custom_fields ?? {};
+  const formId = bookformIdOf(card);
+  if (formId !== null) {
+    let formFields: readonly BookformField[];
+    try {
+      formFields = await deps.booking.bookformCustomFields(formId, call);
+    } catch (error) {
+      if (error instanceof UpstreamError && error.kind === 'not_found') {
+        // The card names a form the route does not know (deleted or renamed):
+        // there is no config to enforce, so the booking runs as before.
+        formFields = [];
+      } else if (
+        error instanceof UpstreamError &&
+        (error.kind === 'unavailable' || error.kind === 'contract_drift') &&
+        !ctx.signal.aborted
+      ) {
+        throw new ToolError(
+          'Nothing was booked: the booking form could not be checked just now.',
+          'call me_book again in a few seconds without confirmation_token.'
+        );
+      } else {
+        throw toToolError(error);
+      }
+    }
+    const problem = formAnswerProblem(formFields, givenAnswers);
+    if (problem !== null) throw problem;
+    const missing = missingRequired(formFields, givenAnswers);
+    if (missing.length > 0) {
+      return fallbackOutput(
+        input,
+        'required_field',
+        ...selectionLinks(input, card),
+        {
+          missingFields: missingFieldNames(missing.map((field) => field.code)),
+          formFields: formFieldsOut(formFields),
+        }
+      );
+    }
+  }
+
   const teamMembers =
     membersResult.status === 'fulfilled' ? membersResult.value : null;
   const firstMember = selectedTeamMember(first.teamMemberId, teamMembers);
@@ -721,6 +932,16 @@ async function preview(
         entry.services.some((service) => service.prepayment === 'optional')
       ),
       email_included: input.email !== undefined,
+      form_answers_included:
+        input.custom_fields === undefined ||
+        Object.keys(input.custom_fields).length === 0
+          ? null
+          : Object.keys(input.custom_fields).flatMap((code) => {
+              const clean = sanitizeUntrusted(code, {
+                maxChars: FIELD_CODE_MAX_CHARS,
+              });
+              return clean === null ? [] : [clean];
+            }),
     },
     confirmation_token: issued.token,
     expires_at: new Date(issued.expiresAt).toISOString(),
@@ -935,12 +1156,9 @@ async function fallbackResult(
       BOOK_CHECK_LINK_NEXT
     );
   }
-  return fallbackOutput(
-    input,
-    reason,
-    ...selectionLinks(input, card),
-    missingFieldNames(missingFields)
-  );
+  return fallbackOutput(input, reason, ...selectionLinks(input, card), {
+    missingFields: missingFieldNames(missingFields),
+  });
 }
 
 /** Confirm: redeems the token, reads the profile, creates the booking(s) and reads them back. */
@@ -1000,7 +1218,8 @@ async function confirm(
         input.location_id,
         selectionOf(first, input.datetime),
         sent,
-        userSide
+        userSide,
+        input.custom_fields
       );
       bookingIds = [created.bookingId, null];
     } else {
@@ -1009,7 +1228,8 @@ async function confirm(
         selectionOf(first, input.datetime),
         selectionOf(second, input.datetime),
         sent,
-        userSide
+        userSide,
+        input.custom_fields
       );
       bookingIds = created.bookingIds;
     }
@@ -1138,6 +1358,11 @@ function renderPreview(out: BookOutput): string {
       'The e-mail given in this call is sent to the business with the booking; it is not shown here and is not kept.'
     );
   }
+  if (shown.form_answers_included !== null) {
+    lines.push(
+      `The client's booking form answers (${shown.form_answers_included.join(', ')}) are sent to the business with the booking.`
+    );
+  }
   if (shown.cancellation !== null) lines.push(shown.cancellation);
   if (shown.cancel_until !== null) {
     lines.push(
@@ -1145,7 +1370,7 @@ function renderPreview(out: BookOutput): string {
     );
   }
   lines.push(
-    `Next: show this to the user; only after the user agrees, call me_book again with the same location_id, service_ids, team_member_id, datetime${pair === null ? '' : ', second_appointment'}${shown.email_included ? ', email' : ''} and confirmation_token ${out.confirmation_token ?? ''} (valid until ${out.expires_at ?? ''} UTC).`
+    `Next: show this to the user; only after the user agrees, call me_book again with the same location_id, service_ids, team_member_id, datetime${pair === null ? '' : ', second_appointment'}${shown.email_included ? ', email' : ''}${shown.form_answers_included === null ? '' : ', custom_fields'} and confirmation_token ${out.confirmation_token ?? ''} (valid until ${out.expires_at ?? ''} UTC).`
   );
 
   const fields: Record<string, unknown> = {
@@ -1198,15 +1423,21 @@ function renderFallback(out: BookOutput): string {
       : FALLBACK_TEXT[fallback.reason],
   ];
   const missing = fallback?.missing_fields ?? null;
+  const form = fallback?.form_fields ?? null;
   if (missing !== null) {
     lines.push(
-      'The names of the missing fields are in the untrusted block below; the client can add them to their Altegio profile and book again, or complete the booking through the link.'
+      'The names of the missing fields are in the untrusted block below.'
     );
     if (missing.includes('email')) {
       lines.push(
         'For the e-mail, ask the client for it, then call me_book again without confirmation_token and with the email argument for a new preview, and confirm that preview with the client.'
       );
     }
+  }
+  if (form !== null) {
+    lines.push(
+      'Ask the client the booking form questions in the untrusted block below, then call me_book again without confirmation_token, with the answers in custom_fields keyed by field code, and confirm the new preview with the client.'
+    );
   }
   if (fallback?.link != null) {
     const pair = fallback.second_link != null;
@@ -1225,11 +1456,17 @@ function renderFallback(out: BookOutput): string {
       'Next: tell the user to contact the business directly, using the contact details from business_get.'
     );
   }
-  return missing === null
+  const blocks: Record<string, unknown> = {};
+  if (missing !== null) blocks['Missing fields'] = missing.join(', ');
+  for (const field of form ?? []) {
+    blocks[`field ${field.code}`] =
+      `${field.title ?? field.code} (${field.type ?? 'text'}${
+        field.required ? ', required' : ''
+      }${field.values === null ? '' : `, one of: ${field.values.join(' | ')}`})`;
+  }
+  return Object.keys(blocks).length === 0
     ? lines.join('\n')
-    : withUntrustedBlock(lines.join('\n'), {
-        'Missing fields': missing.join(', '),
-      });
+    : withUntrustedBlock(lines.join('\n'), blocks);
 }
 
 function renderBooked(out: BookOutput): string {
@@ -1280,7 +1517,7 @@ export const meBook = defineTool<typeof bookInput, typeof bookOutput, ToolDeps>(
     name: TOOL_NAME,
     title: 'Book me in',
     description:
-      "Books for the signed-in client at a business they know by id, in two calls. The first checks the time and returns a preview and a confirmation_token valid for 10 minutes; nothing is booked. After the client agrees, the second call with the same selection and that token creates the booking and returns it. The client's name and phone come from their Altegio profile. A business that requires an e-mail the profile lacks answers a required_field fallback naming email in missing_fields; ask the client for theirs and call again with the optional email argument for a new preview. Where the chat cannot complete a booking (online prepayment, a membership-only service, an inactive widget, a business that takes no bookings from AI assistants) the answer states the reason and carries the pre-filled booking widget link. The optional second_appointment (a different named team member, the same start) books two people side by side in one preview and one confirmation, both under the client's name. Needs the client's sign-in.",
+      "Books for the signed-in client at a business they know by id, in two calls. The first checks the time and returns a preview and a confirmation_token valid for 10 minutes; nothing is booked. After the client agrees, the second call with the same selection and that token creates the booking and returns it. The client's name and phone come from their Altegio profile. A business that requires more answers a required_field fallback: for an e-mail the profile lacks, ask the client and call again with email; for its booking form questions (fallback.form_fields), ask the client and call again with custom_fields. Where the chat cannot book (prepayment, a membership-only service, an inactive widget, a business that takes no assistant bookings) the answer states the reason and carries the pre-filled widget link. The optional second_appointment (a different named team member, the same start) books two people side by side in one preview and one confirmation, both under the client's name. Needs the client's sign-in.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -1293,6 +1530,7 @@ export const meBook = defineTool<typeof bookInput, typeof bookOutput, ToolDeps>(
       BOOKING_ROUTES.company,
       BOOKING_ROUTES.services,
       BOOKING_ROUTES.teamMembers,
+      BOOKING_ROUTES.formCustomFields,
       MARKETPLACE_ROUTES.installation,
       BOOKING_ROUTES.check,
       USER_ROUTES.profile,

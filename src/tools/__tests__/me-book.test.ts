@@ -80,6 +80,8 @@ function setup(
     services?: FakeReply;
     /** The card of location 731000, a place the client has no record at; its catalog is the default one. */
     otherCompany?: FakeReply;
+    /** The booking form's custom fields of form 1463903; absent, none. */
+    formFields?: FakeReply;
     timeoutMs?: number;
     /** The assistant-booking gate for application 2642; absent, no gate. */
     gate?: { installation?: FakeReply; ttlMs?: number };
@@ -110,6 +112,12 @@ function setup(
       method: 'GET',
       path: `/company/${LOCATION}`,
       reply: options.company ?? loadFixture('company', 'default'),
+    },
+    {
+      method: 'GET',
+      path: '/booking/forms/1463903/custom_fields/',
+      reply:
+        options.formFields ?? loadFixture('bookform_custom_fields', 'empty'),
     },
     {
       method: 'GET',
@@ -198,6 +206,15 @@ interface BookOut {
     link: { url: string; kind: string } | null;
     second_link: { url: string; kind: string } | null;
     missing_fields: string[] | null;
+    form_fields:
+      | {
+          code: string;
+          title: string | null;
+          type: string | null;
+          required: boolean;
+          values: string[] | null;
+        }[]
+      | null;
   } | null;
 }
 
@@ -573,6 +590,173 @@ describe("me_book email argument (ADR 0007): the client's e-mail where the busin
   });
 });
 
+describe("me_book booking form questions (ADR 0008): the widget's required fields are enforced at the preview", () => {
+  const ANSWERS = { floor: '3', return: '05.11.2026' };
+
+  function createBody(made: Setup): {
+    appointments: { custom_fields?: Record<string, unknown> }[];
+  } {
+    const call = made.upstream.calls.find((entry) =>
+      entry.url.pathname.includes('book_record')
+    );
+    if (call?.body == null) throw new Error('no create call was sent');
+    return JSON.parse(call.body) as {
+      appointments: { custom_fields?: Record<string, unknown> }[];
+    };
+  }
+
+  it('answers the first call with a required_field fallback naming the questions, before any check or token', async () => {
+    const made = setup({
+      formFields: loadFixture('bookform_custom_fields', 'with_required'),
+    });
+    const result = await made.invoke(SELECTION);
+    expect(result.result.isError).not.toBe(true);
+    const out = result.result.structuredContent as unknown as BookOut;
+    expect(out.status).toBe('fallback');
+    expect(out.fallback?.reason).toBe('required_field');
+    expect(out.fallback?.missing_fields).toEqual(['return', 'floor']);
+    expect(out.fallback?.form_fields).toEqual([
+      {
+        code: 'return',
+        title: 'Return',
+        type: 'date',
+        required: true,
+        values: null,
+      },
+      {
+        code: 'floor',
+        title: 'Floor',
+        type: 'select',
+        required: true,
+        values: ['1', '2', '3'],
+      },
+    ]);
+    expect(out.fallback?.link?.kind).toBe('preselected');
+    const text = textOf(result);
+    expect(text).toContain('custom_fields');
+    expect(text).toContain('field floor');
+    expect(text).toContain('one of: 1 | 2 | 3');
+    expect(
+      made.upstream.calls.some((call) =>
+        call.url.pathname.includes('book_check')
+      )
+    ).toBe(false);
+  });
+
+  it('previews and books with the answers, and the create carries them', async () => {
+    const made = setup({
+      formFields: loadFixture('bookform_custom_fields', 'with_required'),
+    });
+    const { preview, confirm } = await previewThenConfirm(made, {
+      ...SELECTION,
+      custom_fields: ANSWERS,
+    });
+    const shown = preview.result.structuredContent as {
+      preview: { form_answers_included: string[] | null };
+    };
+    expect(shown.preview.form_answers_included).toEqual(['floor', 'return']);
+    expect(textOf(preview)).toContain('booking form answers');
+    const out = confirm.result.structuredContent as unknown as BookOut;
+    expect(out.status).toBe('booked');
+    expect(createBody(made).appointments[0]?.custom_fields).toEqual(ANSWERS);
+  });
+
+  it('carries the answers on both appointments of a pair', async () => {
+    const made = setup({
+      formFields: loadFixture('bookform_custom_fields', 'with_required'),
+      create: loadFixture('book_record_create', 'created_pair'),
+    });
+    const { confirm } = await previewThenConfirm(made, {
+      ...PAIR,
+      custom_fields: ANSWERS,
+    });
+    expect(confirm.result.isError).not.toBe(true);
+    const body = createBody(made);
+    expect(body.appointments).toHaveLength(2);
+    for (const entry of body.appointments) {
+      expect(entry.custom_fields).toEqual(ANSWERS);
+    }
+  });
+
+  it('refuses a select answer outside the allowed values, in band and before any check', async () => {
+    const made = setup({
+      formFields: loadFixture('bookform_custom_fields', 'with_required'),
+    });
+    const result = await made.invoke({
+      ...SELECTION,
+      custom_fields: { floor: '4', return: '05.11.2026' },
+    });
+    expect(result.result.isError).toBe(true);
+    expect(textOf(result)).toContain('allowed values');
+    expect(
+      made.upstream.calls.some((call) =>
+        call.url.pathname.includes('book_check')
+      )
+    ).toBe(false);
+  });
+
+  it('refuses an answer to a field the form does not have', async () => {
+    const made = setup();
+    const result = await made.invoke({
+      ...SELECTION,
+      custom_fields: { stage: '2' },
+    });
+    expect(result.result.isError).toBe(true);
+    expect(textOf(result)).toContain('has no field "stage"');
+  });
+
+  it('does not redeem a token issued with other answers', async () => {
+    const made = setup({
+      formFields: loadFixture('bookform_custom_fields', 'with_required'),
+    });
+    const first = await made.invoke({
+      ...SELECTION,
+      custom_fields: ANSWERS,
+    });
+    const token = (
+      first.result.structuredContent as { confirmation_token: string }
+    ).confirmation_token;
+    const confirm = await made.invoke({
+      ...SELECTION,
+      custom_fields: { ...ANSWERS, floor: '2' },
+      confirmation_token: token,
+    });
+    expect(confirm.result.isError).toBe(true);
+    expect(textOf(confirm)).toContain('not valid for this selection');
+  });
+
+  it('books as before at a business whose form has no custom fields', async () => {
+    const made = setup();
+    const { confirm } = await previewThenConfirm(made, SELECTION);
+    const out = confirm.result.structuredContent as unknown as BookOut;
+    expect(out.status).toBe('booked');
+    expect(createBody(made).appointments[0]?.custom_fields).toBeUndefined();
+  });
+
+  it('refuses the preview when the form cannot be read just now', async () => {
+    const made = setup({
+      formFields: { status: 503, body: { success: false, meta: [] } },
+    });
+    const result = await made.invoke(SELECTION);
+    expect(result.result.isError).toBe(true);
+    expect(textOf(result)).toContain(
+      'the booking form could not be checked just now'
+    );
+  });
+
+  it('books as before when the route does not know the form (404)', async () => {
+    const made = setup({
+      formFields: {
+        status: 404,
+        body: { success: false, meta: { message: 'Not found' } },
+      },
+    });
+    const { confirm } = await previewThenConfirm(made, SELECTION);
+    const out = confirm.result.structuredContent as unknown as BookOut;
+    expect(out.status).toBe('booked');
+  });
+});
+
 describe('me_book confirm path: an unknown outcome never invites a double booking', () => {
   it('says the outcome is unknown and names me_list_bookings, for a create that times out', async () => {
     const made = setup({
@@ -685,6 +869,7 @@ describe('me_book preview: a place the client has no record at', () => {
         'GET /company/731000',
         'GET /book_services/731000',
         'GET /book_staff/731000',
+        'GET /booking/forms/1463903/custom_fields/',
         'POST /book_check/731000',
       ].sort()
     );

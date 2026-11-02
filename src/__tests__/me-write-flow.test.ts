@@ -197,6 +197,11 @@ async function start(
     },
     {
       method: 'GET',
+      path: '/booking/forms/1463903/custom_fields/',
+      reply: loadFixture('bookform_custom_fields', 'empty'),
+    },
+    {
+      method: 'GET',
       path: '/company/731000',
       reply: loadFixture('company', 'default'),
     },
@@ -370,6 +375,7 @@ describe('me_book, first call: the preview', () => {
         `GET /company/${LOCATION}`,
         `GET /book_services/${LOCATION}`,
         `GET /book_staff/${LOCATION}`,
+        'GET /booking/forms/1463903/custom_fields/',
         `POST /book_check/${LOCATION}`,
       ].sort()
     );
@@ -405,6 +411,7 @@ describe('me_book, first call: the preview', () => {
         'GET /company/731000',
         'GET /book_services/731000',
         'GET /book_staff/731000',
+        'GET /booking/forms/1463903/custom_fields/',
         'POST /book_check/731000',
       ].sort()
     );
@@ -587,6 +594,7 @@ describe('me_book output and logs', () => {
     expect(properties.sort()).toEqual(
       [
         'confirmation_token',
+        'custom_fields',
         'datetime',
         'email',
         'location_id',

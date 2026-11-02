@@ -31,6 +31,7 @@ import {
   type TeamMembersData,
   type UserPlacesData,
   type UserRecordsData,
+  bookformCustomFieldsDataSchema,
 } from './schemas.js';
 
 // Typed client of the public Altegio booking API (D-01). The route table is
@@ -64,6 +65,13 @@ export const BOOKING_ROUTES = Object.freeze({
   check: Object.freeze({
     method: 'POST',
     route: '/book_check/{location_id}',
+  } as const),
+  // The booking form's custom fields (ADR 0008): what the widget asks beyond
+  // name, phone and e-mail, with the required flag the create route does not
+  // enforce. The form id comes from the business card's bookforms.
+  formCustomFields: Object.freeze({
+    method: 'GET',
+    route: '/booking/forms/{form_id}/custom_fields/',
   } as const),
   // The reference routes behind business_search (owner decision 2026-10-12):
   // a client names a business and its city, never a location id. GET
@@ -258,6 +266,31 @@ export interface ClientProfile {
   email: string | null;
 }
 
+/**
+ * One custom field of a business's booking form (ADR 0008), as the widget
+ * renders it. Every text is third-party data the tools must sanitize before
+ * showing.
+ */
+export interface BookformField {
+  /** The key an answer is sent under in appointments[].custom_fields. */
+  code: string;
+  /** The question as the business worded it. */
+  title: string | null;
+  /** The widget's input kind, for example select, date, text, number, checkbox. */
+  type: string | null;
+  /** The entity the field belongs to; the booking form's own fields say "record". */
+  resource: string | null;
+  /** True when the widget does not submit the form without an answer. */
+  required: boolean;
+  /** The allowed values of a select, trimmed and non-empty; null for free input. */
+  values: readonly string[] | null;
+}
+
+/** The answers to a booking form's custom fields, by field code, sent as given. */
+export type CustomFieldValues = Readonly<
+  Record<string, string | number | boolean | readonly string[]>
+>;
+
 /** What a create returns: the id of the new booking. The creation hash is never read. */
 export interface CreatedBooking {
   bookingId: number;
@@ -389,7 +422,8 @@ function assertTeamMemberOrAny(value: number): void {
 /** One numbered appointment of a check or create body, every id and the datetime verified. */
 function appointmentEntry(
   id: number,
-  selection: CheckSelection
+  selection: CheckSelection,
+  customFields?: CustomFieldValues
 ): AppointmentEntry {
   const serviceIds = checkedServiceIds(selection.serviceIds);
   if (serviceIds.length === 0) {
@@ -404,6 +438,7 @@ function appointmentEntry(
     services: [...serviceIds],
     staff_id: selection.teamMemberId,
     datetime: selection.datetime,
+    ...(customFields === undefined ? {} : { custom_fields: customFields }),
   };
 }
 
@@ -412,6 +447,8 @@ interface AppointmentEntry {
   services: number[];
   staff_id: number;
   datetime: string;
+  /** The booking form answers (ADR 0008); only the create sends them. */
+  custom_fields?: CustomFieldValues;
 }
 
 /**
@@ -422,9 +459,13 @@ interface AppointmentEntry {
  */
 function pairEntries(
   first: CheckSelection,
-  second: CheckSelection
+  second: CheckSelection,
+  customFields?: CustomFieldValues
 ): AppointmentEntry[] {
-  const entries = [appointmentEntry(1, first), appointmentEntry(2, second)];
+  const entries = [
+    appointmentEntry(1, first, customFields),
+    appointmentEntry(2, second, customFields),
+  ];
   for (const entry of entries) {
     assertPositiveId(entry.staff_id, 'team member id');
   }
@@ -953,6 +994,54 @@ export class BookingClient {
   }
 
   /**
+   * The custom fields of a booking form (ADR 0008): the questions the widget
+   * asks beyond name, phone and e-mail, with the required flag the create
+   * route does not enforce itself. A form without custom fields answers [].
+   * Every text is third-party data.
+   */
+  async bookformCustomFields(
+    formId: number,
+    call?: UpstreamCallOptions
+  ): Promise<BookformField[]> {
+    assertPositiveId(formId, 'booking form id');
+    const { route, method } = BOOKING_ROUTES.formCustomFields;
+    const data = await this.read(
+      {
+        method,
+        route,
+        path: `/booking/forms/${formId}/custom_fields/`,
+        ...call,
+      },
+      bookformCustomFieldsDataSchema
+    );
+    const fields: BookformField[] = [];
+    for (const item of data) {
+      const attributes = item.attributes;
+      if (attributes == null) continue;
+      const code = nonEmpty(attributes.code?.trim());
+      if (code === null) continue;
+      // PHP serialises an empty list as [] and pads values with whitespace
+      // (a real form answered values: ["1", "2", "3\n"]).
+      const values = (attributes.values ?? [])
+        .flatMap((value) =>
+          typeof value === 'string' || typeof value === 'number'
+            ? [String(value).trim()]
+            : []
+        )
+        .filter((value) => value !== '');
+      fields.push({
+        code,
+        title: nonEmpty(attributes.title?.trim()),
+        type: nonEmpty(attributes.type?.trim()),
+        resource: nonEmpty(attributes.resource?.trim()),
+        required: truthy(attributes.is_required),
+        values: values.length === 0 ? null : values,
+      });
+    }
+    return fields;
+  }
+
+  /**
    * Services bookable online (DISC-02), in upstream order. Filters: only the
    * services one team member provides (staff_id), only those free at a slot
    * datetime, or only the given services.
@@ -1206,11 +1295,12 @@ export class BookingClient {
     locationId: number,
     selection: CheckSelection,
     profile: ClientProfile,
-    call: UpstreamCallOptions
+    call: UpstreamCallOptions,
+    customFields?: CustomFieldValues
   ): Promise<CreatedBooking> {
     assertUserToken(call.userToken);
     assertLocationId(locationId);
-    const entry = appointmentEntry(1, selection);
+    const entry = appointmentEntry(1, selection, customFields);
     const { data, status } = await this.sendCreate(
       locationId,
       [entry],
@@ -1242,13 +1332,14 @@ export class BookingClient {
     first: CheckSelection,
     second: CheckSelection,
     profile: ClientProfile,
-    call: UpstreamCallOptions
+    call: UpstreamCallOptions,
+    customFields?: CustomFieldValues
   ): Promise<CreatedPair> {
     assertUserToken(call.userToken);
     assertLocationId(locationId);
     const { data, status } = await this.sendCreate(
       locationId,
-      pairEntries(first, second),
+      pairEntries(first, second, customFields),
       profile,
       call
     );

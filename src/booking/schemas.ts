@@ -394,3 +394,26 @@ export const companiesDataSchema = z.array(
     active: flag.nullish(),
   })
 );
+
+/**
+ * GET /booking/forms/{form_id}/custom_fields/ (ADR 0008): the booking form's
+ * custom fields as the widget reads them, JSON:API items whose attributes
+ * carry the field config. Loose: only what the client maps is read.
+ */
+export const bookformCustomFieldsDataSchema = z.array(
+  z.looseObject({
+    attributes: z
+      .looseObject({
+        code: text,
+        title: text,
+        type: text,
+        resource: text,
+        is_required: flag.nullish(),
+        values: z.array(z.unknown()).nullish(),
+      })
+      .nullish(),
+  })
+);
+export type BookformCustomFieldsData = z.infer<
+  typeof bookformCustomFieldsDataSchema
+>;
