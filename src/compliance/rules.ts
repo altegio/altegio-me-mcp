@@ -104,6 +104,13 @@ const PII_NAME_PATTERN =
 const PII_TEXT_PATTERN =
   /\b(phone number|sms|verification code|one-time (code|password)|otp|e-?mail address|full name|date of birth|passport|national id)\b/i;
 
+// ADR 0007: the one sanctioned personal-data input, as `tool:path`. me_book
+// takes the client's e-mail for a business whose booking form requires one the
+// profile lacks: bound to the preview's token, sent only to that business with
+// that booking, never returned, logged or kept. Every other PII input, and an
+// e-mail input on any other tool, stays an R9 violation.
+const SANCTIONED_PII_INPUTS: ReadonlySet<string> = new Set(['me_book:email']);
+
 // Invisible and bidirectional characters. The ranges are imported from
 // src/tools/untrusted.ts (INVISIBLE_RANGES), so the sanitiser and this gate
 // cannot drift. Written with \u{...} escapes and the u flag (the Tag block is
@@ -392,8 +399,9 @@ export function checkTool(
     }
   }
 
-  // R9 no personal data inputs, at any depth
+  // R9 no personal data inputs, at any depth, save the ADR 0007 exception
   walkProperties(inputSchema, '', (name, schema, path) => {
+    if (SANCTIONED_PII_INPUTS.has(`${tool}:${path}`)) return;
     if (PII_NAME_PATTERN.test(snakeTokens(name))) {
       add('R9', `input "${path}" asks for personal data`);
     }
