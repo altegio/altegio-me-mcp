@@ -188,3 +188,44 @@ Manual emergency traffic changes still require the owner's explicit approval
 under the hosting runbook; ordinary forward rollback remains the delivery path.
 
 API reference: [Cloud Run Service etag](https://cloud.google.com/run/docs/reference/rest/v2/projects.locations.services).
+
+## Weekly summary in Slack
+
+Every Monday at 10:00 Europe/Berlin a Claude Code cloud routine posts one message to
+`#dev-me-mcp` with the previous calendar week (Monday 00:00 to Sunday 24:00, Europe/Berlin):
+sign-ins by assistant, tool calls by tool, bookings by salon and opt-outs. The routine is
+"Altegio.me MCP — weekly summary to #dev-me-mcp"
+(https://claude.ai/code/routines/trig_01CQJj4tHyPXLcXgiyVGGw3y, created 2026-11-04) and runs
+under the owner's claude.ai account; its prompt holds the queries, it checks out nothing from
+this repository and changes nothing anywhere. Changing the report means editing that prompt.
+
+Sources, all read-only:
+
+- **Sign-ins by assistant.** The proxy's audit events `altegio_phone_login_ok` and
+  `altegio_login_ok` with `resource` `https://mcp.alteg.io/me`, in Cloud Logging of
+  `altegio-mcp` (Cloud Run service `mcp-proxy`, the customer stack), read through the
+  platform's `gcp-logs` MCP (`https://mcp.altegio.dev/gcp-logs/mcp`, staff Google sign-in).
+  `client_id` names the assistant through the proxy's static client list (`claude-web`,
+  `claude-desktop`, `claude-code`, `chatgpt`, `cursor`, `antigravity`); a dynamically
+  registered client is named by the `software_id` of its `dcr_registration_created` event.
+  Unique users are distinct `sub` values, counted and never shown.
+- **Tool calls by tool.** This server's `mcp_call` lines (see "Logs"): `rpc_method`
+  `tools/call`, one filter per tool, `outcome` for the errors and `mcp_client` for the
+  assistant, through the same MCP. Its `query_logs` returns at most 200 entries per call and
+  shows only `message` for a line that has one, so a count is the number of entries a filter
+  returns; a window at the cap is split by day, then by six hours, and a count still at the cap
+  is written as `≥`.
+- **Bookings by salon.** `salon.tt_records` with `partner_id = 5279`, the `partner_systems` id
+  of developer account 2630 that every `me_book` write carries, grouped by `salon_id`, with
+  `deleted` as later cancellations; MySQL time is UTC+3. A booking made in the widget after a
+  `book_check` hand-off carries no partner id and cannot be attributed. BI MySQL replica through
+  the `bi-data` MCP.
+- **Opt-outs.** `salon.marketplace_application_log` for application 2642 with `status_to`
+  `uninstalled`, by `source` (`marketplace` is the location's own switch-off,
+  `product_license` and `automatic_expiration` follow the licence), plus
+  `marketplace_application_salon_links` for the current number of locations. The Hub's
+  `get_statistics` answered 400 on 2026-11-04 and is not used.
+
+The message carries counts and business names only: no phones, e-mails, user ids, `sub`
+values or tool arguments. The `gcp-logs` connector was not yet attached to the routine on
+2026-11-04; until it is, the message says that the sign-in and tool-call sections are skipped.
