@@ -5,16 +5,17 @@ and 26 are the supported runtime lines; use at least the versions in package.jso
 
 ## Reporting
 
-Do not include vulnerabilities, tokens, user data or production responses in
-public issues. Current repository collaborators should contact the repository
-owner, [Mike Kondakov (@kondamih)](https://github.com/kondamih), through their
-existing private Altegio channel. Include the affected commit, a synthetic
-reproduction, impact and a proposed mitigation where possible.
+Use **Report a vulnerability** on the repository's
+[Security page](https://github.com/altegio/altegio-me-mcp/security/advisories).
+Private vulnerability reporting was enabled and verified on 5 November 2026.
+Include the affected revision, impact and a minimal synthetic reproduction.
+Do not include live tokens or customer data.
 
-A public private-reporting channel must be enabled and verified by the owner
-before the repository becomes public. This document does not claim that GitHub
-private vulnerability reporting is already available. See the
-[publication decisions](docs/open-source-readiness.md).
+If private reporting is unavailable, open a minimal
+[contact-request issue](https://github.com/altegio/altegio-me-mcp/issues/new)
+asking verified maintainers `@kondamih` or `@petroff` for a private channel.
+Include no exploit details, credentials, client records or private URLs in that
+public request. Share details only once a private channel is agreed.
 
 ## Boundaries and checks
 

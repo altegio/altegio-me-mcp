@@ -1,21 +1,25 @@
-# Open-source readiness
+# Open-source publication
 
-This is preparation, not authorization to publish. The repository and npm package
-remain private, version 0.2.0. The owner approved [MIT](../LICENSE), copyright
-(c) 2026 Altegio, on 2026-11-05. No npm release, public
-container release, access change or history rewrite is part of this change.
+The owner approved MIT licensing and public source distribution on **5 November
+2026**. The existing repository is now public. Private vulnerability reporting,
+secret scanning, push protection, Dependabot security updates and Pro-aligned
+merge/Actions protections are enabled; see the verified
+[repository settings](../.github/REPOSITORY_SETTINGS.md).
 
-## Owner decisions before publication
+The npm package remains `private: true`, version 0.2.0. No npm or public container
+release, credential rotation or history rewrite was performed. Future publishing
+needs a separate decision on package naming, versioning and release ownership.
 
-| Decision | Concrete proposal | Current state |
-| --- | --- | --- |
-| License and rights holder | MIT, copyright (c) 2026 Altegio | Approved and applied; root LICENSE and both package manifests agree |
-| Security and conduct reports | Enable and test GitHub private vulnerability reporting; provide a confirmed private fallback contact in SECURITY.md and CODE_OF_CONDUCT.md | Existing collaborators can contact the documented owner; public route not verified |
-| Visibility | Make this existing repository public only after reporting route and history review are approved | Private retained |
-| Historical content | Review the pre-existing token-shaped example in the booking schema tests; current code uses an explicit synthetic value | No evidence that it is active; provenance must be confirmed, no credential probe or history rewrite performed |
-| Branch protection | Keep PRs and the current `test` status required; agree whether independent review should be enforced by a GitHub rule | Existing settings retained; this delivery requires independent exact-head review |
-| Code scanning | Use the prepared SHA-pinned CodeQL workflow once public; consider Dependabot/security features with the owner | No paid private feature enabled; CodeQL skips private repositories |
-| Package distribution | Keep this an HTTP service built from source/container; approve package naming, version and release ownership before any npm publication | Private flag retained; installed tarball tested locally |
+## Historical fixture provenance
+
+The historical token-shaped value in the booking schema's documented-example test
+matches the example in the anonymously accessible
+[public booking OpenAPI document](https://developer.alteg.io/_bundle/en/public/openapi.json?download).
+This match was verified on 5 November 2026; the corresponding specification source
+predates this MCP fixture. Current tests use an explicitly synthetic value.
+This establishes documentation provenance, not credential validity: the value was
+never used for authentication or customer operations. No historical value is
+repeated here and no Git history was rewritten.
 
 ## Prepared repository surface
 
@@ -40,10 +44,9 @@ booking tests cover per-client ownership and confirmation behavior.
 
 Gitleaks 8.30.1 scanned the candidate tree and 277 reachable historical commits
 before this change. Findings were fixed localhost TLS fixtures, explicit test
-keys and one token-shaped documented example. The last item's provenance remains
-unconfirmed. No private specification or diagnostic payload was added. A secret
-scanner is not proof that all historical information is suitable for publication;
-the owner still needs to review historical disclosure and the public reporting route.
+keys and one token-shaped documented example. The documented example's provenance was subsequently confirmed as described above. No private
+specification or diagnostic payload was added. Secret scanning remains a signal
+for review, not proof that all future content is suitable for publication.
 
 See [dependency notes](dependency-upgrade.md) for the version matrix and remaining
 low development advisory. CI evidence and exact-head independent review belong to

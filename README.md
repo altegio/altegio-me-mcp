@@ -24,8 +24,8 @@ OAuth/sign-in and monitoring. Direct production requests require the proxy signa
 and an authorized partner or client identity. The backend does not issue user tokens.
 
 Licensed under [MIT](LICENSE), copyright (c) 2026 Altegio.
-Repository visibility and npm publication remain unchanged and require separate
-approval; see [publication decisions](docs/open-source-readiness.md).
+The source repository is public. The npm package remains unpublished and
+`private: true`; see [publication status](docs/open-source-readiness.md).
 
 ## Product scope
 
@@ -610,15 +610,18 @@ CI.
 
 ## CI and branch rules
 
-Workflow `CI` (`.github/workflows/ci.yml`) runs on pull requests to `main` and on pushes to
-`main`. It has a single job named `test` on Node 26 and also verifies Node 24, with these steps in order: checkout,
-install, conventional commits (pull requests only), lint, format check, typecheck, unit tests,
-build, Docker build, container smoke test, dependency audit (`npm audit --audit-level=high`).
+Workflow `CI` (`.github/workflows/ci.yml`) runs on pull requests to `main` and on
+pushes to `main`. Its `test` job validates Node 26 and Node 24, lint, formatting,
+source and browser types, tests, inventory, installed packages, containers and
+release ordering. Production dependencies must have no advisories; the full audit
+fails at moderate severity. CodeQL runs separately as `analyze`.
 
-Ruleset `default-branch-ci-gate` protects `main`: changes only through pull requests, required
-status check `test`, no force-push, no deletion. Organization admins keep a bypass for
-emergencies; nobody else has one. The ruleset body is in
-[`.github/rulesets/main-ci-gate.json`](.github/rulesets/main-ci-gate.json).
+Ruleset `default-branch-ci-gate` requires pull requests, resolved review threads,
+an up-to-date branch and successful `test` and `analyze` checks. It blocks force
+pushes and deletion with no administrator bypass. Only merge commits are allowed.
+Independent exact-head review remains required; GitHub approval counts stay at
+zero. See [repository settings](.github/REPOSITORY_SETTINGS.md) and the
+[applied ruleset](.github/rulesets/main-ci-gate.json).
 
 Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`,
 `ci:`, `build:`). A husky `commit-msg` hook checks them locally and CI checks every commit and
@@ -626,13 +629,13 @@ the pull request title.
 
 ## Deploy
 
-Status: live. First deployed by the trigger on 2026-10-05 (revision `altegio-me-mcp-00002-kih`,
-commit c73ecb7, version 0.2.0); the revision serving now is `altegio-me-mcp-b32ak5r5qmvb57g246qju3odyua`
-(commit 4c781e6, also version 0.2.0, deployed 2026-10-05). The service is published at
-`https://mcp.alteg.io/me` through the platform proxy's anonymous lane (altegio-mcp-platform #250,
-deployed 2026-10-05) and reaches Cloud Run over https on its `run.app` address, which answers
-`/health` and refuses an unsigned `/mcp` with 401. claude.ai completed the known-business flow
-through the public address on 2026-10-06 ([`docs/research/claude-connector-run.md`](docs/research/claude-connector-run.md#connector-run-results)).
+Status: live.
+
+The maintained service is published at `https://mcp.alteg.io/me` through the
+platform proxy's anonymous lane. The proxy reaches Cloud Run over HTTPS; the
+backend answers `/health` and refuses unsigned `/mcp` requests with 401. The
+serving revision is operational state, not a fixed README value: verify it through
+`/health` and the ordered release record before assessing a deployment.
 Every revision comes from the trigger on `main`; the serving commit is reported by `/health`. What
 ran live, with dates and revisions, is in the deployment record in
 [`docs/runbooks/gcp-hosting.md`](docs/runbooks/gcp-hosting.md); the operational contract is

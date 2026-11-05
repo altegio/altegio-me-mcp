@@ -30,7 +30,7 @@ Open an issue describing the behavior and a synthetic reproduction. Use a focuse
 branch and Conventional Commits (`fix:`, `feat:`, `docs:`, `chore:`). Include the
 problem, resulting behavior, compatibility risks and checks in the pull request.
 An independent review of the exact head is required before merge, alongside the
-required `test` check. New commits require re-review of the changed diff.
+required `test` and `analyze` checks. New commits require re-review of the changed diff.
 
 Keep SDK imports in `src/mcp`; use `src/tools` for tools and `src/booking` for
 upstream calls. Preserve per-request identity, scopes, ownership checks and
