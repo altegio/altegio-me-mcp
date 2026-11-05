@@ -36,7 +36,10 @@ no Altegio API calls and needs no production signing-secret access for the build
 account. CI also checks absent/malformed key boot failures and secret redaction.
 `python3 scripts/verify-backend.py <run.app HTTPS URL> <deployed commit>` uses
 existing operator access to the ME signing key and prints only probe outcomes.
-It checks all three signals and unsigned 401. The tagged production candidate separately proves both real mounts boot, correct
+It checks all three signals and unsigned 401. For the public proxy route, use
+`scripts/smoke-url.sh --public https://mcp.alteg.io/me` with
+`ALTEGIO_OPERATOR_TOKEN_FILE` pointing to a private partner-token file. This checks
+authenticated protocol and the proxy-owned OAuth metadata without printing credentials. The tagged production candidate separately proves both real mounts boot, correct
 commit/liveness and unsigned rejection. An operator/central monitor must verify
 real signed HTTPS protocol and the functional canary after deployment.
 

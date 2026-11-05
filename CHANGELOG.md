@@ -7,6 +7,7 @@
 - Reject untrusted Host headers before authentication and bound concurrent token probes.
 - Verify the installed HTTP executable, generated tool inventory, read-only container,
   both supported runtimes and the current release-tool image.
+- Correct the public-route probe to require authentication and platform OAuth metadata.
 - Add contribution, security and publication guidance. No public release is implied.
 
 ## 0.2.0
