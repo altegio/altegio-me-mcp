@@ -14,6 +14,11 @@ import urllib.error
 import urllib.request
 import uuid
 
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+
 base, commit = sys.argv[1:]
 if not base.startswith('https://'):
     sys.exit('HTTPS backend URL required')
@@ -50,14 +55,14 @@ def request(path, payload=None, signed=True):
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
             if payload is not None and signed:
-                assert response.headers.get('x-request-id') == headers['x-mcp-auth-request-id'], 'signed correlation mismatch'
+                require(response.headers.get('x-request-id') == headers['x-mcp-auth-request-id'], 'signed correlation mismatch')
             return response.status, response.headers, json.load(response)
     except urllib.error.HTTPError as error:
         return error.code, error.headers, {}
 
 
 status, _, health = request('/health')
-assert status == 200 and health.get('status') == 'ok' and health.get('commit') == commit, 'liveness/commit failed'
+require(status == 200 and health.get('status') == 'ok' and health.get('commit') == commit, 'liveness/commit failed')
 expected = ['book_check', 'business_get', 'business_list_dates', 'business_list_services',
             'business_list_team_members', 'business_list_time_slots', 'business_search', 'me_book', 'me_cancel_booking',
             'me_list_bookings', 'me_list_places', 'me_reschedule_booking']
@@ -68,16 +73,16 @@ for i, (method, params) in enumerate([
     ('tools/call', {'name': 'business_get', 'arguments': {'location_id': 722227}}),
 ]):
     status, headers, body = request('/mcp', {'jsonrpc': '2.0', 'id': i + 1, 'method': method, 'params': params})
-    assert status == 200 and 'result' in body and 'error' not in body, method + ' failed'
-    assert not headers.get('mcp-session-id'), 'stateful response'
+    require(status == 200 and 'result' in body and 'error' not in body, method + ' failed')
+    require(not headers.get('mcp-session-id'), 'stateful response')
     result = body['result']
     if method == 'initialize':
-        assert result.get('protocolVersion') == '2025-11-25', 'protocol mismatch'
+        require(result.get('protocolVersion') == '2025-11-25', 'protocol mismatch')
     elif method == 'tools/list':
-        assert sorted(tool['name'] for tool in result.get('tools', [])) == expected, 'tool catalog mismatch'
+        require(sorted(tool['name'] for tool in result.get('tools', [])) == expected, 'tool catalog mismatch')
     else:
-        assert result.get('isError') is not True and result.get('structuredContent'), 'functional canary failed'
+        require(result.get('isError') is not True and result.get('structuredContent'), 'functional canary failed')
     print(f'PASS: {method} HTTP 200 stateless valid result')
 status, _, _ = request('/mcp', {'jsonrpc': '2.0', 'id': 4, 'method': 'tools/list'}, signed=False)
-assert status == 401, 'unsigned direct request accepted'
+require(status == 401, 'unsigned direct request accepted')
 print('PASS: deployed commit/liveness, tool protocol, business_get(722227), unsigned 401')

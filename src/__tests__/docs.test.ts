@@ -31,7 +31,7 @@ const REQUIRED_MENTIONS = [
   'npm run check',
   'docker build',
   'ALTEGIO_API_TOKEN',
-  'Node 22',
+  'Node 26',
   'default-branch-ci-gate',
   'npm run test:live',
   'src/booking',

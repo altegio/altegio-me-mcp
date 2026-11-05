@@ -7,14 +7,14 @@ NAME="me-gate-${BUILD_ID:-$$}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="$(mktemp -d)"
 cleanup() {
-  docker rm -f "$NAME" >/dev/null 2>&1 || true
+  docker rm -fv "$NAME" >/dev/null 2>&1 || true
   rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT
 
 docker run --rm --entrypoint node "$IMAGE" -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))' > "$WORK_DIR/proxy-key"
 chmod 0644 "$WORK_DIR/proxy-key"
-docker create --name "$NAME" \
+docker create --read-only --mount type=volume,destination=/tmp --name "$NAME" \
   -e ALTEGIO_API_TOKEN=image-gate-canary-token \
   -e PUBLIC_BASE_URL=https://fixture.invalid/me \
   -e MCP_PROXY_BACKEND_KEY_FILE=/tmp/proxy-key \

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { Client } from '@modelcontextprotocol/client';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { BOOKING_ROUTES, BookingClient } from '../booking/client.js';
 import { GateSaturatedError } from '../booking/gate.js';
 import { ALTEGIO_ACCEPT, type GateLike } from '../booking/http.js';

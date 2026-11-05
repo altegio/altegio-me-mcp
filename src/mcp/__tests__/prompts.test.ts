@@ -1,7 +1,7 @@
 import { describe, expect, it } from '@jest/globals';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { McpError } from '@modelcontextprotocol/sdk/types.js';
+import { Client } from '@modelcontextprotocol/client';
+import { InMemoryTransport } from '@modelcontextprotocol/client';
+import { ProtocolError } from '@modelcontextprotocol/server';
 import { textViolations } from '../../compliance/rules.js';
 import { createCallRecord } from '../../observability/call-log.js';
 import { createMcpServer } from '../create-server.js';
@@ -245,8 +245,8 @@ describe('prompts over MCP', () => {
         .getPrompt({ name: 'no_such_prompt' })
         .then(() => null)
         .catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(McpError);
-      expect((failure as McpError).message).toContain('prompts/list');
+      expect(failure).toBeInstanceOf(ProtocolError);
+      expect((failure as ProtocolError).message).toContain('prompts/list');
     });
   });
 });

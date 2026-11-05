@@ -23,18 +23,21 @@ jobs:
       HUSKY: '0'
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
 
       - name: Install
-        run: npm ci
+        run: |
+          npm install --global npm@12.2.2 --ignore-scripts
+          npm ci
+          npm ci --prefix scripts/browser-check --ignore-scripts
 
       - name: Conventional commits
         if: github.event_name == 'pull_request'
@@ -63,20 +66,40 @@ jobs:
         run: npm run format:check
 
       - name: Typecheck
-        run: npm run typecheck
+        run: npm run typecheck && npm run typecheck:browser
 
       - name: Unit tests
-        run: npm test
+        run: npm run test:coverage
 
       - name: Build
         run: npm run build
+
+      - name: Inventory and package install
+        run: npm run inventory:check && npm run test:package
+
+      - name: Node 24 compatibility
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.2
+
+      - name: Verify Node 24
+        run: |
+          npm install --global npm@12.2.2 --ignore-scripts
+          npm run typecheck
+          npm test
+          npm run test:package
 
       - name: Docker build
         run: docker build -t altegio-me-mcp:ci .
 
       - name: Container smoke test
-        run: bash scripts/smoke.sh altegio-me-mcp:ci
+        run: |
+          bash scripts/smoke.sh altegio-me-mcp:ci
+          bash scripts/image-gate.sh altegio-me-mcp:ci
 
       # Last, so the other signals still print when a new advisory appears.
       - name: Dependency audit
-        run: npm audit --audit-level=high
+        run: |
+          npm audit --omit=dev --audit-level=low
+          npm audit --audit-level=moderate
+          npm audit --prefix scripts/browser-check --audit-level=low

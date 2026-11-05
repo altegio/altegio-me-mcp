@@ -44,6 +44,8 @@ export interface PartnerTokenValidatorOptions {
   validTtlMs?: number;
   invalidTtlMs?: number;
   maxEntries?: number;
+  /** Maximum concurrent distinct token probes; duplicate checks still share. */
+  maxPending?: number;
   timeoutMs?: number;
   now?: () => number;
 }
@@ -59,6 +61,7 @@ export function createPartnerTokenValidator(
   const validTtlMs = options.validTtlMs ?? PARTNER_TOKEN_VALID_TTL_MS;
   const invalidTtlMs = options.invalidTtlMs ?? PARTNER_TOKEN_INVALID_TTL_MS;
   const maxEntries = options.maxEntries ?? PARTNER_TOKEN_CACHE_MAX;
+  const maxPending = options.maxPending ?? 64;
   const timeoutMs = options.timeoutMs ?? PARTNER_TOKEN_PROBE_TIMEOUT_MS;
   const now = options.now ?? Date.now;
   const cache = new Map<string, CacheEntry>();
@@ -103,6 +106,7 @@ export function createPartnerTokenValidator(
       }
       const pending = inFlight.get(key);
       if (pending !== undefined) return pending;
+      if (inFlight.size >= maxPending) return Promise.resolve('unavailable');
       const started = check(key, token).finally(() => {
         inFlight.delete(key);
       });
