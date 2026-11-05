@@ -629,6 +629,8 @@ the pull request title.
 
 ## Deploy
 
+Status: live.
+
 The maintained service is published at `https://mcp.alteg.io/me` through the
 platform proxy's anonymous lane. The proxy reaches Cloud Run over HTTPS; the
 backend answers `/health` and refuses unsigned `/mcp` requests with 401. The
