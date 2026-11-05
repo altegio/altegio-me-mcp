@@ -43,7 +43,7 @@ export default tseslint.config(
             {
               group: ['@modelcontextprotocol/*'],
               message:
-                'Only src/mcp/** may import the MCP SDK; tools stay SDK-free so a later move to SDK v2 / protocol 2026-07-28 touches src/mcp only (D-04, ADR-0001-D6).',
+                'Only src/mcp/** may import the MCP SDK; tools stay SDK-free and protocol upgrades stay isolated (ADR-0001-D6).',
             },
           ],
         },
@@ -72,7 +72,7 @@ export default tseslint.config(
   },
   {
     // JS config files (eslint, jest, commitlint) are not part of the TS project.
-    files: ['**/*.js'],
+    files: ['**/*.js', '**/*.mjs'],
     ...tseslint.configs.disableTypeChecked,
   }
 );

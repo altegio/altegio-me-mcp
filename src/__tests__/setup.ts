@@ -8,6 +8,10 @@ if (process.env.ALTEGIO_E2E === '1') {
     process.env.ALTEGIO_API_BASE = 'https://api.alteg.io/api/v1';
   }
 } else {
+  for (const key of Object.keys(process.env)) {
+    if (/^(ALTEGIO_|MCP_PROXY_|CONFIRMATION_SECRET)/.test(key))
+      delete process.env[key];
+  }
   process.env.ALTEGIO_API_TOKEN = 'test-partner-token';
   process.env.ALTEGIO_API_BASE = 'https://api.alteg.io/api/v1';
 }

@@ -1,4 +1,4 @@
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import type { RequestHandler } from 'express';
 import { getCallRecord } from '../observability/call-log.js';
 import { getCaller } from '../security/caller-auth.js';
@@ -51,7 +51,7 @@ export function createMcpRequestHandler<D>(
       clientKey: (res.locals.clientKey as string | null | undefined) ?? null,
       caller: getCaller(res),
     });
-    const transport = new StreamableHTTPServerTransport({
+    const transport = new NodeStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     });

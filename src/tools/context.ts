@@ -50,7 +50,7 @@ export const NO_TOOL_CONTEXT: ToolContext = Object.freeze({
 
 /**
  * One signal for a tool call: it aborts when `parent` does (the SDK aborts
- * extra.signal when the client cancels or the transport closes) or when the
+ * ctx.mcpReq.signal when the client cancels or the transport closes) or when the
  * deadline passes, whichever comes first. The reason is the parent's, or a
  * TimeoutError for the deadline.
  */

@@ -27,6 +27,10 @@ export default {
     ],
   },
   testEnvironment: 'node',
+  coverageReporters: ['text-summary', 'json-summary', 'lcov'],
+  coverageThreshold: {
+    global: { statements: 96, branches: 89, functions: 97, lines: 97 },
+  },
   testMatch: ['**/__tests__/**/*.test.ts'],
   setupFilesAfterEnv: ['<rootDir>/src/__tests__/setup.ts'],
   // Every test file gets a fresh module graph, and V8 frees the old ones only

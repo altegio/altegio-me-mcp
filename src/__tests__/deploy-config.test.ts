@@ -280,7 +280,7 @@ describe('cloudbuild.yaml identity and registry (T-03-31, T-03-32)', () => {
       .filter((image): image is string => image !== undefined);
     expect(images.length).toBeGreaterThan(0);
     for (const image of images) {
-      expect(image).toMatch(/:\d+\.\d+\.\d+$/);
+      expect(image).toMatch(/:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}$/);
     }
   });
 });

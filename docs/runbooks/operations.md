@@ -2,21 +2,21 @@
 
 ME is stateless and admits callers by their own Altegio partner token (ADR 0004;
 `CALLER_AUTH=required` in production since 2026-10-06); Pro is
-authenticated/stateful. ME has eleven tools: eight that read (six for a known
+authenticated/stateful. ME has twelve tools: nine that read (seven for a known
 business, plus `me_list_places` and `me_list_bookings` for a signed-in client)
 and three that write for a signed-in client at their own places, with the user
 token and only after a confirmed preview: `me_book`, `me_reschedule_booking` and
 `me_cancel_booking` (ADR 0006, scope `mcp:me:book`). `book_check` and the
-fallbacks of `me_book` hand what the chat cannot do to the booking widget. No
-OAuth page, catalog search or customer VM autoheal is introduced here.
+fallbacks of `me_book` hand what the chat cannot do to the booking widget. Business-name search is `business_search`; a general catalog, OAuth page and
+customer VM autoheal are outside this backend. See the generated [tool inventory](../tool-inventory.md).
 
 ## Signals and publication gate
 
 - Liveness: backend `GET /health`, HTTP 200, `status=ok`, `service=altegio-me-mcp`,
   package `version` and deployed `commit`. It performs no upstream API call.
 - Protocol: signed HTTPS `initialize` with protocol `2025-11-25`, then
-  `tools/list`; valid JSON-RPC results, precisely the eleven documented tools
-  (six known-business tools, `me_list_places`, `me_list_bookings`, `me_book`,
+  `tools/list`; valid JSON-RPC results, precisely the twelve documented tools
+  (seven known-business tools, `me_list_places`, `me_list_bookings`, `me_book`,
   `me_reschedule_booking` and `me_cancel_booking`), object input schemas and no
   `mcp-session-id`. Direct unsigned `/mcp` remains 401. **The platform owner must
   update the central monitor's tool list before this release is deployed**: if it
@@ -36,7 +36,10 @@ no Altegio API calls and needs no production signing-secret access for the build
 account. CI also checks absent/malformed key boot failures and secret redaction.
 `python3 scripts/verify-backend.py <run.app HTTPS URL> <deployed commit>` uses
 existing operator access to the ME signing key and prints only probe outcomes.
-It checks all three signals and unsigned 401. The tagged production candidate separately proves both real mounts boot, correct
+It checks all three signals and unsigned 401. For the public proxy route, use
+`scripts/smoke-url.sh --public https://mcp.alteg.io/me` with
+`ALTEGIO_OPERATOR_TOKEN_FILE` pointing to a private partner-token file. This checks
+authenticated protocol and the proxy-owned OAuth metadata without printing credentials. The tagged production candidate separately proves both real mounts boot, correct
 commit/liveness and unsigned rejection. An operator/central monitor must verify
 real signed HTTPS protocol and the functional canary after deployment.
 

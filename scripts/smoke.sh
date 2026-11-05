@@ -15,8 +15,8 @@ if [ "$#" -ne 1 ]; then
 fi
 
 IMAGE="$1"
-NAME="altegio-me-mcp-smoke"
-HOST_PORT=18080
+NAME="altegio-me-mcp-smoke-$$"
+HOST_PORT="${SMOKE_HOST_PORT:-0}"
 BASE_URL="http://localhost:${HOST_PORT}"
 NETWORK_ARGS=(--network bridge)
 if [ -n "${SMOKE_NETWORK:-}" ]; then
@@ -35,7 +35,7 @@ PROXY_KEY_FILE="$WORK_DIR/proxy-key"
 COMMIT_VALUE="0123abc"
 
 cleanup() {
-  docker rm -f "$NAME" >/dev/null 2>&1 || true
+  docker rm -fv "$NAME" >/dev/null 2>&1 || true
   rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT
@@ -43,8 +43,7 @@ trap cleanup EXIT
 fail() {
   echo "FAIL: $*" >&2
   if docker inspect "$NAME" >/dev/null 2>&1; then
-    echo "--- container logs ---" >&2
-    docker logs "$NAME" >&2 2>&1 || true
+    echo "Container retained only until cleanup; raw logs are not printed." >&2
   fi
   exit 1
 }
@@ -121,8 +120,8 @@ fi
 printf '%s' "$PROXY_KEY" >"$PROXY_KEY_FILE"
 chmod 0644 "$PROXY_KEY_FILE"
 
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker create --name "$NAME" "${NETWORK_ARGS[@]}" -p "${HOST_PORT}:8080" \
+docker rm -fv "$NAME" >/dev/null 2>&1 || true
+docker create --read-only --mount type=volume,destination=/tmp --name "$NAME" "${NETWORK_ARGS[@]}" -p "127.0.0.1:${HOST_PORT}:8080" \
   -e PORT=8080 \
   -e ALTEGIO_API_TOKEN="$CANARY_TOKEN" \
   -e PUBLIC_BASE_URL="$BASE_URL" \
@@ -133,6 +132,10 @@ docker create --name "$NAME" "${NETWORK_ARGS[@]}" -p "${HOST_PORT}:8080" \
   "$IMAGE" >/dev/null
 docker cp "$PROXY_KEY_FILE" "$NAME:/tmp/proxy-key"
 docker start "$NAME" >/dev/null
+if [ -z "${SMOKE_NETWORK:-}" ]; then
+  HOST_PORT="$(docker port "$NAME" 8080/tcp | awk -F: 'NR == 1 {print $NF}')"
+  BASE_URL="http://127.0.0.1:${HOST_PORT}"
+fi
 
 # Wait for /health (30 seconds at most).
 ready=0

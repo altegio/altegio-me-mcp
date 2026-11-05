@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { get } from 'node:http';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { Client } from '@modelcontextprotocol/client';
 import { z } from 'zod';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { PACKAGE_VERSION } from '../util/package-metadata.js';
 import { PROXY_AUTH_HEADER } from '../security/proxy-auth.js';
 import { allowedOriginsFor, createApp } from '../app.js';

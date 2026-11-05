@@ -299,9 +299,13 @@ which also proves the signed protocol, the `business_get(722227)` canary and req
    short form is not matched by it unless it is excluded or the pattern is widened. If either
    address is not excluded, stop and ask the platform to add the exclusion.
 
-2. The public path: `bash scripts/smoke-url.sh --public https://mcp.alteg.io/me` (initialize and
-   `tools/list` answer 200, no `mcp-session-id`, no redirect, and the protected-resource metadata
-   route is 404).
+2. The public path: set `ALTEGIO_OPERATOR_TOKEN_FILE` to a private file containing an
+   authorized partner token, then run `bash scripts/smoke-url.sh --public https://mcp.alteg.io/me`.
+   It requires anonymous 401, authenticated `initialize` and `tools/list` 200, no
+   `mcp-session-id`, no redirect, and platform-owned OAuth resource metadata 200.
+   The script reads the authorization header from a temporary file so it never
+   places the token in command arguments or output. Remove the operator token file
+   when finished; do not enable anonymous access for a probe.
 3. The direct `run.app` address must refuse an unsigned call with 401:
    `bash scripts/smoke-url.sh <run.app URL> <commit>` checks `/health` and that refusal.
 4. Optional, and not done: create the public check and add it to the down policy by running the

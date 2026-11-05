@@ -124,3 +124,22 @@ describe('partnerIdOf', () => {
     expect(partnerIdOf(GOOD)).toMatch(/^[0-9a-f]{16}$/);
   });
 });
+
+it('bounds distinct pending probes while sharing an admitted token', async () => {
+  let finish!: (value: PartnerTokenVerdict) => void;
+  const validator = createPartnerTokenValidator({
+    maxPending: 1,
+    probe: () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  });
+  const first = validator.validate(GOOD);
+  const duplicate = validator.validate(GOOD);
+  expect(await validator.validate(BAD)).toBe('unavailable');
+  finish('valid');
+  expect(await Promise.all([first, duplicate])).toEqual(['valid', 'valid']);
+  const next = validator.validate(BAD);
+  finish('invalid');
+  expect(await next).toBe('invalid');
+});

@@ -42,6 +42,7 @@ export const CONFIG_KEYS = [
   'TRUSTED_PROXY_HOPS',
   'SHARED_EGRESS_CIDRS',
   'EXTRA_ALLOWED_ORIGINS',
+  'EXTRA_ALLOWED_HOSTS',
   'EDGE_MAX_INFLIGHT',
   'EDGE_MAX_INFLIGHT_PER_IP',
   'EDGE_IP_BURST',
@@ -218,6 +219,11 @@ const ConfigSchema = z
       'https://claude.ai',
       'https://claude.com',
     ]),
+    EXTRA_ALLOWED_HOSTS: z
+      .string()
+      .transform((value) => value.trim().split(/\s+/).filter(Boolean))
+      .pipe(z.array(z.string().regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/)))
+      .default([]),
     EDGE_MAX_INFLIGHT: positiveInteger(60),
     EDGE_MAX_INFLIGHT_PER_IP: positiveInteger(6),
     EDGE_IP_BURST: positiveInteger(40),
@@ -426,6 +432,11 @@ const MESSAGES: Readonly<
     missing: 'is required (see .env.example)',
     invalid:
       'must be a comma-separated list of http(s) origins, for example https://claude.ai',
+  },
+  EXTRA_ALLOWED_HOSTS: {
+    missing: 'is required (see .env.example)',
+    invalid:
+      'must be space-separated lower-case hostnames without ports or wildcards',
   },
   EDGE_MAX_INFLIGHT: {
     missing: 'is required (see .env.example)',
