@@ -35,6 +35,7 @@ import {
 } from '../../src/booking/deep-link.js';
 import { UpstreamError } from '../../src/booking/errors.js';
 import { RequestGate } from '../../src/booking/gate.js';
+import { markdownCell } from './markdown.js';
 
 const API_BASE = 'https://api.alteg.io/api/v1';
 const SETTLE_TIMEOUT_MS = 30_000;
@@ -1253,10 +1254,6 @@ async function repeatLoads(
 
 // ----------------------------------------------------------------- output
 
-function cell(text: string): string {
-  return text.replace(/\|/g, '\\|').replace(/\n/g, ' ');
-}
-
 function markdownTable(results: CaseResult[]): string {
   const rows = results.map((result) => {
     const detail =
@@ -1264,7 +1261,7 @@ function markdownTable(results: CaseResult[]): string {
       result.seen
         .filter((line) => line.endsWith(': yes') || line.endsWith(': no'))
         .join('; ');
-    return `| ${result.id} | ${result.status} | ${result.link_kind ?? '-'} | ${cell(detail)} | ${result.screenshot ?? '-'} |`;
+    return `| ${result.id} | ${result.status} | ${result.link_kind ?? '-'} | ${markdownCell(detail)} | ${result.screenshot ?? '-'} |`;
   });
   return [
     '| Case | Status | Link kind | Seen or reason | Screenshot |',
