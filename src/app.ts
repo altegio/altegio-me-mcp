@@ -41,6 +41,8 @@ export interface AppDeps<D> {
   // request, so a rotated token is covered without a restart (OPS-04, SEC-03).
   secrets: SecretList;
   allowedOrigins: readonly string[];
+  /** Additional ingress hostnames; loopback is accepted for local probes. */
+  allowedHosts?: readonly string[];
   allowLoopbackOrigins: boolean;
   // Verifies the platform proxy's signature on POST /mcp (OPS-03, D-04). Absent
   // or null leaves the check off, which only src/server.ts does, and only for
@@ -164,6 +166,33 @@ export function createApp<D>(deps: AppDeps<D>): Express {
     });
   });
 
+  const allowedHosts = new Set([
+    ...LOOPBACK_HOSTNAMES,
+    ...(deps.allowedHosts ??
+      deps.allowedOrigins.map((origin) => new URL(origin).hostname)),
+  ]);
+  const hostGuard: RequestHandler = (req, res, next) => {
+    const host = req.headers.host;
+    // Parse only an authority, never user info, paths or proxy-supplied host headers.
+    const match = host?.match(
+      /^(\[[0-9a-f:]+\]|[a-z0-9.-]+)(?::[0-9]{1,5})?$/i
+    );
+    const hostname = match?.[1]?.toLowerCase();
+    // Cloud Run's no-traffic candidate gets a tag---service.run.app hostname.
+    // Accept tags only for an explicitly allowed Cloud Run service, never an
+    // arbitrary run.app suffix or a similarly named external hostname.
+    const taggedService = hostname?.match(/^[a-z0-9-]+---(.+\.run\.app)$/)?.[1];
+    if (
+      hostname !== undefined &&
+      (allowedHosts.has(hostname) ||
+        (taggedService !== undefined && allowedHosts.has(taggedService)))
+    ) {
+      next();
+      return;
+    }
+    res.status(403).json(rpcError(-32000, 'Forbidden host'));
+  };
+
   // Mounted after the call log so a rejected request is still logged once.
   const originGuard: RequestHandler = (req, res, next) => {
     const origin = req.headers.origin;
@@ -240,6 +269,7 @@ export function createApp<D>(deps: AppDeps<D>): Express {
   app.post(
     '/mcp',
     createCallLogMiddleware(callLogger, toolNames),
+    hostGuard,
     originGuard,
     ...proxyAuth,
     ...edge,

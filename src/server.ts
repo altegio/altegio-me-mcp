@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import type { Server } from 'node:http';
 import type { Logger } from 'pino';
 import { allowedOriginsFor, createApp } from './app.js';
@@ -236,6 +237,10 @@ async function main(): Promise<void> {
       config.PUBLIC_BASE_URL,
       config.EXTRA_ALLOWED_ORIGINS
     ),
+    allowedHosts: [
+      new URL(config.PUBLIC_BASE_URL).hostname,
+      ...config.EXTRA_ALLOWED_HOSTS,
+    ],
     allowLoopbackOrigins: config.NODE_ENV !== 'production',
     proxyAuth,
     callerAuth: {

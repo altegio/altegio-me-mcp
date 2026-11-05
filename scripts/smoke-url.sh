@@ -12,10 +12,11 @@
 #   scripts/smoke-url.sh --public URL
 #     public mode, run by hand once the platform proxy route exists. URL is the
 #     public MCP address (https://mcp.alteg.io/me); the proxy maps it to /mcp.
-#     Requires initialize and tools/list to answer 200, a tools list with
-#     business_get, no mcp-session-id header and no redirect, and the
-#     protected-resource metadata route under the same host to be 404.
+#     Requires ALTEGIO_OPERATOR_TOKEN_FILE with an authorized partner token.
+#     Checks anonymous 401, authenticated initialize/tools-list, no session or
+#     redirect, and the platform-owned OAuth resource metadata (HTTP 200).
 set -euo pipefail
+umask 077
 
 usage() {
   echo "usage: scripts/smoke-url.sh BASE_URL EXPECTED_COMMIT" >&2
@@ -78,36 +79,51 @@ run_public_mode() {
   local origin
   origin="$(printf '%s' "$url" | sed -E 's#^(https?://[^/]+).*$#\1#')"
 
+  [ -r "${ALTEGIO_OPERATOR_TOKEN_FILE:-}" ] || fail "ALTEGIO_OPERATOR_TOKEN_FILE must name a readable partner-token file"
+  local caller_token
+  caller_token="$(cat "$ALTEGIO_OPERATOR_TOKEN_FILE")"
+  [ "${#caller_token}" -ge 8 ] && [ "${#caller_token}" -le 512 ] || fail "Malformed partner token"
+  case "$caller_token" in
+    *[[:space:]]*) fail "Malformed partner token" ;;
+  esac
+  # curl reads the header from a private file; no token appears in argv or logs.
+  printf 'Authorization: Bearer %s\n' "$caller_token" > "$WORK_DIR/auth.headers"
+  unset caller_token
+  local auth_headers=(--header "@$WORK_DIR/auth.headers")
   local status
-  status="$(request initialize POST "$url" "${MCP_HEADERS[@]}" --data "$INIT_BODY")"
+  status="$(request anonymous POST "$url" "${MCP_HEADERS[@]}" --data "$INIT_BODY")"
+  [ "$status" = "401" ] || fail "Anonymous public request returned HTTP $status, expected 401"
+  status="$(request initialize POST "$url" "${MCP_HEADERS[@]}" "${auth_headers[@]}" --data "$INIT_BODY")"
   case "$status" in
     3??) fail "initialize on $url was redirected (HTTP $status); the route must answer directly" ;;
   esac
   [ "$status" = "200" ] || fail "initialize on $url returned HTTP $status"
   grep -Fq 'protocolVersion' "$WORK_DIR/initialize.body" ||
-    fail "initialize has no protocolVersion: $(cat "$WORK_DIR/initialize.body")"
+    fail "initialize has no protocolVersion"
   if grep -qi '^mcp-session-id:' "$WORK_DIR/initialize.headers"; then
     fail "initialize response carries an mcp-session-id header"
   fi
 
-  status="$(request tools-list POST "$url" "${MCP_HEADERS[@]}" --data "$LIST_BODY")"
+  status="$(request tools-list POST "$url" "${MCP_HEADERS[@]}" "${auth_headers[@]}" --data "$LIST_BODY")"
   case "$status" in
     3??) fail "tools/list on $url was redirected (HTTP $status); the route must answer directly" ;;
   esac
   [ "$status" = "200" ] || fail "tools/list on $url returned HTTP $status"
   grep -Fq '"tools"' "$WORK_DIR/tools-list.body" ||
-    fail "tools/list has no tools array: $(cat "$WORK_DIR/tools-list.body")"
+    fail "tools/list has no tools array"
   grep -Fq 'business_get' "$WORK_DIR/tools-list.body" ||
-    fail "tools/list does not list business_get: $(cat "$WORK_DIR/tools-list.body")"
+    fail "tools/list does not list business_get"
   if grep -qi '^mcp-session-id:' "$WORK_DIR/tools-list.headers"; then
     fail "tools/list response carries an mcp-session-id header"
   fi
 
-  # The server is a stateless resource server with no OAuth in v1: the
-  # protected-resource metadata route must not exist behind the proxy.
+  # OAuth metadata belongs to the platform proxy, independently of backend sessions.
   status="$(request metadata GET "$origin/.well-known/oauth-protected-resource/me")"
-  [ "$status" = "404" ] ||
-    fail "GET $origin/.well-known/oauth-protected-resource/me returned HTTP $status, expected 404"
+  [ "$status" = "200" ] ||
+    fail "OAuth resource metadata returned HTTP $status, expected 200"
+  grep -Fq '"resource"' "$WORK_DIR/metadata.body" &&
+    grep -Fq '"authorization_servers"' "$WORK_DIR/metadata.body" ||
+    fail "OAuth resource metadata is missing required fields"
 
   echo "PASS smoke-url: mode=public url=$url"
 }

@@ -1,53 +1,42 @@
 # Altegio.me MCP Server
 
-Status: the stateless MCP server serves twelve tools: nine that read and three that write for a
-signed-in client. Seven are for a known business: a search by name, city and country that
-returns the location id the other tools take (`business_search`), business card (`business_get`), services
-(`business_list_services`), team members (`business_list_team_members`), dates with free time
-(`business_list_dates`), free time slots (`business_list_time_slots`) and a slot check that hands
-off a pre-selected booking widget link (`book_check`). Two read a signed-in client's own data: the
-places the client already goes to (`me_list_places`) and their bookings (`me_list_bookings`), each
-with the usual service and team member. Three book at any business that takes online bookings,
-and move and cancel the client's own bookings (`me_book`, `me_reschedule_booking`,
-`me_cancel_booking`), each in two calls: a preview with a confirmation token, then the change once
-the client has agreed. What the chat cannot do (online prepayment, memberships, an inactive
-widget) ends at the
-business's pre-selected widget link, with the reason stated. They call the Altegio public booking
-API through a throttled client
-(`src/booking`), and live suites have checked that client and the three write tools against a real
-business. The hosting
-setup (a Cloud Run pipeline behind the platform proxy, edge limits, secrets as files, alerts) is
-in the repository and live since 2026-10-05 at `https://mcp.alteg.io/me`, see [Deploy](#deploy).
-Callers authenticate with their own Altegio partner token, which the server checks with Altegio
-and uses for their upstream calls. A signed-in client's own tools run on the platform proxy's
-signed client identity; the proxy's phone sign-in page waits for the platform team (I8)
-([ADR 0004](docs/decisions/0004-caller-authorization-tiers.md),
-[ADR 0005](docs/decisions/0005-own-places-first.md),
-[ADR 0006](docs/decisions/0006-in-chat-booking-at-own-places.md), see [Access](#access)).
-The server also lists four prompts (`prompts/list`) for the cases built
-on these tools: two people side by side, freed-slot monitoring and slot hold with a reminder, see
-[Cases](#cases) and [Prompts](#prompts). The catalog of bookable businesses and search are parked.
-Decisions and research are in [`docs/`](docs/).
+[![CI](https://github.com/altegio/altegio-me-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/altegio/altegio-me-mcp/actions/workflows/ci.yml)
 
-A remote [MCP](https://modelcontextprotocol.io) server that lets clients of businesses using
-Altegio (salons, barbershops, studios and similar) find a business, browse its services, team
-members and free time slots, and book an appointment from AI assistants and their agents:
-Claude, ChatGPT, Gemini, Copilot, Perplexity and others.
+An HTTP [Model Context Protocol](https://modelcontextprotocol.io) server for people
+booking appointments with businesses that use Altegio. It discovers a business,
+shows services and available times, and reads or changes the signed-in client's
+own bookings. This is the consumer service; [Altegio Pro MCP](https://github.com/altegio/altegio-pro-mcp)
+serves business owners and staff.
 
-This is a separate product from [Altegio.Pro MCP](https://github.com/altegio/altegio-pro-mcp),
-which serves business owners and staff. The Pro architecture reserves consumer (B2C) booking for
-a separate server; this repository is that server.
+The server exposes **12 tools and 4 prompts**, listed in the generated
+[tool inventory](docs/tool-inventory.md). Booking, rescheduling and cancellation
+require a preview, a confirmation token and the client's agreement. Unsupported
+booking conditions return a pre-filled booking-widget link.
+
+- [Run locally](#local-run) · [Configuration](#environment-variables) · [Access](#access)
+- [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+- [Operations](docs/runbooks/operations.md) · [Hosting](docs/runbooks/gcp-hosting.md)
+
+Transport: stateless Streamable HTTP at `POST /mcp`, protocol **2025-11-25**.
+No stdio mode, persistent sessions, resource API or background scheduler is provided.
+The maintained hosted route is `https://mcp.alteg.io/me`; the platform owns the proxy,
+OAuth/sign-in and monitoring. Direct production requests require the proxy signature
+and an authorized partner or client identity. The backend does not issue user tokens.
+
+Licensed under [MIT](LICENSE), copyright (c) 2026 Altegio.
+Repository visibility and npm publication remain unchanged and require separate
+approval; see [publication decisions](docs/open-source-readiness.md).
 
 ## Product scope
 
-**Live today: a known business, booked in the widget.** The caller (a partner's agent or app)
+**Known business and widget handoff.** The caller (a partner's agent or app)
 presents its Altegio partner token. The tools show a business card, its bookable services, team
 members, dates and free time slots, check that the chosen slot is still bookable, and return a
 link to the business's Altegio booking widget with service, team member and time already selected.
-The client confirms there, with the business's usual phone confirmation and prepayment rules. No
-personal data passes through the chat.
+The client confirms there, with the business's usual phone confirmation and prepayment rules. The widget handles phone confirmation and prepayment. Signed-in tools below may accept
+booking-form fields required by the business.
 
-**Built: the client's own places** ([ADR 0005](docs/decisions/0005-own-places-first.md),
+**The client's own places** ([ADR 0005](docs/decisions/0005-own-places-first.md),
 [ADR 0006](docs/decisions/0006-in-chat-booking-at-own-places.md)). A signed-in client sees the
 places they already go to and their bookings, and books in the chat there or at any other
 business they know by id, and moves and cancels their own appointments, with `me_book`,
@@ -57,8 +46,8 @@ the chat; the e-mail does too, except at a business whose booking form requires 
 profile lacks — there `me_book` takes it as the optional `email` argument
 ([ADR 0007](docs/decisions/0007-email-in-chat-when-required.md)), sends it only to that business
 with that booking, and never returns or keeps it. The widget link stays for partner and anonymous callers, services with online
-prepayment, memberships and inactive widgets (ADR 0006 D3 as amended 2026-10-12). The sign-in itself (phone + SMS on the platform proxy's page, OAuth 2.1) is the
-proxy's: until it ships, the client tier runs locally with a direct user-token header. On top of
+prepayment, memberships and inactive widgets (ADR 0006 D3 as amended 2026-10-12). Sign-in (phone + SMS and OAuth) is owned by the platform proxy. Local development
+can instead use the direct user-token header. On top of
 these tools run the cases the Altegio.me app lacks, built and described under
 [Cases](#cases): two people side by side, freed-slot monitoring and slot hold with a reminder. A
 searchable catalog of all businesses is parked; a business the client names is found by
@@ -252,7 +241,7 @@ AI host (Claude, ChatGPT, ...)
         |  POST /mcp, JSON-RPC over Streamable HTTP, no session
         v
 Express app (src/app.ts)
-        |  call log -> Origin guard -> proxy signature -> edge limits
+        |  call log -> Host/Origin guards -> proxy signature -> edge limits
         |  -> caller's partner token (checked with Altegio, cached) -> JSON body parser (100 kb)
         v
 New SDK Server + Streamable HTTP transport for this one request (src/mcp)
@@ -284,14 +273,14 @@ answer 405, because the server is stateless: it never sends an `mcp-session-id`,
 | `src/compliance` | Directory-compliance rules R1-R14 and deliberately bad fixtures; test-only, not in the build |
 | `src/util` | Package name and version read from `package.json` |
 
-**SDK isolation rule.** Only `src/mcp` imports `@modelcontextprotocol/sdk`; ESLint rejects the
+**SDK isolation rule.** Only `src/mcp` imports `@modelcontextprotocol/server` and `@modelcontextprotocol/node`; ESLint rejects the
 import anywhere else outside tests. Tools stay SDK-free, so a later move of the SDK touches
 `src/mcp` only.
 
-**Protocol support.** Protocol version 2025-11-25 is served with `@modelcontextprotocol/sdk`
-1.x, the same as Altegio.Pro MCP. Requests for protocol version 2026-07-28 get HTTP 400 from
-SDK 1.x. The move to SDK v2 is revisited together with the platform canary before launch and
-touches `src/mcp` only.
+**Protocol support.** SDK v2 (`@modelcontextprotocol/server` and the Node transport)
+serves the existing 2025-11-25 protocol through its legacy transport. This SDK upgrade
+does not enable protocol 2026-07-28. A separate platform/client canary and delivery
+review are required before changing the protocol mode.
 
 Other notes:
 
@@ -351,6 +340,7 @@ values) when one is missing or invalid.
 | `TRUSTED_PROXY_HOPS` | Proxies between the caller and the server, counted from the right of `X-Forwarded-For`. It picks the client address when the proxy does not sign `x-mcp-auth-client-ip`, and with `PROXY_AUTH=off`. `0` means no proxy. The leftmost entries and the TCP peer are never used | `1` | no |
 | `SHARED_EGRESS_CIDRS` | Comma-separated IPv4 or IPv6 CIDRs whose addresses share one request budget and are not limited per address, because many users sit behind them. The default is Anthropic's outbound range used by claude.ai | `160.79.104.0/21` | no |
 | `EXTRA_ALLOWED_ORIGINS` | Comma-separated http(s) origins served next to the `PUBLIC_BASE_URL` origin. Requests without an `Origin` header are always served; a refused origin's host is logged as `origin_host` | `https://claude.ai,https://claude.com` | no |
+| `EXTRA_ALLOWED_HOSTS` | Additional ingress hostnames, space-separated with no ports or wildcards. The public hostname and loopback are allowed; tagged candidates of explicitly listed Cloud Run service hosts are also allowed. | empty | no |
 | `EDGE_MAX_INFLIGHT` | Most `POST /mcp` requests in flight at once; more get HTTP 429. Kept below the Cloud Run concurrency of 80 so our own 429 comes before Google's | `60` | no |
 | `EDGE_MAX_INFLIGHT_PER_IP` | Most requests in flight at once from one address (an IPv6 caller counts as its /64) | `6` | no |
 | `EDGE_IP_BURST` | Token-bucket size for one address: requests it may send at once | `40` | no |
@@ -488,7 +478,8 @@ cannot send a partner token and connect through the platform's sign-in once it s
 
 ## Local run
 
-Requires Node 22 (the version is pinned in `.nvmrc`; with nvm run `nvm use`).
+Requires Node 26.13.0 (LTS, pinned in `.nvmrc`) or Node 24.22.2, and npm 12.2.2.
+With nvm run `nvm use`; install npm with `npm install --global npm@12.2.2`.
 
 ```bash
 cp .env.example .env
@@ -500,7 +491,7 @@ In another terminal:
 
 ```bash
 curl -s localhost:8080/health
-npx -y @modelcontextprotocol/inspector@2.9.0 --cli http://localhost:8080/mcp --transport http --method tools/list
+node examples/list-tools.mjs
 ```
 
 `GET /health` returns the status, version and commit. `tools/list` lists the twelve tools. Tool
@@ -610,7 +601,7 @@ docker run --rm -p 8080:8080 \
   altegio-me-mcp
 ```
 
-The image is `node:22-alpine`, built in two stages, installs production dependencies only and
+The image is `node:26.13.0-alpine`, built in two stages, installs production dependencies only and
 runs as the non-root `node` user. `scripts/smoke.sh IMAGE` starts the image with a canary token
 and a proxy key file copied into the container, signs its requests the way the platform proxy does,
 and checks `/health`, the signed `/mcp` path, the refusal of an unsigned request, the logs (no token,
@@ -620,7 +611,7 @@ CI.
 ## CI and branch rules
 
 Workflow `CI` (`.github/workflows/ci.yml`) runs on pull requests to `main` and on pushes to
-`main`. It has a single job named `test` on Node 22, with these steps in order: checkout,
+`main`. It has a single job named `test` on Node 26 and also verifies Node 24, with these steps in order: checkout,
 install, conventional commits (pull requests only), lint, format check, typecheck, unit tests,
 build, Docker build, container smoke test, dependency audit (`npm audit --audit-level=high`).
 
@@ -726,7 +717,7 @@ Run, below the 120 seconds the proxy waits for response headers, below the 240 s
 allows for a tool call (per the connector documentation at
 [claude.com/docs/connectors/building](https://claude.com/docs/connectors/building)).
 
-**MCP SDK.** `@modelcontextprotocol/sdk` stays on 1.x, as in Altegio.Pro MCP.
+**MCP SDK.** Split v2 packages; the legacy stateless transport preserves protocol 2025-11-25.
 
 ## Cost estimate
 

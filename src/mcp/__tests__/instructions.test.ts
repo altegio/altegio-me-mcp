@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client } from '@modelcontextprotocol/client';
+import { InMemoryTransport } from '@modelcontextprotocol/client';
 import { createCallRecord } from '../../observability/call-log.js';
 import { UNTRUSTED_CLOSE } from '../../tools/untrusted.js';
 import { createMcpServer } from '../create-server.js';

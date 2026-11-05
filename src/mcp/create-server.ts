@@ -1,16 +1,12 @@
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { Server } from '@modelcontextprotocol/server';
 import {
-  CallToolRequestSchema,
   type CallToolResult,
-  ErrorCode,
-  GetPromptRequestSchema,
-  ListPromptsRequestSchema,
-  ListToolsRequestSchema,
-  McpError,
+  ProtocolError,
+  INVALID_PARAMS,
   type GetPromptResult,
   type ListPromptsResult,
   type ListToolsResult,
-} from '@modelcontextprotocol/sdk/types.js';
+} from '@modelcontextprotocol/server';
 import type { CallRecord } from '../observability/call-log.js';
 import { scrubSecrets } from '../observability/redact.js';
 import type { Caller } from '../security/caller-auth.js';
@@ -63,11 +59,11 @@ export function createMcpServer<D>(options: CreateMcpServerOptions<D>): Server {
     }
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, (): ListToolsResult => ({
+  server.setRequestHandler('tools/list', (): ListToolsResult => ({
     tools: [...specs] as unknown as ListToolsResult['tools'],
   }));
 
-  server.setRequestHandler(ListPromptsRequestSchema, (): ListPromptsResult => ({
+  server.setRequestHandler('prompts/list', (): ListPromptsResult => ({
     prompts: SERVER_PROMPTS.map(({ name, title, description }) => ({
       name,
       title,
@@ -75,36 +71,33 @@ export function createMcpServer<D>(options: CreateMcpServerOptions<D>): Server {
     })),
   }));
 
-  server.setRequestHandler(
-    GetPromptRequestSchema,
-    (request): GetPromptResult => {
-      const prompt = SERVER_PROMPTS.find(
-        (entry) => entry.name === request.params.name
+  server.setRequestHandler('prompts/get', (request): GetPromptResult => {
+    const prompt = SERVER_PROMPTS.find(
+      (entry) => entry.name === request.params.name
+    );
+    if (prompt === undefined) {
+      record.outcome = 'protocol_error';
+      throw new ProtocolError(
+        INVALID_PARAMS,
+        'Unknown prompt. Next: call prompts/list and use one of the listed names.'
       );
-      if (prompt === undefined) {
-        record.outcome = 'protocol_error';
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          'Unknown prompt. Next: call prompts/list and use one of the listed names.'
-        );
-      }
-      return {
-        description: prompt.description,
-        messages: [
-          { role: 'user', content: { type: 'text', text: prompt.text } },
-        ],
-      };
     }
-  );
+    return {
+      description: prompt.description,
+      messages: [
+        { role: 'user', content: { type: 'text', text: prompt.text } },
+      ],
+    };
+  });
 
   server.setRequestHandler(
-    CallToolRequestSchema,
+    'tools/call',
     async (request, extra): Promise<CallToolResult> => {
       const tool = toolsByName.get(request.params.name);
       if (tool === undefined) {
         record.outcome = 'protocol_error';
-        throw new McpError(
-          ErrorCode.InvalidParams,
+        throw new ProtocolError(
+          INVALID_PARAMS,
           'Unknown tool. Next: call tools/list and use one of the listed names.'
         );
       }
@@ -125,13 +118,13 @@ export function createMcpServer<D>(options: CreateMcpServerOptions<D>): Server {
           isError: true,
         };
       }
-      // extra.signal aborts when the client cancels or the transport closes;
+      // extra.mcpReq.signal aborts when the client cancels or the transport closes;
       // the context adds the one deadline every call runs under (WR-04).
       const invocation = await tool.invoke(
         request.params.arguments ?? {},
         toolDeps,
         createToolContext(
-          extra.signal,
+          extra.mcpReq.signal,
           options.clientKey ?? null,
           TOOL_DEADLINE_MS,
           partnerToken,

@@ -1688,12 +1688,12 @@ describe('route schemas of the write-side routes', () => {
   const parses = (name: string, data: unknown): boolean | undefined =>
     exported[name]?.safeParse(data).success;
 
-  it('parse the documented examples', () => {
+  it('parse synthetic examples of the documented shapes', () => {
     expect(
       parses('bookingUserDataSchema', {
-        '0': '152afb01134237bc844d7e',
+        '0': 'synthetic-schema-user-token',
         id: 32132133,
-        user_token: '152afb01134237bc844d7e',
+        user_token: 'synthetic-schema-user-token',
         name: 'James',
         phone: '+13155550175',
         login: 'j.smith',
