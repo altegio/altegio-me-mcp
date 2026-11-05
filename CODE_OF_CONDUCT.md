@@ -10,6 +10,8 @@ necessary. Decisions should be proportionate and explain how the behavior violat
 these expectations.
 
 Report concerns privately to [Mike Kondakov (@kondamih)](https://github.com/kondamih)
-through the existing Altegio contact channel. Before public launch, the owner must
-confirm an accessible private reporting route as described in
-[publication decisions](docs/open-source-readiness.md).
+through an existing private channel. If you do not have one, open a minimal
+[contact-request issue](https://github.com/altegio/altegio-me-mcp/issues/new)
+asking `@kondamih` or `@petroff` to arrange a private conversation. Do not include
+incident details or personal information in that public request. Security reports
+use the dedicated private route in [SECURITY.md](SECURITY.md).

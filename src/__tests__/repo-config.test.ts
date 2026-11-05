@@ -353,38 +353,60 @@ describe('.github/rulesets/main-ci-gate.json', () => {
     read('.github/rulesets/main-ci-gate.json')
   );
 
-  it('matches the Altegio default-branch CI gate definition', () => {
+  it('matches the reviewed default-branch protection policy', () => {
     expect(ruleset).toEqual({
       name: 'default-branch-ci-gate',
       target: 'branch',
       enforcement: 'active',
-      conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } },
+      conditions: {
+        ref_name: {
+          exclude: [],
+          include: ['~DEFAULT_BRANCH'],
+        },
+      },
       rules: [
-        { type: 'deletion' },
-        { type: 'non_fast_forward' },
+        {
+          type: 'deletion',
+        },
+        {
+          type: 'non_fast_forward',
+        },
         {
           type: 'pull_request',
           parameters: {
             required_approving_review_count: 0,
-            dismiss_stale_reviews_on_push: false,
+            dismiss_stale_reviews_on_push: true,
+            required_reviewers: [],
             require_code_owner_review: false,
+            dismissal_restriction: {
+              enabled: false,
+              allowed_actors: [],
+            },
             require_last_push_approval: false,
-            required_review_thread_resolution: false,
+            required_review_thread_resolution: true,
+            require_extra_approval_for_unattributed_changes: true,
+            allowed_merge_methods: ['merge'],
           },
         },
         {
           type: 'required_status_checks',
           parameters: {
-            strict_required_status_checks_policy: false,
+            strict_required_status_checks_policy: true,
+            do_not_enforce_on_create: false,
             required_status_checks: [
-              { context: 'test', integration_id: 15368 },
+              {
+                context: 'test',
+                integration_id: 15368,
+              },
+              {
+                context: 'analyze',
+                integration_id: 15368,
+              },
             ],
           },
         },
       ],
-      bypass_actors: [
-        { actor_id: 1, actor_type: 'OrganizationAdmin', bypass_mode: 'always' },
-      ],
+      bypass_actors: [],
     });
   });
 });
