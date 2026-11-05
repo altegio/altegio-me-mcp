@@ -23,9 +23,9 @@ The maintained hosted route is `https://mcp.alteg.io/me`; the platform owns the 
 OAuth/sign-in and monitoring. Direct production requests require the proxy signature
 and an authorized partner or client identity. The backend does not issue user tokens.
 
-Repository and npm package remain private, with no open-source license granted yet.
-The owner must approve licensing and publication separately; see
-[publication decisions](docs/open-source-readiness.md).
+Licensed under [MIT](LICENSE), copyright (c) 2026 Altegio.
+Repository visibility and npm publication remain unchanged and require separate
+approval; see [publication decisions](docs/open-source-readiness.md).
 
 ## Product scope
 

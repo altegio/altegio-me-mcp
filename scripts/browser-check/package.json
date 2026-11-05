@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Local real-browser check of the booking widget deep link (BOOK-04); not part of the server",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "cases": "node --import tsx check.ts --list-cases",

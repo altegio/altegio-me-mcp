@@ -1,16 +1,17 @@
 # Open-source readiness
 
 This is preparation, not authorization to publish. The repository and npm package
-remain private, version 0.2.0, with `license: UNLICENSED`. No npm release, public
+remain private, version 0.2.0. The owner approved [MIT](../LICENSE), copyright
+(c) 2026 Altegio, on 2026-11-05. No npm release, public
 container release, access change or history rewrite is part of this change.
 
 ## Owner decisions before publication
 
 | Decision | Concrete proposal | Current state |
 | --- | --- | --- |
-| License and rights holder | Adopt [the proposed MIT text](license-proposal.md), with an Altegio-approved legal copyright holder, matching the intended permissive ecosystem | Owner approval pending; no license granted |
+| License and rights holder | MIT, copyright (c) 2026 Altegio | Approved and applied; root LICENSE and both package manifests agree |
 | Security and conduct reports | Enable and test GitHub private vulnerability reporting; provide a confirmed private fallback contact in SECURITY.md and CODE_OF_CONDUCT.md | Existing collaborators can contact the documented owner; public route not verified |
-| Visibility | Make this existing repository public only after license, reporting route and history review are approved | Private retained |
+| Visibility | Make this existing repository public only after reporting route and history review are approved | Private retained |
 | Historical content | Review the pre-existing token-shaped example in the booking schema tests; current code uses an explicit synthetic value | No evidence that it is active; provenance must be confirmed, no credential probe or history rewrite performed |
 | Branch protection | Keep PRs and the current `test` status required; agree whether independent review should be enforced by a GitHub rule | Existing settings retained; this delivery requires independent exact-head review |
 | Code scanning | Use the prepared SHA-pinned CodeQL workflow once public; consider Dependabot/security features with the owner | No paid private feature enabled; CodeQL skips private repositories |
@@ -26,7 +27,7 @@ supported runtimes, inventory drift, tarball install, release tests, signed
 container behavior and dependency audits.
 
 The npm tarball is allowlisted to the compiled service, package metadata, README,
-optional approved LICENSE and the minimal install helper. Tests, fixtures,
+MIT LICENSE and the minimal install helper. Tests, fixtures,
 research, private evidence and environment files are excluded. It exposes an HTTP
 executable, not a JavaScript library or stdio server.
 
@@ -42,7 +43,7 @@ before this change. Findings were fixed localhost TLS fixtures, explicit test
 keys and one token-shaped documented example. The last item's provenance remains
 unconfirmed. No private specification or diagnostic payload was added. A secret
 scanner is not proof that all historical information is suitable for publication;
-the owner still needs to review licensing and historical disclosure.
+the owner still needs to review historical disclosure and the public reporting route.
 
 See [dependency notes](dependency-upgrade.md) for the version matrix and remaining
 low development advisory. CI evidence and exact-head independent review belong to

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Adopt MIT with copyright (c) 2026 Altegio, approved by the owner; publication remains a separate decision.
+
 - Move to Node 26 LTS (with Node 24 coverage), npm 12 and compatible TypeScript 6 tooling.
 - Migrate to split MCP SDK v2 packages while preserving stateless protocol 2025-11-25.
 - Reject untrusted Host headers before authentication and bound concurrent token probes.
