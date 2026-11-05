@@ -12,7 +12,10 @@ import {
 
 afterEach(closeAllApps);
 
-it('rejects an untrusted Host before probing a caller token', async () => {
+it.each([
+  ['an untrusted Host', 'attacker.example'],
+  ['a long hyphenated Host', `${'-'.repeat(8000)}.invalid`],
+])('rejects %s before probing a caller token', async (_label, host) => {
   const validator = stubPartnerValidator();
   const app = await startApp({ callerAuth: { mode: 'required', validator } });
   const status = await new Promise<number | undefined>((resolve, reject) => {
@@ -21,7 +24,7 @@ it('rejects an untrusted Host before probing a caller token', async () => {
       {
         method: 'POST',
         headers: {
-          host: 'attacker.example',
+          host,
           authorization: 'Bearer valid-looking-token',
           'content-type': 'application/json',
           accept: 'application/json, text/event-stream',
@@ -95,6 +98,9 @@ it('aborts a running tool when its HTTP caller disconnects', async () => {
 it.each([
   ['service-abc-ew.a.run.app', 200],
   ['candidate---service-abc-ew.a.run.app', 200],
+  ['candidate---with-hyphens---service-abc-ew.a.run.app', 200],
+  ['---service-abc-ew.a.run.app', 403],
+  ['candidate.invalid---service-abc-ew.a.run.app', 403],
   ['candidate---another-abc-ew.a.run.app', 403],
   ['candidate---service-abc-ew.a.run.app.attacker.example', 403],
   ['candidate---public.example', 403],

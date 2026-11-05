@@ -171,6 +171,9 @@ export function createApp<D>(deps: AppDeps<D>): Express {
     ...(deps.allowedHosts ??
       deps.allowedOrigins.map((origin) => new URL(origin).hostname)),
   ]);
+  const taggedHostSuffixes = [...allowedHosts]
+    .filter((hostname) => hostname.endsWith('.run.app'))
+    .map((hostname) => `---${hostname}`);
   const hostGuard: RequestHandler = (req, res, next) => {
     const host = req.headers.host;
     // Parse only an authority, never user info, paths or proxy-supplied host headers.
@@ -181,11 +184,18 @@ export function createApp<D>(deps: AppDeps<D>): Express {
     // Cloud Run's no-traffic candidate gets a tag---service.run.app hostname.
     // Accept tags only for an explicitly allowed Cloud Run service, never an
     // arbitrary run.app suffix or a similarly named external hostname.
-    const taggedService = hostname?.match(/^[a-z0-9-]+---(.+\.run\.app)$/)?.[1];
+    // Check fixed suffixes before validating the tag. An overlapping greedy
+    // regex here backtracks quadratically on an untrusted hyphen-only Host.
+    const taggedServiceAllowed =
+      hostname !== undefined &&
+      taggedHostSuffixes.some(
+        (suffix) =>
+          hostname.endsWith(suffix) &&
+          /^[a-z0-9-]+$/.test(hostname.slice(0, -suffix.length))
+      );
     if (
       hostname !== undefined &&
-      (allowedHosts.has(hostname) ||
-        (taggedService !== undefined && allowedHosts.has(taggedService)))
+      (allowedHosts.has(hostname) || taggedServiceAllowed)
     ) {
       next();
       return;
