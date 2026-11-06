@@ -86,8 +86,8 @@ steps:
       - --cpu-boost
       - --cpu-throttling
       - --labels=app=altegio-me-mcp
-      - --set-env-vars=NODE_ENV=production,PUBLIC_BASE_URL=${_PUBLIC_BASE_URL},LOG_LEVEL=info,COMMIT_SHA=$COMMIT_SHA,ALTEGIO_API_TOKEN_FILE=/secrets/altegio-api/token,MCP_PROXY_BACKEND_KEY_FILE=/secrets/proxy-key/key,CALLER_AUTH=required,EXTRA_ALLOWED_HOSTS=altegio-me-mcp-767969350727.europe-west1.run.app altegio-me-mcp-brg2k7l5ma-ew.a.run.app
-      # MARKETPLACE_APPLICATION_ID=2642 joins this list once Altegio has switched application 2642 on for the Altegio.me locations (ADR 0006, D3 amended 2026-10-27); until then the assistant-booking gate stays off.
+      - --set-env-vars=NODE_ENV=production,PUBLIC_BASE_URL=${_PUBLIC_BASE_URL},LOG_LEVEL=info,COMMIT_SHA=$COMMIT_SHA,ALTEGIO_API_TOKEN_FILE=/secrets/altegio-api/token,MCP_PROXY_BACKEND_KEY_FILE=/secrets/proxy-key/key,CALLER_AUTH=required,MARKETPLACE_APPLICATION_ID=2642,EXTRA_ALLOWED_HOSTS=altegio-me-mcp-767969350727.europe-west1.run.app altegio-me-mcp-brg2k7l5ma-ew.a.run.app
+      # MARKETPLACE_APPLICATION_ID=2642 turns the assistant-booking gate on (ADR 0006, D3 amended 2026-10-27): Altegio switched application 2642 on for every Altegio.me location after the card's publication on 2026-11-04, so a business opts out by removing it in Integrations.
       - --set-secrets=/secrets/altegio-api/token=${_TOKEN_SECRET}:latest,/secrets/proxy-key/key=${_PROXY_KEY_SECRET}:latest
 
 options:
