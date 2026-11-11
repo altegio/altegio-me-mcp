@@ -163,39 +163,52 @@ const MAX_REQUIRED_FIELDS = 10;
 const MAX_FIELD_NAME_CHARS = 60;
 
 /**
- * The fields a keyed `meta.errors` ({"[email]": ["The required parameter email
- * was not passed."]}) says are required: names with the brackets stripped,
- * never the messages.
+ * The fields of a keyed `meta.errors` ({"[email]": ["The required parameter
+ * email was not passed."]}): `required`, those whose message says the field is
+ * required, and `keyed`, every field with an error whatever the message. Names
+ * with the brackets stripped, never the messages.
  */
-function requiredFieldsOf(errors: unknown): string[] {
-  if (!isRecord(errors)) return [];
-  const fields: string[] = [];
+function keyedFieldsOf(errors: unknown): {
+  required: string[];
+  keyed: string[];
+} {
+  const required: string[] = [];
+  const keyed: string[] = [];
+  if (!isRecord(errors)) return { required, keyed };
   for (const [key, value] of Object.entries(errors)) {
-    const messages = Array.isArray(value) ? (value as unknown[]) : [value];
-    const required = messages.some(
-      (message) => typeof message === 'string' && REQUIRED_MESSAGE.test(message)
-    );
     const name = key
       .replace(/[[\]]/g, '')
       .trim()
       .slice(0, MAX_FIELD_NAME_CHARS);
-    if (required && name !== '') fields.push(name);
-    if (fields.length >= MAX_REQUIRED_FIELDS) break;
+    if (name === '') continue;
+    const messages = Array.isArray(value) ? (value as unknown[]) : [value];
+    const isRequired = messages.some(
+      (message) => typeof message === 'string' && REQUIRED_MESSAGE.test(message)
+    );
+    keyed.push(name);
+    if (isRequired) required.push(name);
+    if (keyed.length >= MAX_REQUIRED_FIELDS) break;
   }
-  return fields;
+  return { required, keyed };
 }
 
 /**
- * meta.message, the numeric meta.errors[].code and the required field names of
- * an error envelope. A body that is not such an envelope gives none of them;
- * the body itself is never kept.
+ * meta.message, the numeric meta.errors[].code, the required field names and
+ * every keyed field name of an error envelope. A body that is not such an
+ * envelope gives none of them; the body itself is never kept.
  */
 function readErrorMeta(text: string): {
   message: string | null;
   codes: number[];
   requiredFields: string[];
+  fieldErrors: string[];
 } {
-  const none = { message: null, codes: [], requiredFields: [] };
+  const none = {
+    message: null,
+    codes: [],
+    requiredFields: [],
+    fieldErrors: [],
+  };
   let envelope: unknown;
   try {
     envelope = JSON.parse(text);
@@ -212,10 +225,12 @@ function readErrorMeta(text: string): {
       ? [entry.code]
       : []
   );
+  const fields = keyedFieldsOf(meta.errors);
   return {
     message: typeof meta.message === 'string' ? meta.message : null,
     codes,
-    requiredFields: requiredFieldsOf(meta.errors),
+    requiredFields: fields.required,
+    fieldErrors: fields.keyed,
   };
 }
 
@@ -444,6 +459,7 @@ export class BookingHttp {
       // this client, comes with HTTP 403.
       codes: kind === 'rejected' || kind === 'unauthorized' ? meta.codes : [],
       requiredFields: kind === 'rejected' ? meta.requiredFields : [],
+      fieldErrors: kind === 'rejected' ? meta.fieldErrors : [],
       retryAfterSeconds: kind === 'rate_limited' ? retryAfter : null,
       // Scrubbed before anything else touches it (WR-04): later sanitising
       // or truncation could otherwise split the token past the scrubber.

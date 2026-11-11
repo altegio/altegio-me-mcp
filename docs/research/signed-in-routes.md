@@ -248,10 +248,12 @@ No token, record hash, phone, name, login or e-mail is in this section, in a rec
 
 ### POST /book_record/{loc} (create)
 
-- **Body sent, exactly:** `{ phone, fullname, email?, appointments: [{ id: 1, services: [service],
+- **Body sent, exactly:** `{ phone, fullname, email, appointments: [{ id: 1, services: [service],
   staff_id, datetime }] }`. `staff_id` is 0 for any team member, `datetime` is the slot string as
   `book_times` wrote it. No `code` (the user token replaces the SMS code), `comment`, `notify_*` or
-  `api_id` key. `email` is present only when the profile has a non-empty one, and is never sent empty.
+  `api_id` key. `email` is always present: the profile's, or empty when it has none
+  ([ADR 0009](../decisions/0009-email-key-always-sent.md); until 2026-11-09 it was sent only when
+  non-empty).
 - **Answer:** HTTP 201, `data` is `[{ id, record_id, record_hash }]`, one entry per appointment: `id` is
   the appointment id of the request (1), `record_id` the new record, `record_hash` a secret that this
   server never reads. A real 201 has a positive `record_id`; an entry without one means nothing was
@@ -275,11 +277,18 @@ No token, record hash, phone, name, login or e-mail is in this section, in a rec
   form**, so the exact rule is not isolated: either "a field shown in the form makes the e-mail
   required" or "a profile e-mail is enough". The contract documents `email` as optional; this
   business, at least with the field shown, required it even for a signed-in client.
-- **The rule the server follows:** send the profile e-mail when it is a non-empty text, nothing
-  otherwise. When the profile has none and the business demands one, the create answers 422 with a
-  required-field message; that case is an ME-08 fallback (an in-band reason and the pre-filled widget
-  link), implemented in plans 04.1-02 and 04.1-03, keyed on the error record's
-  `kind: "required_field"`.
+- **Explained (2026-11-09):** a body without the `email` key is refused this way whatever the
+  business's settings: the API bug Jira SUP-506 (2024-08-16, still in Research). The booking widget
+  always sends the key, empty when the client gave none. Live at 1389064 (no e-mail required): no
+  key answered 422 as above, `"email": ""` answered 201 (ADR 0009, "Live check").
+- **The rule the server follows** ([ADR 0009](../decisions/0009-email-key-always-sent.md)): always
+  send `email`, the profile's when it is a non-empty text, empty otherwise. Until 2026-11-09 the
+  rule was: send the profile e-mail when it is a non-empty text, nothing otherwise. When the
+  business really demands an e-mail and none was given, the create answers 422 keyed on `email`;
+  that case is an ME-08 fallback (an in-band reason and the pre-filled widget link), implemented in
+  plans 04.1-02 and 04.1-03, keyed on the error record's `kind: "required_field"`, and the client
+  may give the e-mail in the chat (ADR 0007). The wording of that refusal for an empty e-mail is not
+  observed yet; any keyed `email` error after an empty one counts as the missing e-mail.
 - **Error shapes seen and documented.** HTTP 422 with `meta.errors` as a list of
   `{code, message}` (433 slot taken, 436 no team member, 437 overlap, 431 phone, 432 code, 435 name),
   HTTP 403 with code 434 (blacklisted), and the keyed object above. Only the keyed object was seen
@@ -400,7 +409,8 @@ record; the summary the run printed holds only ids, slot times and statuses.
 ### What 04.1-02 and 04.1-03 build on
 
 - **Profile:** one `GET /booking/user/data` per request, cached for that request only: `name` (and
-  `surname` when set), `phone` (turn into `+<digits>`), `email` (only when non-empty).
+  `surname` when set), `phone` (turn into `+<digits>`), `email` (sent empty when the profile has
+  none, ADR 0009).
 - **Create:** the body above, exactly; the answer's `record_id` is the booking id; never read or log
   `record_hash`. A 201 without a positive `record_id` is the fake 201: no booking, say so and give the
   widget link. A 422 with `kind: "required_field"` (a required field named in `meta.errors`) is the
@@ -411,6 +421,7 @@ record; the summary the run printed holds only ids, slot times and statuses.
 - **Cancel:** `DELETE /user/records/{record_id}/0`; 204 with no body.
 - **Reading an error:** `meta.errors` is a list or an object keyed by bracketed field names; do not
   assume either.
-- **Open:** whether bare-digit phones are refused; the exact rule for the required e-mail; the
+- **Open:** whether bare-digit phones are refused; how a business that requires an e-mail refuses
+  an empty one; the
   anti-fraud answers from the Cloud Run egress (WRITE-07, B3); the cancel and move rules of other
   businesses (the placeholder segment and the `datetime`-only body were seen at 726120 only).

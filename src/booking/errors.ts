@@ -23,6 +23,8 @@ export interface UpstreamErrorInit {
   codes?: readonly number[];
   /** Names of the fields a 422 says are required, from meta.errors keyed by field. */
   requiredFields?: readonly string[];
+  /** Names of every field a 422 keys an error on, whatever the message. */
+  fieldErrors?: readonly string[];
   retryAfterSeconds?: number | null;
   upstreamMessage?: string | null;
   /** Whose partner token the call carried; defaults to the server's. */
@@ -50,6 +52,13 @@ export class UpstreamError extends Error {
    * only, never messages.
    */
   readonly requiredFields: readonly string[];
+  /**
+   * Every field a 422 keys an error on (`meta.errors` keyed by field), whatever
+   * its message says: lets a caller that sent a field empty read a refusal of
+   * that field as "missing" when the wording is not a required-message. Field
+   * names only, never messages.
+   */
+  readonly fieldErrors: readonly string[];
   /** Seconds until the upstream accepts calls again; rate_limited only. */
   readonly retryAfterSeconds: number | null;
   /**
@@ -74,6 +83,7 @@ export class UpstreamError extends Error {
     this.status = init.status ?? null;
     this.codes = Object.freeze([...(init.codes ?? [])]);
     this.requiredFields = Object.freeze([...(init.requiredFields ?? [])]);
+    this.fieldErrors = Object.freeze([...(init.fieldErrors ?? [])]);
     this.retryAfterSeconds = init.retryAfterSeconds ?? null;
     this.upstreamMessage = init.upstreamMessage ?? null;
     this.credential = init.credential ?? 'server';

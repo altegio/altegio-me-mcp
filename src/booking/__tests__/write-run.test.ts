@@ -383,13 +383,15 @@ describe('createBody', () => {
     });
   });
 
-  it('sends no email key when the profile has none', () => {
+  it('sends the email key empty when the profile has none (ADR 0009)', () => {
     const body = createBody({ ...input, email: '' });
     expect(Object.keys(body).sort()).toEqual([
       'appointments',
+      'email',
       'fullname',
       'phone',
     ]);
+    expect(body.email).toBe('');
   });
 
   it('never sends a code, comment, notify or api_id key', () => {
@@ -485,6 +487,7 @@ describe('createPairBody', () => {
     expect(createPairBody(input)).toEqual({
       phone: '+15550000001',
       fullname: 'Fixture Client',
+      email: '',
       appointments: [
         {
           id: 1,
@@ -502,8 +505,8 @@ describe('createPairBody', () => {
     });
   });
 
-  it('sends the e-mail only when there is one', () => {
-    expect(createPairBody(input)).not.toHaveProperty('email');
+  it('always sends the email key, empty when there is none (ADR 0009)', () => {
+    expect(createPairBody(input)).toHaveProperty('email', '');
     expect(createPairBody({ ...input, email: 'a@b.invalid' })).toHaveProperty(
       'email',
       'a@b.invalid'

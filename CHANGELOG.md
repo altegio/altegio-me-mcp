@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `me_book` always sends the `email` key in the create, empty when the client's profile has none
+  (ADR 0009): the create route refuses a body without the key whatever the business's
+  settings (SUP-506), which turned nearly every first booking from the chat into a question about
+  the e-mail. A refusal keyed on the e-mail it sent empty still answers with the `required_field`
+  fallback of ADR 0007.
+
 - Adopt MIT with copyright (c) 2026 Altegio, approved by the owner; publication remains a separate decision.
 
 - Move to Node 26 LTS (with Node 24 coverage), npm 12 and compatible TypeScript 6 tooling.

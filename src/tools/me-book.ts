@@ -1177,6 +1177,26 @@ async function fallbackResult(
   });
 }
 
+/**
+ * The fields a create refusal says are missing: those it calls required, and
+ * the e-mail when the create sent it empty (ADR 0009) and the refusal keys an
+ * error on it, whatever the wording, so that a business that requires an
+ * e-mail still answers with the required_field fallback of ADR 0007.
+ */
+function missingFieldsOf(
+  error: UpstreamError,
+  emailSentEmpty: boolean
+): readonly string[] {
+  if (
+    !emailSentEmpty ||
+    error.requiredFields.includes('email') ||
+    !error.fieldErrors.includes('email')
+  ) {
+    return error.requiredFields;
+  }
+  return [...error.requiredFields, 'email'];
+}
+
 /** Confirm: redeems the token, reads the profile, creates the booking(s) and reads them back. */
 async function confirm(
   input: BookInput,
@@ -1257,18 +1277,13 @@ async function confirm(
       // A business that requires a field the profile lacks (the e-mail) answers
       // 422 with no code; the widget collects it, and missing_fields names it
       // so the client knows what their profile lacks.
+      const missing = missingFieldsOf(error, sent.email === null);
       if (
         error.kind === 'rejected' &&
         error.codes.length === 0 &&
-        error.requiredFields.length > 0
+        missing.length > 0
       ) {
-        return fallbackResult(
-          input,
-          deps,
-          ctx,
-          'required_field',
-          error.requiredFields
-        );
+        return fallbackResult(input, deps, ctx, 'required_field', missing);
       }
     }
     throw toWriteToolError(error, second !== null);

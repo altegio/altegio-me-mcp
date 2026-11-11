@@ -31,24 +31,24 @@ export interface CreateInput {
 
 /**
  * The profile's e-mail when it is a non-empty text, else ''. Nothing else is
- * ever sent as `email`: some businesses' booking forms require one even for a
- * signed-in client (error "The required parameter email was not passed"), so
- * the create call sends the profile's when it has one.
+ * ever sent as `email`, and the key is always sent (ADR 0009): the create
+ * route refuses a body without it ("The required parameter email was not
+ * passed", SUP-506) whatever the business's form settings.
  */
 export function emailOf(profile: Record<string, unknown>): string {
   return textOf(profile.email);
 }
 
 /**
- * The exact body of the create call: phone, fullname, `email` only when there
- * is one, and one appointment. No code (the user token replaces it), comment,
- * notify or api_id key.
+ * The exact body of the create call: phone, fullname, `email` (empty when the
+ * profile has none, ADR 0009) and one appointment. No code (the user token
+ * replaces it), comment, notify or api_id key.
  */
 export function createBody(input: CreateInput): Record<string, unknown> {
   return {
     phone: input.phone,
     fullname: input.fullname,
-    ...(input.email === '' ? {} : { email: input.email }),
+    email: input.email,
     appointments: [
       {
         id: 1,
@@ -80,8 +80,8 @@ export interface PairCreateInput {
 }
 
 /**
- * The exact body of the pair create: one client (phone, fullname, `email` only
- * when there is one) and two appointments at one start on two different, explicit
+ * The exact body of the pair create: one client (phone, fullname, `email`,
+ * empty when there is none) and two appointments at one start on two different, explicit
  * team members. Team member 0 ("any") is refused, because two "any" entries can
  * resolve to one team member and be refused as overlapping; equal ids are refused
  * for the same reason. Nothing about a second person is ever added.
@@ -100,7 +100,7 @@ export function createPairBody(
   return {
     phone: input.phone,
     fullname: input.fullname,
-    ...(input.email === '' ? {} : { email: input.email }),
+    email: input.email,
     appointments: [
       {
         id: 1,
