@@ -348,7 +348,7 @@ values) when one is missing or invalid.
 | `EDGE_POOL_BURST` | Token-bucket size for the shared-egress pool. Above the request gate's capacity on purpose: under saturation the gate's in-band "busy, retry in N s" answer is friendlier to the model than an HTTP 429 | `200` | no |
 | `EDGE_POOL_REFILL_PER_SEC` | Token-bucket refill for the shared-egress pool, in requests per second | `20` | no |
 | `GATE_MAX_QUEUE_PER_KEY` | Most upstream calls one non-pool client may have waiting in the request gate; the shared pool is not capped per client | `8` | no |
-| `MARKETPLACE_APPLICATION_ID` | Id of this server's Integrations Hub application (2642 in production). Set, a client books and moves from the chat only at businesses where it is active; unset, at every business with online booking. Keep it unset until Altegio has switched the application on for the Altegio.me locations | none | no |
+| `MARKETPLACE_APPLICATION_ID` | Id of this server's Integrations Hub application (2642 in production). Set, a client books and moves from the chat only at businesses where it is active; unset, at every business with online booking. Set in production since Altegio switched the application on for every Altegio.me location (2026-11) | none | no |
 
 `ALTEGIO_API_TOKEN` has the same name and the same rule (any non-empty string) as in Altegio.Pro
 MCP. [`.env.example`](.env.example) carries the placeholder `your_partner_token_here`, so a copied
