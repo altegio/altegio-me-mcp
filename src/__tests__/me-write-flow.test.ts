@@ -506,7 +506,7 @@ describe('me_book, second call: the booking', () => {
     });
   });
 
-  it('sends no e-mail when the profile has none, and a plus before bare phone digits', async () => {
+  it('sends the e-mail empty when the profile has none (ADR 0009), and a plus before bare phone digits', async () => {
     const { harness, upstream } = await start({
       profile: 'bare_digits_no_email',
     });
@@ -517,6 +517,7 @@ describe('me_book, second call: the booking', () => {
     expect(JSON.parse(create?.body ?? 'null')).toEqual({
       phone: '+15550000001',
       fullname: 'Fixture Client',
+      email: '',
       appointments: [
         {
           id: 1,

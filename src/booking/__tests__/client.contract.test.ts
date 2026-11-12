@@ -1680,6 +1680,7 @@ describe('the profile and the create route (ADR 0006, D-02)', () => {
     expect(JSON.parse(call?.body ?? 'null')).toEqual({
       phone: '+15550000001',
       fullname: 'Fixture Client',
+      email: '',
       appointments: [
         {
           id: 1,
@@ -1691,7 +1692,7 @@ describe('the profile and the create route (ADR 0006, D-02)', () => {
     });
   });
 
-  it('sends the profile e-mail only when there is one', async () => {
+  it('sends the profile e-mail in the email key when there is one', async () => {
     const { client, upstream } = writeClient({});
     await client.createBooking(
       LOCATION,
@@ -1842,6 +1843,17 @@ describe('create rejections and the anti-fraud signals (ADR 0006, D-02)', () => 
   it('names no required field for a list of coded errors', async () => {
     const error = await createError('taken_433');
     expect(error.requiredFields).toEqual([]);
+    expect(error.fieldErrors).toEqual([]);
+  });
+
+  it('names every keyed field, whatever the message, apart from the required ones', async () => {
+    const refused = await createError('email_refused_422');
+    expect(refused.kind).toBe('rejected');
+    expect(refused.codes).toEqual([]);
+    expect(refused.requiredFields).toEqual([]);
+    expect(refused.fieldErrors).toEqual(['email']);
+    const required = await createError('required_email_422');
+    expect(required.fieldErrors).toEqual(['email']);
   });
 
   it('keeps the upstream message out of the error text', async () => {
@@ -2309,11 +2321,12 @@ describe('pair check and create (CASE-02, D-01)', () => {
     expect(JSON.parse(call?.body ?? 'null')).toEqual({
       phone: '+15550000001',
       fullname: 'Fixture Client',
+      email: '',
       appointments: PAIR_ENTRIES,
     });
   });
 
-  it('sends the profile e-mail only when there is one', async () => {
+  it('sends the profile e-mail in the email key when there is one', async () => {
     const { client, upstream } = pairClient({});
     await client.createPairBooking(
       LOCATION,

@@ -478,6 +478,30 @@ describe('me_book confirm path: the anti-fraud paths hand off the pre-filled lin
     expect(text).toContain('without confirmation_token');
   });
 
+  it('reads a refusal keyed on the e-mail it sent empty as the required e-mail, whatever the wording (ADR 0009)', async () => {
+    const made = setup({
+      profile: loadFixture('booking_user_data', 'bare_digits_no_email'),
+      create: loadFixture('book_record_create', 'email_refused_422'),
+    });
+    const { confirm } = await previewThenConfirm(made);
+    expect(confirm.result.isError).not.toBe(true);
+    const out = confirm.result.structuredContent as unknown as BookOut;
+    expect(out.status).toBe('fallback');
+    expect(out.fallback?.reason).toBe('required_field');
+    expect(out.fallback?.missing_fields).toEqual(['email']);
+    expect(textOf(confirm)).toContain('email argument');
+  });
+
+  it('does not read a refusal of an e-mail the profile holds as a missing e-mail', async () => {
+    const made = setup({
+      create: loadFixture('book_record_create', 'email_refused_422'),
+    });
+    const { confirm } = await previewThenConfirm(made);
+    const out = confirm.result.structuredContent as unknown as
+      BookOut | undefined;
+    expect(out?.fallback?.reason).not.toBe('required_field');
+  });
+
   it('names book_check when the card cannot be read for the link', async () => {
     let cardReads = 0;
     const made = setup({

@@ -439,7 +439,10 @@ client, a cancelled one included). Each tool takes two calls with the same argum
   business requires beyond the client's profile (for example `email`), so the assistant can tell
   the client exactly what is missing; the names are third-party data. For the e-mail the assistant
   asks the client and books again with `me_book`'s optional `email` argument
-  ([ADR 0007](docs/decisions/0007-email-in-chat-when-required.md)). The booking form's own custom
+  ([ADR 0007](docs/decisions/0007-email-in-chat-when-required.md)). A profile without an e-mail is
+  sent with the `email` key empty, as the booking widget does, because the create route refuses a
+  body without the key at any business (SUP-506,
+  [ADR 0009](docs/decisions/0009-email-key-always-sent.md)). The booking form's own custom
   fields are enforced at the preview ([ADR 0008](docs/decisions/0008-booking-form-custom-fields.md)):
   a form with required questions this call did not answer returns `required_field` with
   `form_fields` (code, title, type, required, allowed values), the assistant asks the client and

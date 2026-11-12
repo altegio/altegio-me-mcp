@@ -54,15 +54,18 @@ import {
 //      The profile gives the phone as bare digits; the create route wants a
 //      plus and digits (error 431 otherwise), so it is sent as +<digits>. The
 //      name is the profile's fullname, else name and surname. The e-mail is
-//      the profile's when it is non-empty: some businesses' booking forms
-//      require one even for a signed-in client ("The required parameter email
-//      was not passed", HTTP 422), and the key is never sent empty.
+//      the profile's when it is non-empty, else empty: the create route
+//      refuses a body without the key ("The required parameter email was not
+//      passed", HTTP 422, SUP-506) whatever the business's form settings, so
+//      the key is always sent (ADR 0009). ALTEGIO_E2E_WRITE_EMPTY_EMAIL=1
+//      sends it empty even when the profile has one, to check that an empty
+//      e-mail books.
 //   b. The service: ALTEGIO_E2E_WRITE_SERVICE_ID, else the first service of
 //      GET /book_services/{loc} without prepayment and membership (it is NOT
 //      taken from the client's usual: 726120 may hold no record of theirs).
 //   c. GET /book_dates and GET /book_times: two free slots that do not overlap
 //      (the second at or after the end of the first, else the next date).
-//   d. POST /book_record with exactly { phone, fullname, [email,] appointments }.
+//   d. POST /book_record with exactly { phone, fullname, email, appointments }.
 //   e. GET /user/records: the new record is there; the creation hash is compared
 //      with its `token` and `record_token` in memory, only two booleans are kept.
 //   f. PUT /book_record/{loc}/{record_id} with exactly { datetime }.
@@ -95,6 +98,8 @@ const LIVE =
   process.env.ALTEGIO_E2E_USER === '1' &&
   process.env.ALTEGIO_E2E_WRITE === '1';
 const RECORD = process.env.ALTEGIO_E2E_RECORD === '1';
+/** Send the e-mail empty whatever the profile holds (ADR 0009 check). */
+const EMPTY_EMAIL = process.env.ALTEGIO_E2E_WRITE_EMPTY_EMAIL === '1';
 const describeLive = LIVE ? describe : describe.skip;
 
 const MAX_UPSTREAM_CALLS = 14;
@@ -437,7 +442,7 @@ describeLive(
           typeof profile.phone === 'string' ? profile.phone.trim() : '';
         profilePhoneHadPlus = rawPhone.startsWith('+');
         phone = normalizePhone(rawPhone);
-        email = emailOf(profile);
+        email = EMPTY_EMAIL ? '' : emailOf(profile);
         need(fullname !== '', 'the profile has neither a fullname nor a name');
         need(phone !== '', 'the profile has no phone');
       }),

@@ -191,6 +191,22 @@
       }
     }
   },
+  "email_refused_422": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "success": false,
+      "data": null,
+      "meta": {
+        "message": "An error occurred",
+        "errors": {
+          "[email]": ["Invalid e-mail address."]
+        }
+      }
+    }
+  },
   "created_pair": {
     "status": 201,
     "headers": {

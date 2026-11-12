@@ -50,7 +50,8 @@ import {
 // `it` each, at most 16 upstream calls in all:
 //
 //   a. GET /booking/user/data: the client's name, +digits phone and e-mail, kept
-//      in memory only (the e-mail is sent only when non-empty).
+//      in memory only (the e-mail key is always sent, empty when the profile
+//      has none: ADR 0009).
 //   b. GET /book_staff/{loc}: the two team members. Fewer than two prints
 //      `PAIR_SKIPPED no_two_team_members` and skips the rest.
 //   c. GET /book_dates for A and for B, then GET /book_times for A and B on the

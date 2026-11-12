@@ -1286,9 +1286,9 @@ export class BookingClient {
 
   /**
    * Creates one booking for the signed-in client (ADR 0006, D-02): POST with
-   * exactly phone, fullname, the profile's e-mail when it has one, and one
-   * appointment. No code (the user token replaces it), comment, notify or api
-   * id key. Resolves with the new booking's id; the creation hash is never
+   * exactly phone, fullname, email (the profile's, or empty when it has none:
+   * ADR 0009) and one appointment. No code (the user token replaces it),
+   * comment, notify or api id key. Resolves with the new booking's id; the creation hash is never
    * read. `call.userToken` is required. The datetime is sent exactly as given.
    */
   async createBooking(
@@ -1362,9 +1362,14 @@ export class BookingClient {
   }
 
   /**
-   * One create request: the profile and the numbered appointments. Any answer
-   * that is not the documented 200 or 201 shape is contract_drift, because
-   * whether a booking exists is not known then.
+   * One create request: the profile and the numbered appointments. The email
+   * key is always sent, empty when the profile has none (ADR 0009): the route
+   * refuses a body without the key ("The required parameter email was not
+   * passed", SUP-506) whatever the business's form settings, and the booking
+   * widget always sends the key, empty when the client gave none. Any answer
+   * that is not the documented
+   * 200 or 201 shape is contract_drift, because whether a booking exists is not
+   * known then.
    */
   private async sendCreate(
     locationId: number,
@@ -1380,7 +1385,7 @@ export class BookingClient {
       body: {
         phone: profile.phone,
         fullname: profile.fullname,
-        ...(profile.email === null ? {} : { email: profile.email }),
+        email: profile.email ?? '',
         appointments,
       },
       ...call,

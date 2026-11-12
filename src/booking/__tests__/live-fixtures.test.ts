@@ -1932,6 +1932,9 @@ describe('contract fixtures of the write-side routes', () => {
       'name_435',
       'code_432',
       'required_email_422',
+      // Not observed: a refusal keyed on the e-mail in another wording, as a
+      // business that requires one might answer an empty e-mail (ADR 0009).
+      'email_refused_422',
       'created_pair',
       'created_pair_partial',
     ]);

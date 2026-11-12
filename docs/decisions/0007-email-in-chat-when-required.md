@@ -5,6 +5,9 @@
 - Deciders: ivan.k (requested and accepted in the working session that shipped PR #29/#30)
 - Amends: [ADR 0006](0006-in-chat-booking-at-own-places.md) D-02 (the create sends only what the
   profile holds) and the server instructions sentence that the tools take no client e-mail
+- Narrowed by: [ADR 0009](0009-email-key-always-sent.md): the create always sends the
+  `email` key, empty when the profile has none, so this path is left to businesses that really
+  require an e-mail; the first refusals were the API bug SUP-506, not a form setting
 
 ## Context
 
@@ -45,4 +48,5 @@ could point to with one tap.
   upstream contract changed.
 - The profile itself is not updated: whether Altegio keeps the e-mail from a booking is the
   platform's behaviour, not this server's. A later `required_field` at another business asks
-  again unless the profile gained the address meanwhile.
+  again unless the profile gained the address meanwhile. Observed 2026-11-09 (ADR 0009): Altegio
+  keeps it in the business's client card only, not in the Altegio.me profile.
