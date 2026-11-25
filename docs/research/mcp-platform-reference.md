@@ -12,6 +12,10 @@ Research date: 2026-10-02. Source: `altegio/altegio-mcp-platform` (private).
 > to the backend `/mcp`, and backend paths outside it, such as `/health`, are not reachable through
 > the proxy; routes are probed with `POST /mcp tools/list` unless they declare a `probe_path`.
 
+> Update 2026-10-30: `/pro`, `/pro/readonly` and `/analytics` no longer admit a raw Altegio user
+> token. They accept only Altegio OAuth access tokens (`ag_at_…`) issued by `https://api.alteg.io`
+> and answer a user token `401`. Knowledge and Integrations Hub still accept a user token.
+
 A new route on `mcp.alteg.io` is a config entry plus a container, but the customer proxy admits
 only Altegio account holders (email + password through its login page, or a raw user token). It
 has no anonymous lane and no phone/SMS sign-in. A consumer server would need new proxy code owned
