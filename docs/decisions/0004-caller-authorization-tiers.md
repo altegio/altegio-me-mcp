@@ -20,6 +20,10 @@ raw Altegio user token or an OAuth token from the Altegio sign-in, and a caller 
 Altegio application may send its own partner token per request (Pro "UC2",
 `X-Altegio-Partner-Token`).
 
+> Update 2026-10-30 (after this ADR): `/pro`, `/pro/readonly` and `/analytics` no longer admit a raw Altegio user
+> token. They accept only Altegio OAuth access tokens (`ag_at_…`) issued by `https://api.alteg.io`
+> and answer a user token `401`. Knowledge and Integrations Hub still accept a user token.
+
 The goal: no call without a credential. The base credential is a partner token; actions for one
 client (booking in chat, Phase 2) need that client's OAuth sign-in on top.
 
